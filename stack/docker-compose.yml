@@ -1,0 +1,248 @@
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    env_file:
+      - .env
+    environment:
+      N8N_SAFE_WEBSEARCH_WEBHOOK_URL: ${N8N_SAFE_WEBSEARCH_WEBHOOK_URL}
+      N8N_SAFE_WEBSEARCH_API_KEY: ${N8N_SAFE_WEBSEARCH_API_KEY}
+      N8N_SAFE_WEBSEARCH_TIMEOUT: ${N8N_SAFE_WEBSEARCH_TIMEOUT:-50}
+      AIOHTTP_CLIENT_TIMEOUT: "900"
+
+      # KAHLE-Vinci Tool-Härtung
+      KV_CURRENT_YEAR: "2026"
+      KV_STRICT_NOTICE_ONLY: "1"
+      KV_FIX_YEAR_IN_QUERY: "0"
+
+      TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: |-
+       Available Tools: {{TOOLS}}
+       Return ONLY valid JSON:
+       {"tool_calls":[{"name":"<tool>","parameters":{...}}]}
+       RULES:
+       - If you set a parameter named "query", it MUST be the user's last message verbatim (no rewrite, no keywords, no year injection).
+       - Set lang="de-DE" and maxResults=5 when present.
+       - Current year: 2026 (Europe/Berlin). Do not add any year unless the user wrote it.
+       - For file editing/conversion tasks, prefer *_save tools from the proxy.
+       - If the user asks to edit/convert/summarize an uploaded/attached file, perform one matching *_save tool call ONLY when exact filename(s) are known from the current message context.
+       - Exact filenames are listed in the user query block under: "Attached files in this message (use exact names for any file tool call):"
+       - Use those names verbatim for file_path/file_paths.
+       - If exact filename(s) are missing/ambiguous, return {"tool_calls":[]} and ask one short clarification question for the exact filename(s).
+       - Never call /files/download as a tool; it is only for user-facing links.
+       - For file tools, require exact uploaded filename(s) in file_path/file_paths.
+       - Never prefix with "uploads/".
+       - Never use wildcards, placeholders, or "latest" for file_path/file_paths.
+       - Never invent or guess filenames; use only real uploaded filenames from context.
+       - Routing hints for attached files:
+       - convert PDF/DOCX/TXT/MD/XLSX/CSV -> markdown: file_to_md_save
+       - DOCX -> PDF: docx_to_pdf_save
+       - DOCX replace text: docx_replace_one_save
+       - DOCX delete last paragraphs: docx_delete_last_paragraphs_save
+       - PDF remove pages: pdf_remove_pages_save
+       - PDF merge: pdf_merge_save
+       - XLSX cell updates: xlsx_update_cells_save
+       - For xlsx_update_cells_save, updates MUST NOT be empty.
+       - For large XLSX ranges, use a compact update object instead of thousands of single cells, e.g. {"range":"A2:A500","generator":"random_money","min":1000,"max":100000,"decimals":2}
+       - multi-file master context markdown: bundle_to_md_save
+       - If a tool result contains download_url, do not reconstruct file content; return only download_url and metadata.
+       If no tool: {"tool_calls":[]}
+
+      # === NEU: Open WebUI Direct Tool Server (OpenAPI) aktivieren ===
+      ENABLE_DIRECT_CONNECTIONS: "True"
+
+      # === NEU: Tool-Server Connection zum document-worker ===
+      # Hinweis: JSON muss als 1 Zeile in YAML stehen (Windows/YAML ist sonst zickig)
+      TOOL_SERVER_CONNECTIONS: >-
+        [{"type":"openapi","url":"http://owui-file-proxy:8091","spec_type":"url","spec":"","path":"openapi.json","auth_type":"none","key":"","config":{"enable":true},"info":{"id":"doc-worker","name":"Document Worker","description":"Local DOCX/XLSX/PDF file editing tools"}}]
+
+      # Optional (je nach OWUI-Version nötig, damit User das Feature sieht)
+      USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: "True"
+      OWUI_APPEND_ATTACHED_FILE_NAMES_TO_USER_MESSAGE: "True"
+
+    volumes:
+      - open-webui:/app/backend/data
+      - ./open-webui-overrides/open_webui/utils/misc.py:/app/backend/open_webui/utils/misc.py:ro
+      - ./open-webui-overrides/open_webui/utils/middleware.py:/app/backend/open_webui/utils/middleware.py:ro
+    depends_on:
+      ollama:
+        condition: service_started
+      document-worker:
+        condition: service_healthy
+      owui-file-proxy:
+        condition: service_healthy
+    networks:
+      - appnet
+
+  owui-file-proxy:
+    image: stack-owui-file-proxy
+    build:
+      context: ./owui-file-proxy
+      dockerfile: Dockerfile
+    container_name: owui-file-proxy
+    restart: unless-stopped
+    environment:
+      - OWUI_UPLOAD_DIR=/app/backend/data/uploads
+      - DOC_WORKER_URL=http://document-worker:8090
+      - TOOL_API_KEY=${OWUI_FILE_PROXY_API_KEY}                               # optional später
+      - REQUIRE_EXACT_FILE_PATH=true
+      - DISALLOW_WILDCARDS=true
+      - OWUI_OUTPUT_SUBDIR=edited
+      - OWUI_DB_PATH=/app/backend/data/webui.db
+      - OWUI_LOG_CLEANUP_REPORT_PATH=/retention-reports/openwebui_log_cleanup_report.json
+      - OWUI_LOG_CLEANUP_STALE_HOURS=36
+    ports:
+      - "8091:8091"
+    env_file:
+      - .env
+    volumes:
+      - open-webui:/app/backend/data
+      - "C:/kahle-vinci/stack/retention-reports:/retention-reports:ro"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=5).getcode()==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - appnet
+    depends_on:
+      document-worker:
+        condition: service_healthy
+
+  # === NEU: Document Worker Service (Tool-Server) ===
+  document-worker:
+    build:
+      context: ./document-worker
+      dockerfile: Dockerfile
+    container_name: document-worker
+    restart: unless-stopped
+    # KEINE ports: -> nur intern im Docker-Netz erreichbar
+    environment:
+      - STORAGE_DIR=/data
+      - TTL_HOURS=24
+      - MAX_FILE_MB=30
+      # Optional: API-Key (erst später aktivieren, siehe Schritte)
+      # - TOOL_API_KEY=${DOC_WORKER_API_KEY}
+    volumes:
+      - document_worker_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5).getcode()==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - appnet
+
+  kunden-sql-gateway:
+    build:
+      context: ../kahle-sql-gateway
+    container_name: kunden-sql-gateway
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    volumes:
+      - "C:/kahle-vinci/kahle-sql-gateway/data/kunden.db:/app/kunden.db:ro"
+    networks:
+      - appnet
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - "C:/kahle-vinci/ollama:/root/.ollama"
+    gpus: all
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_NUM_CTX: "8192"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+    networks:
+      - appnet
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    env_file:
+      - .env
+    environment:
+      - GENERIC_TIMEZONE=Europe/Berlin
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - N8N_SECURE_COOKIE=false
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_RESTRICT_FILE_ACCESS_TO=/home/node/.n8n-files/knowledgebases
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=none
+      - EXECUTIONS_DATA_SAVE_ON_PROGRESS=false
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=50000
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_PERSONALIZATION_ENABLED=false
+    volumes:
+      - "C:/kahle-vinci/n8n:/home/node/.n8n"
+      - "C:/kahle-vinci/knowledgebases:/home/node/.n8n-files/knowledgebases:ro"
+      - open-webui:/mnt/open-webui-data
+      - document_worker_data:/mnt/document-worker-data
+    depends_on:
+      - ollama
+    networks:
+      - appnet
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - appnet
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    expose:
+      - "8080"
+    env_file:
+      - .env
+    volumes:
+      - "C:/kahle-vinci/searxng:/etc/searxng"
+    environment:
+      - SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+      - SEARXNG_SECRET=${SEARXNG_SECRET_KEY}
+      - GRANIAN_HOST=0.0.0.0
+      - GRANIAN_PORT=8080
+      - BIND_ADDRESS=0.0.0.0:8080
+    networks:
+      - appnet
+
+volumes:
+  open-webui:
+    name: open-webui
+  qdrant_data: {}
+  # === NEU: Volume für temporäre Files des document-workers ===
+  document_worker_data: {}
+
+networks:
+  appnet:
+    driver: bridge

@@ -1,0 +1,70 @@
+# Secrets and local runtime env
+.env
+*.env
+*.env.*
+!*.env.example
+runtime.env
+secrets/
+*.key
+*.pem
+
+# Runtime databases, logs and journals
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.journal
+*.log
+
+# Python / Node generated files
+__pycache__/
+*.py[cod]
+node_modules/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Local model/runtime data
+ollama/
+openwebui_data/
+qdrant-snapshots/
+
+# Open WebUI runtime data inside stack
+stack/.env
+stack/.tmp_openapi.json
+stack/openwebui_data/
+stack/retention-reports/*
+!stack/retention-reports/.gitkeep
+
+# n8n runtime state
+n8n/.n8n/
+n8n/binaryData/
+n8n/database.sqlite*
+n8n/config
+n8n/crash.journal
+n8n/n8nEventLog*.log
+
+# Internal knowledge/source documents are not pushed by default.
+# Add sanitized markdown/docs explicitly when they are intended for GitHub.
+knowledgebases/
+*.pdf
+*.docx
+*.xlsx
+*.xlsm
+*.csv
+*.mp3
+*.webm
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Local manual backup copies
+* - Kopie.*
+* - Copy.*
