@@ -1,0 +1,115 @@
+[
+    {
+        "name":  "Cleanup Uploaded+Generated Files (15d)",
+        "description":  "Loescht automatisch alle 15 Tage alte Uploads/Outputs und Worker-Tempdateien.\nTemplate export. owui-file-proxy HTTP nodes use placeholder Authorization header Bearer {{$env.OWUI_FILE_PROXY_API_KEY}}; set the env var or replace with an n8n credential after import.",
+        "active":  false,
+        "nodes":  [
+                      {
+                          "parameters":  {
+                                             "rule":  {
+                                                          "interval":  [
+                                                                           {
+                                                                               "field":  "days",
+                                                                               "daysInterval":  15,
+                                                                               "triggerAtHour":  3,
+                                                                               "triggerAtMinute":  15
+                                                                           }
+                                                                       ]
+                                                      }
+                                         },
+                          "id":  "b5672b3e-1108-4107-bcff-bf3cf2d8ec2a",
+                          "name":  "Every 15 Days",
+                          "type":  "n8n-nodes-base.scheduleTrigger",
+                          "typeVersion":  1.3,
+                          "position":  [
+                                           220,
+                                           320
+                                       ]
+                      },
+                      {
+                          "parameters":  {
+                                             "method":  "POST",
+                                             "url":  "http://owui-file-proxy:8091/maintenance/cleanup_old_files",
+                                             "sendBody":  true,
+                                             "specifyBody":  "json",
+                                             "jsonBody":  "{\"days\":15,\"dry_run\":false,\"include_uploads\":true,\"include_edited\":true}",
+                                             "options":  {
+                                                             "timeout":  120000
+                                                         },
+                                             "sendHeaders":  true,
+                                             "headerParameters":  {
+                                                                      "parameters":  [
+                                                                                         {
+                                                                                             "name":  "Authorization",
+                                                                                             "value":  "Bearer {{$env.OWUI_FILE_PROXY_API_KEY}}"
+                                                                                         }
+                                                                                     ]
+                                                                  }
+                                         },
+                          "id":  "dc562af6-82f4-42bd-a363-53b89f3b0706",
+                          "name":  "Cleanup OWUI Files",
+                          "type":  "n8n-nodes-base.httpRequest",
+                          "typeVersion":  4.3,
+                          "position":  [
+                                           520,
+                                           320
+                                       ],
+                          "notesInFlow":  true,
+                          "notes":  "Set OWUI_FILE_PROXY_API_KEY in the n8n runtime, or replace this placeholder with an n8n credential before activating."
+                      },
+                      {
+                          "parameters":  {
+                                             "method":  "POST",
+                                             "url":  "http://document-worker:8090/maintenance/cleanup_old_files",
+                                             "sendBody":  true,
+                                             "specifyBody":  "json",
+                                             "jsonBody":  "{\"days\":15,\"dry_run\":false}",
+                                             "options":  {
+                                                             "timeout":  120000
+                                                         }
+                                         },
+                          "id":  "3a368f81-1c8d-46ff-9506-d647b6775b21",
+                          "name":  "Cleanup Worker Temp",
+                          "type":  "n8n-nodes-base.httpRequest",
+                          "typeVersion":  4.3,
+                          "position":  [
+                                           820,
+                                           320
+                                       ]
+                      }
+                  ],
+        "connections":  {
+                            "Every 15 Days":  {
+                                                  "main":  [
+                                                               [
+                                                                   {
+                                                                       "node":  "Cleanup OWUI Files",
+                                                                       "type":  "main",
+                                                                       "index":  0
+                                                                   }
+                                                               ]
+                                                           ]
+                                              },
+                            "Cleanup OWUI Files":  {
+                                                       "main":  [
+                                                                    [
+                                                                        {
+                                                                            "node":  "Cleanup Worker Temp",
+                                                                            "type":  "main",
+                                                                            "index":  0
+                                                                        }
+                                                                    ]
+                                                                ]
+                                                   }
+                        },
+        "settings":  {
+                         "executionOrder":  "v1"
+                     },
+        "staticData":  null,
+        "meta":  null,
+        "pinData":  null,
+        "tags":  [
+
+                 ]
+    }
+]

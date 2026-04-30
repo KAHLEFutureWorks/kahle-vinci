@@ -39,7 +39,10 @@
       },
       {
         "parameters": {
-          "options": {}
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          },
+          "model": "mistralai/Mistral-Small-24B-Instruct"
         },
         "id": "d5e60eb2-267c-4f68-aefe-439031bcaceb",
         "name": "OpenAI Model",
@@ -48,7 +51,13 @@
         "position": [
           512,
           240
-        ]
+        ],
+        "credentials": {
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
+          }
+        }
       },
       {
         "parameters": {
@@ -104,26 +113,24 @@
     "activeVersionId": null,
     "versionCounter": 2,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2025-12-10T16:55:33.792Z",
-        "createdAt": "2025-12-10T16:55:33.792Z",
-        "role": "workflow:owner",
-        "workflowId": "I9w66nEdncYaGLYY",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2025-12-10T16:55:33.792Z",
+      "createdAt": "2025-12-10T16:55:33.792Z",
+      "role": "workflow:owner",
+      "workflowId": "I9w66nEdncYaGLYY",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-07T15:40:45.000Z",
@@ -154,11 +161,20 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://ollama:11434/api/chat",
+          "url": "https://openai.inference.de-txl.ionos.com/v1/chat/completions",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={\n  \"model\": \"gemma3:12b\",\n  \"stream\": false,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Du bist ein lokaler Assistent, der von KAHLE-Vinci und n8n aufgerufen wird.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{$json['body']['prompt']}}\"\n    }\n  ]\n}\n",
-          "options": {}
+          "jsonBody": "={{ { model: $env.IONOS_CHAT_MODEL_DEFAULT || 'mistralai/Mistral-Small-24B-Instruct', stream: false, messages: [ { role: 'system', content: 'Du bist ein Assistent, der von KAHLE-Vinci und n8n aufgerufen wird.' }, { role: 'user', content: $json['body']['prompt'] } ] } }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+              }
+            ]
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -167,12 +183,12 @@
           0
         ],
         "id": "5e94fe91-662c-46c6-b1b7-81a8013dc393",
-        "name": "LLM – gemma3:12b"
+        "name": "LLM – IONOS Mistral Small"
       },
       {
         "parameters": {
           "respondWith": "json",
-          "responseBody": "={\n  ok: true,\n  flow: 'triggerflow',\n  result_type: 'text',\n  result: {$json[\"message\"][\"content\"]}\n}",
+          "responseBody": "={{ {\n  ok: true,\n  flow: 'triggerflow',\n  result_type: 'text',\n  result: $json.choices?.[0]?.message?.content ?? $json.message?.content ?? ''\n} }}",
           "options": {}
         },
         "type": "n8n-nodes-base.respondToWebhook",
@@ -190,14 +206,14 @@
         "main": [
           [
             {
-              "node": "LLM – gemma3:12b",
+              "node": "LLM – IONOS Mistral Small",
               "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "LLM – gemma3:12b": {
+      "LLM – IONOS Mistral Small": {
         "main": [
           [
             {
@@ -219,26 +235,24 @@
     "activeVersionId": null,
     "versionCounter": 29,
     "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2025-12-11T10:28:32.499Z",
-        "createdAt": "2025-12-11T10:28:32.499Z",
-        "role": "workflow:owner",
-        "workflowId": "7f43kbLBmWsUT4Bn",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2025-12-11T10:28:32.499Z",
+      "createdAt": "2025-12-11T10:28:32.499Z",
+      "role": "workflow:owner",
+      "workflowId": "7f43kbLBmWsUT4Bn",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-16T16:24:08.000Z",
@@ -253,13 +267,11 @@
         "parameters": {
           "formTitle": "Knowledge hochladen in VDB",
           "formFields": {
-            "values": [
-              {
-                "fieldLabel": "Datei hochladen",
-                "fieldType": "file",
-                "requiredField": true
-              }
-            ]
+            "values": {
+              "fieldLabel": "Datei hochladen",
+              "fieldType": "file",
+              "requiredField": true
+            }
           },
           "options": {}
         },
@@ -300,20 +312,23 @@
       },
       {
         "parameters": {
-          "model": "embeddinggemma:latest"
+          "model": "BAAI/bge-m3",
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          }
         },
-        "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+        "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
         "typeVersion": 1,
         "position": [
           144,
           208
         ],
         "id": "eb0f168e-53c0-4819-ab0a-fe286f046e9c",
-        "name": "Embeddings Ollama",
+        "name": "Embeddings IONOS",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       },
@@ -322,12 +337,10 @@
           "dataType": "binary",
           "options": {
             "metadata": {
-              "metadataValues": [
-                {
-                  "name": "dateiname",
-                  "value": "={{ $('On form submission').item.json[\"Datei hochladen\"][0].filename }}"
-                }
-              ]
+              "metadataValues": {
+                "name": "dateiname",
+                "value": "={{ $('On form submission').item.json[\"Datei hochladen\"][0].filename }}"
+              }
             }
           }
         },
@@ -371,23 +384,23 @@
       },
       {
         "parameters": {
-          "model": "ministral-3:8b",
+          "model": "mistralai/Mistral-Small-24B-Instruct",
           "options": {
-            "numCtx": 8192
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
           }
         },
-        "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
         "typeVersion": 1,
         "position": [
           64,
           784
         ],
         "id": "1c4165a7-dbd8-4033-857e-ceae0ece543b",
-        "name": "Ollama Chat Model",
+        "name": "IONOS Chat Model",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       },
@@ -433,20 +446,23 @@
       },
       {
         "parameters": {
-          "model": "embeddinggemma:latest"
+          "model": "BAAI/bge-m3",
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          }
         },
-        "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+        "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
         "typeVersion": 1,
         "position": [
           480,
           848
         ],
         "id": "45b49780-2f62-4829-a85a-5f63453820ac",
-        "name": "Embeddings Ollama1",
+        "name": "Embeddings IONOS1",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       }
@@ -463,7 +479,7 @@
           ]
         ]
       },
-      "Embeddings Ollama": {
+      "Embeddings IONOS": {
         "ai_embedding": [
           [
             {
@@ -496,7 +512,7 @@
           ]
         ]
       },
-      "Ollama Chat Model": {
+      "IONOS Chat Model": {
         "ai_languageModel": [
           [
             {
@@ -529,7 +545,7 @@
           ]
         ]
       },
-      "Embeddings Ollama1": {
+      "Embeddings IONOS1": {
         "ai_embedding": [
           [
             {
@@ -553,26 +569,24 @@
     "activeVersionId": null,
     "versionCounter": 9,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-07T13:12:35.603Z",
-        "createdAt": "2026-01-07T13:12:35.603Z",
-        "role": "workflow:owner",
-        "workflowId": "jXodPnVXEcfgEYCb",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-07T13:12:35.603Z",
+      "createdAt": "2026-01-07T13:12:35.603Z",
+      "role": "workflow:owner",
+      "workflowId": "jXodPnVXEcfgEYCb",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-22T15:27:57.465Z",
@@ -615,11 +629,20 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://ollama:11434/api/embeddings",
+          "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "{\n  \"model\": \"embeddinggemma:latest\",\n  \"prompt\": \"dimension probe\"\n}\n",
-          "options": {}
+          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: 'dimension probe' } }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+              }
+            ]
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -628,7 +651,7 @@
           -224
         ],
         "id": "0447b99c-6684-4592-ac5d-98e642e646ff",
-        "name": "Ollama Probe Embedding"
+        "name": "IONOS Probe Embedding"
       },
       {
         "parameters": {
@@ -636,7 +659,7 @@
           "url": "http://qdrant:6333/collections/kahleallgemein",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={\n  \"vectors\": {\n    \"size\": 768,\n    \"distance\": \"Cosine\"\n  }\n}",
+          "jsonBody": "={{ { vectors: { size: $json.vector_size || 1024, distance: 'Cosine' } } }}",
           "options": {}
         },
         "type": "n8n-nodes-base.httpRequest",
@@ -651,7 +674,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// Erwartet Response vom Ollama Embeddings Endpoint: { embedding: [..] }\nconst emb = $json.embedding;\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\n\nreturn [{ vector_size }];"
+          "jsCode": "// IONOS/OpenAI-compatible embeddings response: { data: [{ embedding: [...] }] }\nconst emb = $json.data?.[0]?.embedding ?? $json.embedding ?? $json.embeddings?.[0] ?? [];\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\nreturn [{ json: { vector_size } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -774,20 +797,23 @@
       },
       {
         "parameters": {
-          "model": "embeddinggemma:latest"
+          "model": "BAAI/bge-m3",
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          }
         },
-        "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+        "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
         "typeVersion": 1,
         "position": [
           1760,
           448
         ],
         "id": "1fa1fa36-07d6-417c-bd14-98f14ceccb56",
-        "name": "Embeddings Ollama",
+        "name": "Embeddings IONOS",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       },
@@ -1054,17 +1080,15 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "deleted",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals"
-                      },
-                      "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
-                    }
-                  ],
+                  "conditions": {
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "deleted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1078,18 +1102,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "created",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "created",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1103,18 +1125,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "1ad1cd70-128e-4670-a781-70e546648d75",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "changed",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "1ad1cd70-128e-4670-a781-70e546648d75",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "changed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1128,18 +1148,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "8119a505-8265-462d-b384-6f28a26cebd7",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "renamed",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "8119a505-8265-462d-b384-6f28a26cebd7",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "renamed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1222,7 +1240,9 @@
               "node": "Count Points",
               "type": "main",
               "index": 0
-            },
+            }
+          ],
+          [
             {
               "node": "Route by event",
               "type": "main",
@@ -1231,7 +1251,7 @@
           ]
         ]
       },
-      "Ollama Probe Embedding": {
+      "IONOS Probe Embedding": {
         "main": [
           [
             {
@@ -1254,11 +1274,9 @@
         ]
       },
       "Keep Kontext": {
-        "main": [
-          []
-        ]
+        "main": []
       },
-      "Embeddings Ollama": {
+      "Embeddings IONOS": {
         "ai_embedding": [
           [
             {
@@ -1336,9 +1354,7 @@
         ]
       },
       "HTTP Request3": {
-        "main": [
-          []
-        ]
+        "main": []
       },
       "Delete Points": {
         "main": [
@@ -1400,7 +1416,9 @@
               "node": "Count Points1",
               "type": "main",
               "index": 0
-            },
+            }
+          ],
+          [
             {
               "node": "Merge2",
               "type": "main",
@@ -1437,26 +1455,24 @@
     "activeVersionId": "84cc2eea-ab04-477a-aa3c-6753466c6220",
     "versionCounter": 89,
     "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-19T11:04:43.277Z",
-        "createdAt": "2026-01-19T11:04:43.277Z",
-        "role": "workflow:owner",
-        "workflowId": "kUzUoG2HekfrHIM5neFIH",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-19T11:04:43.277Z",
+      "createdAt": "2026-01-19T11:04:43.277Z",
+      "role": "workflow:owner",
+      "workflowId": "kUzUoG2HekfrHIM5neFIH",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-28T09:56:47.347Z",
@@ -1499,11 +1515,20 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://ollama:11434/api/embeddings",
+          "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "{\n  \"model\": \"embeddinggemma:latest\",\n  \"prompt\": \"dimension probe\"\n}\n",
-          "options": {}
+          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: 'dimension probe' } }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+              }
+            ]
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -1512,7 +1537,7 @@
           -224
         ],
         "id": "f1a2f66a-2c32-401a-bf83-ed156a389792",
-        "name": "Ollama Probe Embedding"
+        "name": "IONOS Probe Embedding"
       },
       {
         "parameters": {
@@ -1520,7 +1545,7 @@
           "url": "http://qdrant:6333/collections/kahlekontext",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={\n  \"vectors\": {\n    \"size\": 768,\n    \"distance\": \"Cosine\"\n  }\n}",
+          "jsonBody": "={{ { vectors: { size: $json.vector_size || 1024, distance: 'Cosine' } } }}",
           "options": {}
         },
         "type": "n8n-nodes-base.httpRequest",
@@ -1535,7 +1560,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// Erwartet Response vom Ollama Embeddings Endpoint: { embedding: [..] }\nconst emb = $json.embedding;\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\n\nreturn [{ vector_size }];"
+          "jsCode": "// IONOS/OpenAI-compatible embeddings response: { data: [{ embedding: [...] }] }\nconst emb = $json.data?.[0]?.embedding ?? $json.embedding ?? $json.embeddings?.[0] ?? [];\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\nreturn [{ json: { vector_size } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -1573,20 +1598,23 @@
       },
       {
         "parameters": {
-          "model": "embeddinggemma:latest"
+          "model": "BAAI/bge-m3",
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          }
         },
-        "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+        "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
         "typeVersion": 1,
         "position": [
           1760,
           448
         ],
         "id": "81c337c7-b7eb-409f-a27d-67b79ec0428c",
-        "name": "Embeddings Ollama",
+        "name": "Embeddings IONOS",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       },
@@ -1795,17 +1823,15 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "deleted",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals"
-                      },
-                      "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
-                    }
-                  ],
+                  "conditions": {
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "deleted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1819,18 +1845,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "created",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "created",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1844,18 +1868,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "1ad1cd70-128e-4670-a781-70e546648d75",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "changed",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "1ad1cd70-128e-4670-a781-70e546648d75",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "changed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1869,18 +1891,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "8119a505-8265-462d-b384-6f28a26cebd7",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "renamed",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "8119a505-8265-462d-b384-6f28a26cebd7",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "renamed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1966,7 +1986,7 @@
           ]
         ]
       },
-      "Ollama Probe Embedding": {
+      "IONOS Probe Embedding": {
         "main": [
           [
             {
@@ -1988,7 +2008,7 @@
           ]
         ]
       },
-      "Embeddings Ollama": {
+      "Embeddings IONOS": {
         "ai_embedding": [
           [
             {
@@ -2066,14 +2086,10 @@
         ]
       },
       "HTTP Request3": {
-        "main": [
-          []
-        ]
+        "main": []
       },
       "Delete Points": {
-        "main": [
-          []
-        ]
+        "main": []
       },
       "Route by event": {
         "main": [
@@ -2160,26 +2176,24 @@
     "activeVersionId": "600e863e-f1a7-41a6-b77d-39940bbfee8a",
     "versionCounter": 90,
     "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-16T16:24:56.536Z",
-        "createdAt": "2026-01-16T16:24:56.536Z",
-        "role": "workflow:owner",
-        "workflowId": "f4scfl3aPRGIf6Sx",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-16T16:24:56.536Z",
+      "createdAt": "2026-01-16T16:24:56.536Z",
+      "role": "workflow:owner",
+      "workflowId": "f4scfl3aPRGIf6Sx",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-22T15:28:18.494Z",
@@ -2222,11 +2236,20 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://ollama:11434/api/embeddings",
+          "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "{\n  \"model\": \"embeddinggemma:latest\",\n  \"prompt\": \"dimension probe\"\n}\n",
-          "options": {}
+          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: 'dimension probe' } }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+              }
+            ]
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -2235,7 +2258,7 @@
           -224
         ],
         "id": "5ebdcb4e-7fa8-404d-9b57-1c0770a686e0",
-        "name": "Ollama Probe Embedding"
+        "name": "IONOS Probe Embedding"
       },
       {
         "parameters": {
@@ -2243,7 +2266,7 @@
           "url": "http://qdrant:6333/collections/kahlerichtlinien",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={\n  \"vectors\": {\n    \"size\": 768,\n    \"distance\": \"Cosine\"\n  }\n}",
+          "jsonBody": "={{ { vectors: { size: $json.vector_size || 1024, distance: 'Cosine' } } }}",
           "options": {}
         },
         "type": "n8n-nodes-base.httpRequest",
@@ -2258,7 +2281,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// Erwartet Response vom Ollama Embeddings Endpoint: { embedding: [..] }\nconst emb = $json.embedding;\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\n\nreturn [{ vector_size }];"
+          "jsCode": "// IONOS/OpenAI-compatible embeddings response: { data: [{ embedding: [...] }] }\nconst emb = $json.data?.[0]?.embedding ?? $json.embedding ?? $json.embeddings?.[0] ?? [];\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\nreturn [{ json: { vector_size } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -2297,20 +2320,23 @@
       },
       {
         "parameters": {
-          "model": "embeddinggemma:latest"
+          "model": "BAAI/bge-m3",
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          }
         },
-        "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+        "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
         "typeVersion": 1,
         "position": [
           1760,
           448
         ],
         "id": "edf35ba2-d836-4b92-b60c-6113669f7093",
-        "name": "Embeddings Ollama",
+        "name": "Embeddings IONOS",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       },
@@ -2519,17 +2545,15 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "deleted",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals"
-                      },
-                      "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
-                    }
-                  ],
+                  "conditions": {
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "deleted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2543,18 +2567,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "created",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "created",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2568,18 +2590,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "1ad1cd70-128e-4670-a781-70e546648d75",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "changed",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "1ad1cd70-128e-4670-a781-70e546648d75",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "changed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2593,18 +2613,16 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": [
-                    {
-                      "id": "8119a505-8265-462d-b384-6f28a26cebd7",
-                      "leftValue": "={{$json.event}}",
-                      "rightValue": "renamed",
-                      "operator": {
-                        "type": "string",
-                        "operation": "equals",
-                        "name": "filter.operator.equals"
-                      }
+                  "conditions": {
+                    "id": "8119a505-8265-462d-b384-6f28a26cebd7",
+                    "leftValue": "={{$json.event}}",
+                    "rightValue": "renamed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
                     }
-                  ],
+                  },
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2690,7 +2708,7 @@
           ]
         ]
       },
-      "Ollama Probe Embedding": {
+      "IONOS Probe Embedding": {
         "main": [
           [
             {
@@ -2712,7 +2730,7 @@
           ]
         ]
       },
-      "Embeddings Ollama": {
+      "Embeddings IONOS": {
         "ai_embedding": [
           [
             {
@@ -2790,14 +2808,10 @@
         ]
       },
       "HTTP Request3": {
-        "main": [
-          []
-        ]
+        "main": []
       },
       "Delete Points": {
-        "main": [
-          []
-        ]
+        "main": []
       },
       "Route by event": {
         "main": [
@@ -2880,26 +2894,24 @@
     "activeVersionId": "7fe8c69d-cdbd-49a1-aeea-2f657cad2617",
     "versionCounter": 88,
     "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-16T16:52:12.673Z",
-        "createdAt": "2026-01-16T16:52:12.673Z",
-        "role": "workflow:owner",
-        "workflowId": "K1bGfyEDB3OBv6G2",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-16T16:52:12.673Z",
+      "createdAt": "2026-01-16T16:52:12.673Z",
+      "role": "workflow:owner",
+      "workflowId": "K1bGfyEDB3OBv6G2",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-22T15:28:43.648Z",
@@ -2995,8 +3007,8 @@
               },
               {
                 "id": "d65fe1bc-5d27-429e-a276-9218e969ddb3",
-                "name": "cfg.ollamaUrl",
-                "value": "http://ollama:11434",
+                "name": "cfg.ionosBaseUrl",
+                "value": "https://openai.inference.de-txl.ionos.com/v1",
                 "type": "string"
               }
             ]
@@ -3015,12 +3027,21 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "=http://ollama:11434/api/embed",
+          "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={\n  \"model\": \"embeddinggemma:latest\",\n  \"input\": \"={{$json.query}}\",\n  \"truncate\": true,\n  \"keep_alive\": \"30m\"\n}",
+          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: $json.query } }}",
           "options": {
             "timeout": 60000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+              }
+            ]
           }
         },
         "type": "n8n-nodes-base.httpRequest",
@@ -3035,14 +3056,12 @@
       {
         "parameters": {
           "assignments": {
-            "assignments": [
-              {
-                "id": "e3fa35b8-a7df-40ef-ba89-9263490c78a2",
-                "name": "retrieval",
-                "value": "={{$json.retrieval}}",
-                "type": "object"
-              }
-            ]
+            "assignments": {
+              "id": "e3fa35b8-a7df-40ef-ba89-9263490c78a2",
+              "name": "retrieval",
+              "value": "={{$json.retrieval}}",
+              "type": "object"
+            }
           },
           "options": {}
         },
@@ -3072,7 +3091,7 @@
       },
       {
         "parameters": {
-          "jsCode": "/**\n * WF B — Code in JavaScript1\n * Zweck: cfg + query übernehmen, Embedding-Vektor als sauberes number[] ausgeben (optional normalisiert)\n */\nfunction toFloatArray(vec) {\n  if (!vec) return [];\n  if (Array.isArray(vec)) return vec.map((x) => Number(x));\n  // falls es als Objekt { \"0\": 0.1, \"1\": 0.2, ... } kommt:\n  return Object.values(vec).map((x) => Number(x));\n}\n\nfunction l2Normalize(vec) {\n  const norm = Math.sqrt(vec.reduce((acc, v) => acc + v * v, 0));\n  if (!Number.isFinite(norm) || norm === 0) return vec;\n  return vec.map((v) => v / norm);\n}\n\nconst inp = $input.first().json;\n\n// cfg + query kommen typischerweise aus Edit Fields / Merge\nconst cfg = inp.cfg || {};\nconst query = inp.query || \"\";\n\n// Embeddings kommen aus deiner Ollama-Embed HTTP Node (bei dir heißt sie \"HTTP Request\")\nconst embedResp = $node[\"HTTP Request\"].json || {};\nconst rawEmbeddings = embedResp.embeddings ?? embedResp.embedding ?? [];\n\n// Ollama liefert meistens embeddings: [ [..768..] ]\nconst rawVec = Array.isArray(rawEmbeddings) ? rawEmbeddings[0] : rawEmbeddings;\n\nlet embeddingVector = toFloatArray(rawVec);\n\n// OPTIONAL: Bei Cosine in Qdrant oft sinnvoll\nembeddingVector = l2Normalize(embeddingVector);\n\n// Sanity checks\nif (!Array.isArray(embeddingVector) || embeddingVector.length === 0) {\n  return [{ json: { ...inp, cfg, query, embeddingVector: [] } }];\n}\nif (embeddingVector.some((v) => !Number.isFinite(v))) {\n  embeddingVector = embeddingVector.map((v) => (Number.isFinite(v) ? v : 0));\n}\n\nreturn [{ json: { ...inp, cfg, query, embeddingVector } }];"
+          "jsCode": "/**\n * WF B - Code in JavaScript1\n * Zweck: cfg + query uebernehmen, Embedding-Vektor als sauberes number[] ausgeben.\n */\nfunction toFloatArray(vec) {\n  if (!vec) return [];\n  if (Array.isArray(vec)) return vec.map((x) => Number(x));\n  return Object.values(vec).map((x) => Number(x));\n}\n\nfunction l2Normalize(vec) {\n  const norm = Math.sqrt(vec.reduce((acc, v) => acc + v * v, 0));\n  if (!Number.isFinite(norm) || norm === 0) return vec;\n  return vec.map((v) => v / norm);\n}\n\nconst inp = $input.first().json;\nconst cfg = inp.cfg || {};\nconst query = inp.query || '';\nconst embedResp = $node['HTTP Request'].json || {};\n\nconst rawVec =\n  embedResp.data?.[0]?.embedding ??\n  embedResp.embedding ??\n  (Array.isArray(embedResp.embeddings) ? embedResp.embeddings[0] : embedResp.embeddings) ??\n  [];\n\nlet embeddingVector = toFloatArray(rawVec);\nembeddingVector = l2Normalize(embeddingVector);\n\nif (!Array.isArray(embeddingVector) || embeddingVector.length === 0) {\n  return [{ json: { ...inp, cfg, query, embeddingVector: [] } }];\n}\nif (embeddingVector.some((v) => !Number.isFinite(v))) {\n  embeddingVector = embeddingVector.map((v) => (Number.isFinite(v) ? v : 0));\n}\n\nreturn [{ json: { ...inp, cfg, query, embeddingVector } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -3149,7 +3168,9 @@
               "node": "Merge",
               "type": "main",
               "index": 0
-            },
+            }
+          ],
+          [
             {
               "node": "HTTP Request",
               "type": "main",
@@ -3192,9 +3213,7 @@
         ]
       },
       "Edit Fields1": {
-        "main": [
-          []
-        ]
+        "main": []
       },
       "Make Collection Items": {
         "main": [
@@ -3242,43 +3261,39 @@
       "templateCredsSetupCompleted": true
     },
     "pinData": {
-      "When Executed by Another Workflow": [
-        {
-          "json": {
-            "sessionId": "4c948436da2b404a9cd793046cddd55a",
-            "action": "sendMessage",
-            "chatInput": "Welche Marken haben wir am Standort Walsrode?"
-          },
-          "pairedItem": {
-            "item": 0
-          }
+      "When Executed by Another Workflow": {
+        "json": {
+          "sessionId": "4c948436da2b404a9cd793046cddd55a",
+          "action": "sendMessage",
+          "chatInput": "Welche Marken haben wir am Standort Walsrode?"
+        },
+        "pairedItem": {
+          "item": 0
         }
-      ]
+      }
     },
     "versionId": "185b7fdd-cad2-42a0-97d8-c712f9030c69",
     "activeVersionId": "185b7fdd-cad2-42a0-97d8-c712f9030c69",
     "versionCounter": 84,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-19T11:13:29.178Z",
-        "createdAt": "2026-01-19T11:13:29.178Z",
-        "role": "workflow:owner",
-        "workflowId": "G5RKWsFzHoBDQrm5",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-19T11:13:29.178Z",
+      "createdAt": "2026-01-19T11:13:29.178Z",
+      "role": "workflow:owner",
+      "workflowId": "G5RKWsFzHoBDQrm5",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-21T15:52:52.000Z",
@@ -3327,7 +3342,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const inp = $input.first().json;\nconst text = inp?.message?.content || inp?.response?.message?.content || '';\n\n// require at least one citation token like [kahleallgemein/XYZ/ABC]\nconst hasCite = /\\[[a-z0-9_-]+\\/[^\\/\\]]+\\/[^\\/\\]]+\\]/i.test(text);\n\nif (!hasCite) {\n  return [{ json: {\n    decision: 'NOT_IN_KNOWLEDGE',\n    answerText: 'Nicht im Wissen.'\n  }}];\n}\n\nreturn [{ json: { decision: 'ANSWER', answerText: text } }];"
+          "jsCode": "const inp = $input.first().json;\nconst text = inp?.choices?.[0]?.message?.content || inp?.message?.content || inp?.response?.message?.content || '';\n\n// require at least one citation token like [kahleallgemein/XYZ/ABC]\nconst hasCite = /\\[[a-z0-9_-]+\\/[^\\/\\]]+\\/[^\\/\\]]+\\]/i.test(text);\n\nif (!hasCite) {\n  return [{ json: {\n    decision: 'NOT_IN_KNOWLEDGE',\n    answerText: 'Nicht im Wissen.'\n  }}];\n}\n\nreturn [{ json: { decision: 'ANSWER', answerText: text } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -3376,18 +3391,16 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": [
-              {
-                "id": "9d758ba4-6533-4d82-99cb-daafbbde9358",
-                "leftValue": "={{$json.decision}}",
-                "rightValue": "ANSWER",
-                "operator": {
-                  "type": "string",
-                  "operation": "equals",
-                  "name": "filter.operator.equals"
-                }
+            "conditions": {
+              "id": "9d758ba4-6533-4d82-99cb-daafbbde9358",
+              "leftValue": "={{$json.decision}}",
+              "rightValue": "ANSWER",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
               }
-            ],
+            },
             "combinator": "and"
           },
           "options": {}
@@ -3404,11 +3417,20 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "=http://ollama:11434/api/chat",
+          "url": "https://openai.inference.de-txl.ionos.com/v1/chat/completions",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={{ JSON.stringify({\n  model: 'ministral-3:8b',\n  messages: [\n    { role: 'system', content: $json.system },\n    { role: 'user', content: $json.user }\n  ],\n  stream: false,\n  keep_alive: '30m',\n  options: { temperature: 0.1 }\n}) }}",
-          "options": {}
+          "jsonBody": "={{ { model: $env.IONOS_CHAT_MODEL_DEFAULT || 'mistralai/Mistral-Small-24B-Instruct', stream: false, temperature: 0.1, messages: [ { role: 'system', content: $json.system }, { role: 'user', content: $json.user } ] } }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+              }
+            ]
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -3495,26 +3517,24 @@
     "activeVersionId": null,
     "versionCounter": 30,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-19T12:44:59.192Z",
-        "createdAt": "2026-01-19T12:44:59.192Z",
-        "role": "workflow:owner",
-        "workflowId": "-MJLu6J10sGJPiw95DPXN",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-19T12:44:59.192Z",
+      "createdAt": "2026-01-19T12:44:59.192Z",
+      "role": "workflow:owner",
+      "workflowId": "-MJLu6J10sGJPiw95DPXN",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-22T15:28:32.381Z",
@@ -3537,8 +3557,8 @@
           "workflowInputs": {
             "mappingMode": "defineBelow",
             "value": {},
-            "matchingColumns": [],
-            "schema": [],
+            "matchingColumns": null,
+            "schema": null,
             "attemptToConvertTypes": false,
             "convertFieldsToString": true
           },
@@ -3619,14 +3639,12 @@
       {
         "parameters": {
           "assignments": {
-            "assignments": [
-              {
-                "id": "b82b534c-dda7-440e-b08a-73817cce15c2",
-                "name": "chatInput",
-                "value": "={{ (() => {\n  // n8n Webhook legt Body meistens unter $json.body ab – Chat-Trigger meist direkt auf root\n  const root = $json ?? {};\n  const b = root.body ?? root;\n\n  // 1) n8n Chat Trigger\n  if (typeof b.chatInput === \"string\" && b.chatInput.trim()) {\n    return b.chatInput.trim();\n  }\n\n  // 2) Webhook-Variante: query Feld\n  if (typeof b.query === \"string\" && b.query.trim()) {\n    return b.query.trim();\n  }\n\n  // 3) OpenWebUI: messages[] -> letzte User-Nachricht nehmen\n  const msgs = b.messages ?? root.messages;\n  if (Array.isArray(msgs)) {\n    for (let i = msgs.length - 1; i >= 0; i--) {\n      const m = msgs[i] || {};\n      const role = m.role ?? m.type;\n      const content = m.content ?? m.text;\n      if ((role === \"user\" || !role) && typeof content === \"string\" && content.trim()) {\n        return content.trim();\n      }\n    }\n  }\n\n  // 4) Fallback: prompt (manche Integrationen)\n  if (typeof b.prompt === \"string\" && b.prompt.trim()) {\n    return b.prompt.trim();\n  }\n\n  return \"\";\n})() }}",
-                "type": "string"
-              }
-            ]
+            "assignments": {
+              "id": "b82b534c-dda7-440e-b08a-73817cce15c2",
+              "name": "chatInput",
+              "value": "={{ (() => {\n  // n8n Webhook legt Body meistens unter $json.body ab – Chat-Trigger meist direkt auf root\n  const root = $json ?? {};\n  const b = root.body ?? root;\n\n  // 1) n8n Chat Trigger\n  if (typeof b.chatInput === \"string\" && b.chatInput.trim()) {\n    return b.chatInput.trim();\n  }\n\n  // 2) Webhook-Variante: query Feld\n  if (typeof b.query === \"string\" && b.query.trim()) {\n    return b.query.trim();\n  }\n\n  // 3) OpenWebUI: messages[] -> letzte User-Nachricht nehmen\n  const msgs = b.messages ?? root.messages;\n  if (Array.isArray(msgs)) {\n    for (let i = msgs.length - 1; i >= 0; i--) {\n      const m = msgs[i] || {};\n      const role = m.role ?? m.type;\n      const content = m.content ?? m.text;\n      if ((role === \"user\" || !role) && typeof content === \"string\" && content.trim()) {\n        return content.trim();\n      }\n    }\n  }\n\n  // 4) Fallback: prompt (manche Integrationen)\n  if (typeof b.prompt === \"string\" && b.prompt.trim()) {\n    return b.prompt.trim();\n  }\n\n  return \"\";\n})() }}",
+              "type": "string"
+            }
           },
           "options": {}
         },
@@ -3726,26 +3744,24 @@
     "activeVersionId": "fdb56129-5429-49bf-b304-757add53031d",
     "versionCounter": 65,
     "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-19T12:47:31.647Z",
-        "createdAt": "2026-01-19T12:47:31.647Z",
-        "role": "workflow:owner",
-        "workflowId": "rsFRTHGNUXVDDqseKAwdK",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-19T12:47:31.647Z",
+      "createdAt": "2026-01-19T12:47:31.647Z",
+      "role": "workflow:owner",
+      "workflowId": "rsFRTHGNUXVDDqseKAwdK",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-23T12:26:10.884Z",
@@ -3858,26 +3874,24 @@
     "activeVersionId": "09568d27-76b3-4bd3-805f-b7b0116bd2af",
     "versionCounter": 27,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-20T14:28:22.709Z",
-        "createdAt": "2026-01-20T14:28:22.709Z",
-        "role": "workflow:owner",
-        "workflowId": "-5aJVGZrjSk56ovQHBzTK",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-20T14:28:22.709Z",
+      "createdAt": "2026-01-20T14:28:22.709Z",
+      "role": "workflow:owner",
+      "workflowId": "-5aJVGZrjSk56ovQHBzTK",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-23T12:36:58.000Z",
@@ -3918,14 +3932,12 @@
       {
         "parameters": {
           "assignments": {
-            "assignments": [
-              {
-                "id": "6d68af3e-ab48-44f6-9e5e-ab12f2b592cb",
-                "name": "Text",
-                "value": "={{ $json.chatInput }}",
-                "type": "string"
-              }
-            ]
+            "assignments": {
+              "id": "6d68af3e-ab48-44f6-9e5e-ab12f2b592cb",
+              "name": "Text",
+              "value": "={{ $json.chatInput }}",
+              "type": "string"
+            }
           },
           "options": {}
         },
@@ -3947,17 +3959,15 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": [
-              {
-                "id": "59f8783c-1f70-40f3-a76e-b05724b1e20e",
-                "leftValue": "={{ $json.Text }}",
-                "rightValue": "",
-                "operator": {
-                  "type": "string",
-                  "operation": "equals"
-                }
+            "conditions": {
+              "id": "59f8783c-1f70-40f3-a76e-b05724b1e20e",
+              "leftValue": "={{ $json.Text }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
               }
-            ],
+            },
             "combinator": "and"
           },
           "options": {}
@@ -4022,26 +4032,24 @@
     "activeVersionId": null,
     "versionCounter": 17,
     "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-23T12:28:08.954Z",
-        "createdAt": "2026-01-23T12:28:08.954Z",
-        "role": "workflow:owner",
-        "workflowId": "PZKoLW8d0XKHf5D1pOpc7",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-23T12:28:08.954Z",
+      "createdAt": "2026-01-23T12:28:08.954Z",
+      "role": "workflow:owner",
+      "workflowId": "PZKoLW8d0XKHf5D1pOpc7",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-01-27T14:27:27.731Z",
@@ -4135,18 +4143,16 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": [
-              {
-                "id": "53dd8141-5f7b-4757-ab79-1ef4047a3718",
-                "leftValue": "={{ Boolean(($json.checks ?? []).some(c =>\n  ['personalData','customRegex','secretKeys'].includes(c.name) &&\n  (c.triggered === true || c.triggered === 'true')\n)) }}",
-                "rightValue": "",
-                "operator": {
-                  "type": "boolean",
-                  "operation": "true",
-                  "singleValue": true
-                }
+            "conditions": {
+              "id": "53dd8141-5f7b-4757-ab79-1ef4047a3718",
+              "leftValue": "={{ Boolean(($json.checks ?? []).some(c =>\n  ['personalData','customRegex','secretKeys'].includes(c.name) &&\n  (c.triggered === true || c.triggered === 'true')\n)) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
-            ],
+            },
             "combinator": "and"
           },
           "options": {}
@@ -4242,11 +4248,20 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://ollama:11434/api/chat",
+          "url": "https://openai.inference.de-txl.ionos.com/v1/chat/completions",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={{ \n  {\n    model: \"ministral-3:3b-instruct-2512-q4_K_M\",\n    stream: false,\n    messages: [\n      { role: \"system\", content: $json.summaryPrompt.system },\n      { role: \"user\", content: $json.summaryPrompt.user }\n    ]\n  } \n}}",
-          "options": {}
+          "jsonBody": "={{ { model: $env.IONOS_CHAT_MODEL_DEFAULT || 'mistralai/Mistral-Small-24B-Instruct', stream: false, messages: [ { role: 'system', content: $json.summaryPrompt.system }, { role: 'user', content: $json.summaryPrompt.user } ] } }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+              }
+            ]
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -4255,7 +4270,7 @@
           112
         ],
         "id": "36e0e5e9-4109-4fd6-8741-31086db66b9b",
-        "name": "Ollama Chat Summarize",
+        "name": "IONOS Chat Summarize",
         "onError": "continueRegularOutput"
       },
       {
@@ -4278,7 +4293,7 @@
               {
                 "id": "876368bd-9fea-41f8-b1b7-69a73cdc4718",
                 "name": "summary",
-                "value": "={{ $node[\"Ollama Chat Summarize\"].json.message?.content ?? $node[\"Ollama Chat Summarize\"].json.choices?.[0]?.message?.content ?? '' }}",
+                "value": "={{ $node[\"IONOS Chat Summarize\"].json.message?.content ?? $node[\"IONOS Chat Summarize\"].json.choices?.[0]?.message?.content ?? '' }}",
                 "type": "string"
               },
               {
@@ -4314,35 +4329,35 @@
       },
       {
         "parameters": {
-          "model": "ministral-3:8b-instruct-2512-q4_K_M",
-          "options": {}
+          "model": "mistralai/Mistral-Small-24B-Instruct",
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          }
         },
-        "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
         "typeVersion": 1,
         "position": [
           -160,
           304
         ],
         "id": "4eead4d5-046b-46d0-a5bb-8ecaf2b2b093",
-        "name": "Ollama Chat Model",
+        "name": "IONOS Chat Model",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       },
       {
         "parameters": {
           "assignments": {
-            "assignments": [
-              {
-                "id": "e93aef34-1beb-41b2-b0c6-2d5ef942247f",
-                "name": "summary",
-                "value": "Deine Anfrage wurde aus Sicherheitsgründen blockiert. Bitte formuliere deine Anfrage um. Denke daran Keine personenbezogenen Daten , Fahrzeugdaten oder Kundennummern einzugeben.",
-                "type": "string"
-              }
-            ]
+            "assignments": {
+              "id": "e93aef34-1beb-41b2-b0c6-2d5ef942247f",
+              "name": "summary",
+              "value": "Deine Anfrage wurde aus Sicherheitsgründen blockiert. Bitte formuliere deine Anfrage um. Denke daran Keine personenbezogenen Daten , Fahrzeugdaten oder Kundennummern einzugeben.",
+              "type": "string"
+            }
           },
           "options": {}
         },
@@ -4372,14 +4387,12 @@
       {
         "parameters": {
           "assignments": {
-            "assignments": [
-              {
-                "id": "2e18ac8c-0ea5-4741-90e3-c5db75dca3ec",
-                "name": "query",
-                "value": "={{ $json.chatInput }}",
-                "type": "string"
-              }
-            ]
+            "assignments": {
+              "id": "2e18ac8c-0ea5-4741-90e3-c5db75dca3ec",
+              "name": "query",
+              "value": "={{ $json.chatInput }}",
+              "type": "string"
+            }
           },
           "options": {}
         },
@@ -4562,7 +4575,7 @@
           ]
         ]
       },
-      "Ollama Chat Summarize": {
+      "IONOS Chat Summarize": {
         "main": [
           [
             {
@@ -4577,7 +4590,7 @@
         "main": [
           [
             {
-              "node": "Ollama Chat Summarize",
+              "node": "IONOS Chat Summarize",
               "type": "main",
               "index": 0
             }
@@ -4595,7 +4608,7 @@
           ]
         ]
       },
-      "Ollama Chat Model": {
+      "IONOS Chat Model": {
         "ai_languageModel": [
           [
             {
@@ -4682,26 +4695,24 @@
     "activeVersionId": null,
     "versionCounter": 5,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-27T09:47:48.892Z",
-        "createdAt": "2026-01-27T09:47:48.892Z",
-        "role": "workflow:owner",
-        "workflowId": "N4_cNJxAahZF_0yP86hm9",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-27T09:47:48.892Z",
+      "createdAt": "2026-01-27T09:47:48.892Z",
+      "role": "workflow:owner",
+      "workflowId": "N4_cNJxAahZF_0yP86hm9",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-02-02T12:36:37.933Z",
@@ -4813,18 +4824,16 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": [
-              {
-                "id": "8bd8f8f9-3c24-42ec-a54f-d53e21f7c068",
-                "leftValue": "={{ $json.policy.decision === 'block_high_risk' }}",
-                "rightValue": "block_high_risk",
-                "operator": {
-                  "type": "boolean",
-                  "operation": "true",
-                  "singleValue": true
-                }
+            "conditions": {
+              "id": "8bd8f8f9-3c24-42ec-a54f-d53e21f7c068",
+              "leftValue": "={{ $json.policy.decision === 'block_high_risk' }}",
+              "rightValue": "block_high_risk",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
-            ],
+            },
             "combinator": "or"
           },
           "options": {}
@@ -4931,21 +4940,23 @@
       },
       {
         "parameters": {
-          "model": "ministral-3:8b-instruct-2512-q4_K_M",
-          "options": {}
+          "model": "mistralai/Mistral-Small-24B-Instruct",
+          "options": {
+            "baseURL": "https://openai.inference.de-txl.ionos.com/v1"
+          }
         },
-        "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
         "typeVersion": 1,
         "position": [
           1056,
           496
         ],
         "id": "e9f3da42-0be7-43e1-ad44-591e8f851b0b",
-        "name": "Ollama Chat Model",
+        "name": "IONOS Chat Model",
         "credentials": {
-          "ollamaApi": {
-            "id": "XQ1bSvxNVg9frXSu",
-            "name": "Ollama account"
+          "openAiApi": {
+            "id": "ionos-openai-compatible",
+            "name": "IONOS OpenAI Compatible"
           }
         }
       },
@@ -5067,17 +5078,15 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": [
-              {
-                "id": "c1283f96-74ac-4234-acca-f46bdbfd1153",
-                "leftValue": "={{$json.policy.decision}}",
-                "rightValue": "=needs_clarification",
-                "operator": {
-                  "type": "string",
-                  "operation": "equals"
-                }
+            "conditions": {
+              "id": "c1283f96-74ac-4234-acca-f46bdbfd1153",
+              "leftValue": "={{$json.policy.decision}}",
+              "rightValue": "=needs_clarification",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
               }
-            ],
+            },
             "combinator": "and"
           },
           "options": {}
@@ -5224,18 +5233,16 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": [
-              {
-                "id": "7d6fe9ab-bfe6-4be3-9bad-302d0a4d65ff",
-                "leftValue": "={{$json.fastGate.needsLLMGate === true}}",
-                "rightValue": "",
-                "operator": {
-                  "type": "boolean",
-                  "operation": "true",
-                  "singleValue": true
-                }
+            "conditions": {
+              "id": "7d6fe9ab-bfe6-4be3-9bad-302d0a4d65ff",
+              "leftValue": "={{$json.fastGate.needsLLMGate === true}}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
-            ],
+            },
             "combinator": "and"
           },
           "options": {}
@@ -5602,7 +5609,9 @@
               "node": "Policy Decision",
               "type": "main",
               "index": 0
-            },
+            }
+          ],
+          [
             {
               "node": "Merge1",
               "type": "main",
@@ -5651,7 +5660,7 @@
           ]
         ]
       },
-      "Ollama Chat Model": {
+      "IONOS Chat Model": {
         "ai_languageModel": [
           [
             {
@@ -5727,12 +5736,16 @@
               "node": "Input Gate",
               "type": "main",
               "index": 0
-            },
+            }
+          ],
+          [
             {
               "node": "Merge",
               "type": "main",
               "index": 1
-            },
+            }
+          ],
+          [
             {
               "node": "Merge1",
               "type": "main",
@@ -5748,7 +5761,9 @@
               "node": "Merge1",
               "type": "main",
               "index": 0
-            },
+            }
+          ],
+          [
             {
               "node": "Normalize Fail",
               "type": "main",
@@ -5826,7 +5841,9 @@
               "node": "Fast Output Gate",
               "type": "main",
               "index": 0
-            },
+            }
+          ],
+          [
             {
               "node": "Merge1",
               "type": "main",
@@ -5858,9 +5875,7 @@
         ]
       },
       "Send a message": {
-        "main": [
-          []
-        ]
+        "main": []
       },
       "Merge": {
         "main": [
@@ -5923,26 +5938,24 @@
     "activeVersionId": "28ea3251-768a-4689-b0dd-dcb4cfdb5d88",
     "versionCounter": 122,
     "triggerCount": 2,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-01-27T14:28:06.765Z",
-        "createdAt": "2026-01-27T14:28:06.765Z",
-        "role": "workflow:owner",
-        "workflowId": "Fhawq9Ed5IV2IfVQ",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-01-27T14:28:06.765Z",
+      "createdAt": "2026-01-27T14:28:06.765Z",
+      "role": "workflow:owner",
+      "workflowId": "Fhawq9Ed5IV2IfVQ",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-02-13T09:39:37.590Z",
@@ -5956,14 +5969,12 @@
       {
         "parameters": {
           "rule": {
-            "interval": [
-              {
-                "field": "days",
-                "daysInterval": 15,
-                "triggerAtHour": 3,
-                "triggerAtMinute": 15
-              }
-            ]
+            "interval": {
+              "field": "days",
+              "daysInterval": 15,
+              "triggerAtHour": 3,
+              "triggerAtMinute": 15
+            }
           }
         },
         "id": "b5672b3e-1108-4107-bcff-bf3cf2d8ec2a",
@@ -6050,26 +6061,24 @@
     "activeVersionId": null,
     "versionCounter": 1,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-02-13T09:39:37.590Z",
-        "createdAt": "2026-02-13T09:39:37.590Z",
-        "role": "workflow:owner",
-        "workflowId": "72dc1764-7336-4a41-b85d-601c6c67bee6",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-02-13T09:39:37.590Z",
+      "createdAt": "2026-02-13T09:39:37.590Z",
+      "role": "workflow:owner",
+      "workflowId": "72dc1764-7336-4a41-b85d-601c6c67bee6",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   },
   {
     "updatedAt": "2026-02-13T14:48:17.371Z",
@@ -6083,14 +6092,12 @@
       {
         "parameters": {
           "rule": {
-            "interval": [
-              {
-                "field": "days",
-                "daysInterval": 1,
-                "triggerAtHour": 3,
-                "triggerAtMinute": 30
-              }
-            ]
+            "interval": {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 3,
+              "triggerAtMinute": 30
+            }
           }
         },
         "id": "a3f1580a-020f-4b9f-b888-ef0b82434781",
@@ -6148,18 +6155,16 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": [
-              {
-                "id": "e80eca57-c645-4869-b7af-92f7f5236747",
-                "leftValue": "={{ $json.success !== true || $json.stale === true }}",
-                "rightValue": "",
-                "operator": {
-                  "type": "boolean",
-                  "operation": "true",
-                  "singleValue": true
-                }
+            "conditions": {
+              "id": "e80eca57-c645-4869-b7af-92f7f5236747",
+              "leftValue": "={{ $json.success !== true || $json.stale === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
-            ],
+            },
             "combinator": "and"
           },
           "options": {}
@@ -6219,25 +6224,23 @@
     "activeVersionId": null,
     "versionCounter": 1,
     "triggerCount": 0,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-02-13T14:48:17.376Z",
-        "createdAt": "2026-02-13T14:48:17.376Z",
-        "role": "workflow:owner",
-        "workflowId": "FXntZtBgioVd3hKz",
-        "projectId": "6AlgnOrZzCI0hiHs",
-        "project": {
-          "updatedAt": "2025-12-10T16:11:10.227Z",
-          "createdAt": "2025-12-10T16:02:16.857Z",
-          "id": "6AlgnOrZzCI0hiHs",
-          "name": "Admin Oltmanns <oltmanns@kahle.de>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
-        }
+    "tags": null,
+    "shared": {
+      "updatedAt": "2026-02-13T14:48:17.376Z",
+      "createdAt": "2026-02-13T14:48:17.376Z",
+      "role": "workflow:owner",
+      "workflowId": "FXntZtBgioVd3hKz",
+      "projectId": "6AlgnOrZzCI0hiHs",
+      "project": {
+        "updatedAt": "2025-12-10T16:11:10.227Z",
+        "createdAt": "2025-12-10T16:02:16.857Z",
+        "id": "6AlgnOrZzCI0hiHs",
+        "name": "Admin Oltmanns <oltmanns@kahle.de>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "e60050be-7f4f-4189-a38f-ba6cda55817a"
       }
-    ]
+    }
   }
 ]

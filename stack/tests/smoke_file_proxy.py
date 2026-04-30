@@ -5,14 +5,24 @@ import sys
 from urllib import error, parse, request
 
 
-def http_json(method: str, url: str, payload: dict | None = None, timeout: int = 120):
+def auth_headers(api_key: str = "") -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
+def http_json(
+    method: str,
+    url: str,
+    payload: dict | None = None,
+    timeout: int = 120,
+    headers: dict[str, str] | None = None,
+):
     data = None
-    headers = {}
+    req_headers = dict(headers or {})
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
+        req_headers["Content-Type"] = "application/json"
 
-    req = request.Request(url=url, data=data, headers=headers, method=method)
+    req = request.Request(url=url, data=data, headers=req_headers, method=method)
     try:
         with request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
@@ -28,8 +38,8 @@ def http_json(method: str, url: str, payload: dict | None = None, timeout: int =
         return e.code, body
 
 
-def http_status(url: str, timeout: int = 120) -> int:
-    req = request.Request(url=url, method="GET")
+def http_status(url: str, timeout: int = 120, headers: dict[str, str] | None = None) -> int:
+    req = request.Request(url=url, method="GET", headers=headers or {})
     try:
         with request.urlopen(req, timeout=timeout) as resp:
             _ = resp.read(1)
@@ -62,9 +72,11 @@ def main() -> int:
     parser.add_argument("--txt-file", required=True)
     parser.add_argument("--xlsx-file", default="")
     parser.add_argument("--xlsx-sheet", default="")
+    parser.add_argument("--api-key", default="", help="Proxy API key. Sends Authorization: Bearer <key>.")
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
+    headers = auth_headers(args.api_key)
     failures: list[str] = []
     notes: list[str] = []
 
@@ -76,8 +88,19 @@ def main() -> int:
 
     status, health = http_json("GET", f"{base}/health")
     expect(status == 200 and health.get("ok") is True, "health endpoint")
+    auth_required = bool(health.get("require_tool_api_key"))
 
-    status, spec = http_json("GET", f"{base}/openapi.json")
+    if auth_required:
+        s_missing, _ = http_json("GET", f"{base}/openapi.json")
+        expect(s_missing == 401, "openapi rejects missing API key")
+
+        s_wrong, _ = http_json("GET", f"{base}/openapi.json", headers=auth_headers("wrong-key"))
+        expect(s_wrong == 401, "openapi rejects wrong API key")
+
+        if not args.api_key:
+            failures.append("--api-key is required when proxy reports require_tool_api_key=true")
+
+    status, spec = http_json("GET", f"{base}/openapi.json", headers=headers)
     expect(status == 200, "openapi reachable")
     if status == 200:
         paths = set((spec.get("paths") or {}).keys())
@@ -94,8 +117,54 @@ def main() -> int:
         }
         expect(paths == expected, "openapi paths match save-only contract")
 
+    s_wild, b_wild = http_json(
+        "POST",
+        f"{base}/text/apply_ops_save",
+        {"file_path": "*.txt", "ops": [{"op": "replace_all", "from": "x", "to": "y"}]},
+        headers=headers,
+    )
+    expect(s_wild == 400 and "wildcards_not_allowed" in get_detail(b_wild), "wildcard file paths are rejected")
+
+    s_placeholder, b_placeholder = http_json(
+        "POST",
+        f"{base}/text/apply_ops_save",
+        {"file_path": "your_file.txt", "ops": [{"op": "replace_all", "from": "x", "to": "y"}]},
+        headers=headers,
+    )
+    expect(
+        s_placeholder == 400 and "placeholder_filename_not_allowed" in get_detail(b_placeholder),
+        "placeholder file names are rejected",
+    )
+
+    s_traversal, b_traversal = http_json(
+        "POST",
+        f"{base}/text/apply_ops_save",
+        {"file_path": "../outside.txt", "ops": [{"op": "replace_all", "from": "x", "to": "y"}]},
+        headers=headers,
+    )
+    expect(
+        s_traversal == 400 and (
+            "outside uploads directory" in get_detail(b_traversal)
+            or "invalid_path" in get_detail(b_traversal)
+        ),
+        "path traversal is rejected",
+    )
+
     def save_call(path: str, payload: dict, name: str):
-        s, b = http_json("POST", f"{base}{path}", payload=payload, timeout=300)
+        if auth_required:
+            s_missing, _ = http_json("POST", f"{base}{path}", payload=payload, timeout=300)
+            expect(s_missing == 401, f"{name} rejects missing API key")
+
+            s_wrong, _ = http_json(
+                "POST",
+                f"{base}{path}",
+                payload=payload,
+                timeout=300,
+                headers=auth_headers("wrong-key"),
+            )
+            expect(s_wrong == 401, f"{name} rejects wrong API key")
+
+        s, b = http_json("POST", f"{base}{path}", payload=payload, timeout=300, headers=headers)
         if s != 200:
             failures.append(f"{name}: expected 200, got {s}, detail={get_detail(b)}")
             return None
@@ -158,6 +227,7 @@ def main() -> int:
             "file_path": args.txt_file,
             "ops": [{"op": "delete_last_lines", "n": 9999}],
         },
+        headers=headers,
     )
     expect(
         s_guard == 400 and "empty_output_blocked_set_allow_empty_output_true_to_override" in get_detail(b_guard),
@@ -172,6 +242,7 @@ def main() -> int:
             "ops": [{"op": "delete_last_lines", "n": 9999}],
             "allow_empty_output": True,
         },
+        headers=headers,
     )
     expect(s_guard2 == 200 and int(b_guard2.get("size_bytes", -1)) == 0, "text empty-output override works")
 
@@ -195,6 +266,14 @@ def main() -> int:
 
         pu = parse.urlsplit(dl)
         q = parse.parse_qs(pu.query, keep_blank_values=True)
+        rel = (q.get("rel") or [""])[0]
+        if rel:
+            unsigned = parse.urlunsplit((pu.scheme, pu.netloc, pu.path, parse.urlencode({"rel": rel}), pu.fragment))
+            expect(http_status(unsigned) == 401, "unsigned rel-only download requires API key")
+            expect(http_status(unsigned, headers=headers) == 200, "authenticated rel-only download gets signed redirect")
+        else:
+            failures.append("signed download check: missing rel")
+
         sig = (q.get("sig") or [""])[0]
         if sig:
             bad_sig = ("0" if sig[-1] != "0" else "1")

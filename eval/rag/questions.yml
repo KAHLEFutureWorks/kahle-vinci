@@ -1,0 +1,48 @@
+knowledgebases:
+  kahleallgemein:
+    - question: "Welche Leistungen bietet KAHLE seinen Kundinnen und Kunden an?"
+      expected_topic: "Allgemeines Leistungs- und Serviceangebot"
+      must_have_terms: ["Leistungen", "Service"]
+    - question: "Welche Standorte oder Kontaktwege werden fuer KAHLE genannt?"
+      expected_topic: "Standorte, Kontakt und Erreichbarkeit"
+      must_have_terms: ["Standort", "Kontakt"]
+    - question: "Wie beschreibt KAHLE seinen Anspruch an Beratung und Kundenservice?"
+      expected_topic: "Serviceverstaendnis und Beratungsanspruch"
+      must_have_terms: ["Beratung", "Kundenservice"]
+    - question: "Welche Informationen gibt es zu Terminvereinbarung oder Werkstattservice?"
+      expected_topic: "Termin, Werkstatt und Serviceprozesse"
+      must_have_terms: ["Termin", "Werkstatt"]
+    - question: "Welche allgemeinen Informationen sind fuer Neukunden besonders relevant?"
+      expected_topic: "Einstiegsinformationen fuer Neukunden"
+  kahlekontext:
+    - question: "Welche internen Kontextinformationen sollen Antworten zu KAHLE beruecksichtigen?"
+      expected_topic: "Antwortkontext und interne Einordnung"
+      must_have_terms: ["Kontext", "KAHLE"]
+    - question: "Wie soll mit unklaren oder mehrdeutigen Nutzerfragen umgegangen werden?"
+      expected_topic: "Rueckfragen und Umgang mit Unsicherheit"
+      must_have_terms: ["Rueckfrage", "unklar"]
+    - question: "Welche Quellen oder Wissensbereiche haben Vorrang bei Antworten?"
+      expected_topic: "Quellenpriorisierung und Wissenshierarchie"
+      must_have_terms: ["Quelle", "Wissen"]
+    - question: "Welche Tonalitaet wird fuer Antworten im KAHLE-Kontext erwartet?"
+      expected_topic: "Kommunikationsstil und Tonalitaet"
+      must_have_terms: ["Tonalitaet", "Antwort"]
+    - question: "Wie sollen Antworten abgegrenzt werden, wenn Informationen im Kontext fehlen?"
+      expected_topic: "Grenzen des Wissens und Transparenz"
+      must_have_terms: ["fehlen", "Informationen"]
+  kahlerichtlinien:
+    - question: "Welche Regeln gelten fuer Datenschutz und den Umgang mit personenbezogenen Daten?"
+      expected_topic: "Datenschutz und personenbezogene Daten"
+      must_have_terms: ["Datenschutz", "personenbezogen"]
+    - question: "Welche Inhalte duerfen nicht erfunden werden, wenn keine Quelle vorliegt?"
+      expected_topic: "Vermeidung von Halluzinationen"
+      must_have_terms: ["Quelle", "nicht erfinden"]
+    - question: "Wie sollen vertrauliche oder sensible Informationen behandelt werden?"
+      expected_topic: "Vertraulichkeit und sensible Daten"
+      must_have_terms: ["vertraulich", "sensibel"]
+    - question: "Welche Vorgaben gibt es fuer sichere und regelkonforme Antworten?"
+      expected_topic: "Compliance und Antwortregeln"
+      must_have_terms: ["sicher", "regelkonform"]
+    - question: "Wann soll eine Anfrage abgelehnt oder an einen Menschen eskaliert werden?"
+      expected_topic: "Ablehnung und Eskalation"
+      must_have_terms: ["ablehnen", "eskalieren"]

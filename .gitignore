@@ -4,7 +4,7 @@
 *.env.*
 !*.env.example
 runtime.env
-secrets/
+/secrets/
 *.key
 *.pem
 
@@ -64,6 +64,8 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+.worktrees/
+worktrees/
 
 # Local manual backup copies
 * - Kopie.*
