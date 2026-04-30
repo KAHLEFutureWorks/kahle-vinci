@@ -56,7 +56,7 @@ $composeFile = Join-Path $ProjectRoot "stack\docker-compose.yml"
 
 try {
   if ($Pull) {
-    & docker compose -f $composeFile pull
+    & docker compose -f $composeFile pull --ignore-buildable
     if ($LASTEXITCODE -ne 0) {
       throw "docker compose pull failed with exit code $LASTEXITCODE"
     }
