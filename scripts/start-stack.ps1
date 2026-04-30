@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+  [string]$ProjectRoot = "",
   [string]$Prefix = "KAHLE-Vinci",
   [switch]$Pull,
   [switch]$NoBuild,
@@ -8,6 +8,10 @@ param(
 )
 
 Set-StrictMode -Version Latest
+
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+  $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+}
 
 $secretsModule = Join-Path $PSScriptRoot "secrets\KvCredentialManager.psm1"
 Import-Module $secretsModule -Force
