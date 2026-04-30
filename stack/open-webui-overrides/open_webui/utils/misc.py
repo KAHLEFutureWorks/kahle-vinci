@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence, Union
 import json
 import aiohttp
+import mimeparse
 
 
 import collections.abc
 from open_webui.env import SRC_LOG_LEVELS, CHAT_STREAM_RESPONSE_CHUNK_MAX_BUFFER_SIZE
 
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["MAIN"])
+log.setLevel(SRC_LOG_LEVELS.get("MAIN", logging.INFO))
 
 
 def deep_update(d, u):
@@ -419,6 +420,31 @@ def sanitize_filename(file_name):
     return final_file_name
 
 
+def sanitize_text_for_db(text: str) -> str:
+    """Remove null bytes and invalid UTF-8 surrogates from text for database storage."""
+    if not isinstance(text, str):
+        return text
+    text = text.replace("\x00", "").replace("\u0000", "")
+    try:
+        text = text.encode("utf-8", errors="surrogatepass").decode(
+            "utf-8", errors="ignore"
+        )
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return text
+
+
+def sanitize_data_for_db(obj):
+    """Recursively sanitize strings in a data structure for database storage."""
+    if isinstance(obj, str):
+        return sanitize_text_for_db(obj)
+    if isinstance(obj, dict):
+        return {k: sanitize_data_for_db(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_data_for_db(v) for v in obj]
+    return obj
+
+
 def extract_folders_after_data_docs(path):
     # Convert the path to a Path object if it's not already
     path = Path(path)
@@ -621,6 +647,40 @@ def throttle(interval: float = 10.0):
         return wrapper
 
     return decorator
+
+
+def strict_match_mime_type(supported: list[str] | str, header: str) -> Optional[str]:
+    """
+    Strictly match the mime type with the supported mime types.
+
+    :param supported: The supported mime types.
+    :param header: The header to match.
+    :return: The matched mime type or None if no match is found.
+    """
+
+    try:
+        if isinstance(supported, str):
+            supported = supported.split(",")
+
+        supported = [s for s in supported if s.strip() and "/" in s]
+
+        if len(supported) == 0:
+            supported = ["audio/*", "video/webm"]
+
+        match = mimeparse.best_match(supported, header)
+        if not match:
+            return None
+
+        _, _, match_params = mimeparse.parse_mime_type(match)
+        _, _, header_params = mimeparse.parse_mime_type(header)
+        for k, v in match_params.items():
+            if header_params.get(k) != v:
+                return None
+
+        return match
+    except Exception as e:
+        log.exception(f"Failed to match mime type {header}: {e}")
+        return None
 
 
 def extract_urls(text: str) -> list[str]:
