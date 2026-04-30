@@ -11,11 +11,12 @@ import mimetypes
 import json
 import sqlite3
 import requests
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any
 
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Header, Query, Request
 from fastapi.responses import Response, JSONResponse, FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, constr
 
@@ -26,6 +27,7 @@ DOC_WORKER_URL = os.getenv("DOC_WORKER_URL", "http://document-worker:8090")
 # and is also forwarded to worker as x-api-key (optional).
 TOOL_API_KEY = os.getenv("TOOL_API_KEY", "")
 WORKER_API_KEY = os.getenv("WORKER_API_KEY", "") or TOOL_API_KEY
+REQUIRE_TOOL_API_KEY = os.getenv("REQUIRE_TOOL_API_KEY", "true").lower() == "true"
 
 UPLOAD_ROOT = Path(OWUI_UPLOAD_DIR).resolve()
 
@@ -65,14 +67,62 @@ NonEmptyStr = constr(strip_whitespace=True, min_length=1)
 
 app = FastAPI(title="OWUI File Proxy", version="1.5.0")
 
+_REQUEST_API_KEY: ContextVar[str] = ContextVar("request_api_key", default="")
+AUTH_EXEMPT_PATHS = {"/health", "/files/download"}
+
 
 # -----------------------------
 # Security helpers
 # -----------------------------
-def _require_api_key(x_api_key: Optional[str]) -> None:
-    if TOOL_API_KEY:
-        if x_api_key != TOOL_API_KEY:
-            raise HTTPException(status_code=401, detail="unauthorized")
+def _extract_bearer_token(authorization: Optional[str]) -> str:
+    if not authorization:
+        return ""
+    scheme, _, token = authorization.strip().partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return ""
+    return token.strip()
+
+
+def _provided_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> str:
+    return (x_api_key or "").strip() or _extract_bearer_token(authorization)
+
+
+def _validate_api_key(provided: str) -> bool:
+    return bool(TOOL_API_KEY) and bool(provided) and hmac.compare_digest(provided, TOOL_API_KEY)
+
+
+def _require_api_key(x_api_key: Optional[str] = None, authorization: Optional[str] = None) -> None:
+    if not TOOL_API_KEY:
+        if REQUIRE_TOOL_API_KEY:
+            raise HTTPException(status_code=500, detail="TOOL_API_KEY not configured")
+        return
+
+    provided = _provided_api_key(x_api_key, authorization) or _REQUEST_API_KEY.get()
+    if not _validate_api_key(provided):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
+@app.middleware("http")
+async def enforce_api_key(request: Request, call_next):
+    path = request.url.path
+    if path not in AUTH_EXEMPT_PATHS:
+        provided = _provided_api_key(
+            request.headers.get("x-api-key"),
+            request.headers.get("authorization"),
+        )
+        if TOOL_API_KEY:
+            if not _validate_api_key(provided):
+                return JSONResponse(status_code=401, content={"detail": "unauthorized"})
+        elif REQUIRE_TOOL_API_KEY:
+            return JSONResponse(status_code=500, content={"detail": "TOOL_API_KEY not configured"})
+
+        token = _REQUEST_API_KEY.set(provided)
+        try:
+            return await call_next(request)
+        finally:
+            _REQUEST_API_KEY.reset(token)
+
+    return await call_next(request)
 
 
 def _ensure_within_upload_root(resolved: Path) -> None:
@@ -470,6 +520,8 @@ def health():
         "signed_downloads_enabled": bool(FILE_LINK_SECRET) and not ALLOW_UNSIGNED_DOWNLOADS,
         "allow_unsigned_downloads": ALLOW_UNSIGNED_DOWNLOADS,
         "public_base_url": PUBLIC_BASE_URL or None,
+        "tool_api_key_configured": bool(TOOL_API_KEY),
+        "require_tool_api_key": REQUIRE_TOOL_API_KEY,
         "require_exact_file_path": REQUIRE_EXACT_FILE_PATH,
         "disallow_wildcards": DISALLOW_WILDCARDS,
     }
@@ -764,14 +816,17 @@ def files_download(
     rel: str = Query(..., description="Relative path under uploads"),
     exp: Optional[int] = Query(default=None, description="Expiry (unix timestamp)"),
     sig: Optional[str] = Query(default=None, description="HMAC signature"),
+    x_api_key: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
 ):
     rel = _safe_relpath(rel)
 
     if not ALLOW_UNSIGNED_DOWNLOADS:
         # Compatibility fallback:
-        # Some LLM replies may accidentally output a truncated link that only keeps `rel`.
-        # If signature params are missing, issue a short-lived signed redirect.
+        # Some internal tool callers may accidentally keep only `rel`. Only authenticated
+        # callers may mint a fresh short-lived signed link.
         if exp is None or not sig:
+            _require_api_key(x_api_key, authorization)
             signed_url = _build_download_url(rel)
             return RedirectResponse(url=signed_url, status_code=307)
 
