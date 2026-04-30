@@ -37,8 +37,8 @@ foreach ($entry in $Name) {
     if ([string]::IsNullOrWhiteSpace($plain)) {
       throw "Secret '$entry' must not be empty."
     }
-    Set-KvCredential -Name $entry -Secret $plain -Prefix $Prefix
-    Write-Host "Stored $Prefix/$entry"
+    $store = Set-KvCredential -Name $entry -Secret $plain -Prefix $Prefix
+    Write-Host "Stored $Prefix/$entry ($store)"
   } finally {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
   }

@@ -39,4 +39,4 @@ LangChain OpenAI Chat/Embedding Nodes brauchen zusaetzlich ein n8n-Credential vo
 
 Keine echten Secrets im Repository ablegen. API-Keys, Passwoerter und Tokens werden ausserhalb des Projekts verwaltet.
 
-Unter Windows ist der Windows Credential Manager die vorgesehene Secret-Quelle. Start- oder Betriebsroutinen lesen Secrets daraus und reichen sie nur zur Laufzeit als Umgebungsvariablen oder Parameter weiter. Doku, Skripte und Compose-Dateien duerfen keine Klartext-Secrets enthalten.
+Unter Windows ist der Windows Credential Manager die vorgesehene Secret-Quelle. Wenn ein einzelner Wert fuer den Credential Manager zu lang ist, nutzt das Secret-Skript automatisch eine DPAPI-verschluesselte Datei unter `%APPDATA%/KAHLE-Vinci/secrets`. Start- oder Betriebsroutinen lesen Secrets daraus und reichen sie nur zur Laufzeit als Umgebungsvariablen oder Parameter weiter. Doku, Skripte und Compose-Dateien duerfen keine Klartext-Secrets enthalten.

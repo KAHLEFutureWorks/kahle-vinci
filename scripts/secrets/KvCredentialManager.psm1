@@ -1,5 +1,7 @@
 Set-StrictMode -Version Latest
 
+$script:DpapiSecretRoot = Join-Path $env:APPDATA "KAHLE-Vinci\secrets"
+
 if (-not ("KahleVinci.CredentialManager" -as [type])) {
   Add-Type -TypeDefinition @"
 using System;
@@ -90,6 +92,63 @@ function Get-KvCredentialTarget {
   return "$Prefix/$Name"
 }
 
+function Get-KvSecretFilePath {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [string]$Prefix = "KAHLE-Vinci"
+  )
+
+  $target = Get-KvCredentialTarget -Name $Name -Prefix $Prefix
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($target)
+    $hash = $sha.ComputeHash($bytes)
+  } finally {
+    $sha.Dispose()
+  }
+  $fileName = -join ($hash | ForEach-Object { $_.ToString("x2") })
+  return Join-Path $script:DpapiSecretRoot "$fileName.dpapi"
+}
+
+function Set-KvDpapiSecret {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$Secret,
+    [string]$Prefix = "KAHLE-Vinci"
+  )
+
+  New-Item -ItemType Directory -Path $script:DpapiSecretRoot -Force | Out-Null
+  $path = Get-KvSecretFilePath -Name $Name -Prefix $Prefix
+  $secure = ConvertTo-SecureString -String $Secret -AsPlainText -Force
+  $encrypted = ConvertFrom-SecureString -SecureString $secure
+  Set-Content -Path $path -Value $encrypted -NoNewline -Encoding ASCII
+}
+
+function Get-KvDpapiSecret {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [string]$Prefix = "KAHLE-Vinci"
+  )
+
+  $path = Get-KvSecretFilePath -Name $Name -Prefix $Prefix
+  if (-not (Test-Path -LiteralPath $path)) {
+    return ""
+  }
+
+  $encrypted = Get-Content -LiteralPath $path -Raw
+  if ([string]::IsNullOrWhiteSpace($encrypted)) {
+    return ""
+  }
+
+  $secure = ConvertTo-SecureString -String $encrypted
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try {
+    return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+  } finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+  }
+}
+
 function Set-KvCredential {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -98,7 +157,17 @@ function Set-KvCredential {
   )
 
   $target = Get-KvCredentialTarget -Name $Name -Prefix $Prefix
-  [KahleVinci.CredentialManager]::Write($target, $Secret, $env:USERNAME)
+  try {
+    [KahleVinci.CredentialManager]::Write($target, $Secret, $env:USERNAME)
+    $fallbackPath = Get-KvSecretFilePath -Name $Name -Prefix $Prefix
+    Remove-Item -LiteralPath $fallbackPath -ErrorAction SilentlyContinue
+    return "Windows Credential Manager"
+  } catch [System.ComponentModel.Win32Exception] {
+    # Windows Generic Credentials have a small blob limit. Long API tokens are
+    # stored outside the repo as DPAPI-protected current-user secrets instead.
+    Set-KvDpapiSecret -Name $Name -Secret $Secret -Prefix $Prefix
+    return "DPAPI file"
+  }
 }
 
 function Get-KvCredential {
@@ -112,7 +181,11 @@ function Get-KvCredential {
     return [KahleVinci.CredentialManager]::Read($target)
   } catch [System.ComponentModel.Win32Exception] {
     if ($_.Exception.NativeErrorCode -eq 1168) {
-      return ""
+      return Get-KvDpapiSecret -Name $Name -Prefix $Prefix
+    }
+    $fallback = Get-KvDpapiSecret -Name $Name -Prefix $Prefix
+    if (-not [string]::IsNullOrWhiteSpace($fallback)) {
+      return $fallback
     }
     throw
   }
