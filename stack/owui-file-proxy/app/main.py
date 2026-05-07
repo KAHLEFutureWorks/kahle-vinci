@@ -10,6 +10,8 @@ import binascii
 import mimetypes
 import json
 import sqlite3
+import html
+import zipfile
 import requests
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -53,6 +55,7 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 # Multi-user safety toggles
 REQUIRE_EXACT_FILE_PATH = os.getenv("REQUIRE_EXACT_FILE_PATH", "false").lower() == "true"
 DISALLOW_WILDCARDS = os.getenv("DISALLOW_WILDCARDS", "true").lower() == "true"
+RECENT_UPLOAD_DISAMBIGUATION_SECONDS = int(os.getenv("RECENT_UPLOAD_DISAMBIGUATION_SECONDS", "3600"))
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -62,6 +65,7 @@ PDF_MIME = "application/pdf"
 ALLOWED_SAVE_EXT = {".docx", ".md", ".txt", ".csv", ".pdf", ".xlsx"}
 
 WILDCARD_RE = re.compile(r"[*?\[\]{}]")
+OWUI_UUID_PREFIX_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_.+", re.I)
 NonEmptyStr = constr(strip_whitespace=True, min_length=1)
 
 
@@ -163,6 +167,27 @@ def _list_files(pattern: str) -> list[Path]:
     return [p for p in files if p.is_file()]
 
 
+def _is_openwebui_upload_for_name(path: Path, visible_name: str) -> bool:
+    return path.name.endswith(f"_{visible_name}") and bool(OWUI_UUID_PREFIX_RE.match(path.name))
+
+
+def _pick_recent_upload_duplicate(hits: list[Path], visible_name: str) -> Path | None:
+    if not hits or RECENT_UPLOAD_DISAMBIGUATION_SECONDS <= 0:
+        return None
+
+    now = time.time()
+    upload_hits = [h for h in hits if _is_openwebui_upload_for_name(h, visible_name)]
+    if not upload_hits:
+        return None
+
+    upload_hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    newest = upload_hits[0]
+    if now - newest.stat().st_mtime > RECENT_UPLOAD_DISAMBIGUATION_SECONDS:
+        return None
+
+    return newest
+
+
 def _pick_latest_file_by_exts(allowed_exts: tuple[str, ...]) -> Path:
     # NOTE: In strict mode we generally don't want "latest". This exists for backwards compatibility.
     candidates: list[Path] = []
@@ -258,6 +283,11 @@ def _resolve_path(
 
             if len(filtered) == 1:
                 hits = filtered
+
+        if strict and len(hits) > 1:
+            recent_upload = _pick_recent_upload_duplicate(hits, raw)
+            if recent_upload is not None:
+                hits = [recent_upload]
 
         if strict and len(hits) > 1:
             matches = []
@@ -362,6 +392,257 @@ def _write_atomic(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
+def _docx_paragraph_xml(text: str, style: str = "", bold: bool = False) -> str:
+    escaped = html.escape(text or "")
+    style_xml = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
+    run_props = "<w:rPr><w:b/></w:rPr>" if bold else ""
+    return f"<w:p>{style_xml}<w:r>{run_props}<w:t xml:space=\"preserve\">{escaped}</w:t></w:r></w:p>"
+
+
+def _generated_at_label() -> str:
+    return time.strftime("%Y-%m-%d %H:%M Europe/Berlin")
+
+
+def _markdown_to_docx_bytes(content: str, title: str = "Dokument") -> bytes:
+    """
+    Render plain Markdown-ish text into a simple valid DOCX using only stdlib.
+    This intentionally favors dependable downloadable files over advanced layout.
+    """
+    paragraphs: list[str] = []
+    title = (title or "Dokument").strip() or "Dokument"
+    paragraphs.append(_docx_paragraph_xml(title, "Title", bold=True))
+    paragraphs.append(_docx_paragraph_xml(f"Erstellt mit KAHLE-Vinci | Stand: {_generated_at_label()}", "Subtitle"))
+    paragraphs.append(_docx_paragraph_xml(""))
+
+    in_code = False
+    first_content_heading_seen = False
+    for raw_line in (content or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+        if not stripped:
+            paragraphs.append(_docx_paragraph_xml(""))
+            continue
+        if in_code:
+            paragraphs.append(_docx_paragraph_xml(line, "Code"))
+            continue
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+            if not first_content_heading_seen and heading.lower() == title.lower():
+                first_content_heading_seen = True
+                continue
+            first_content_heading_seen = True
+            level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 3)
+            paragraphs.append(_docx_paragraph_xml(heading, f"Heading{level}", bold=True))
+            continue
+        if stripped.startswith(("- ", "* ")):
+            paragraphs.append(_docx_paragraph_xml(f"- {stripped[2:].strip()}"))
+            continue
+        numbered = re.match(r"^\d+[.)]\s+(.+)$", stripped)
+        if numbered:
+            paragraphs.append(_docx_paragraph_xml(stripped))
+            continue
+        paragraphs.append(_docx_paragraph_xml(stripped))
+
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        f"{''.join(paragraphs)}"
+        '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/><w:color w:val="0F2430"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:sz w:val="18"/><w:color w:val="666666"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:pPr><w:spacing w:before="260" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/><w:color w:val="0F2430"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/><w:color w:val="0F2430"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr><w:rPr><w:b/><w:sz w:val="23"/><w:color w:val="0F2430"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="19"/></w:rPr></w:style>'
+        "</w:styles>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        "</Types>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    doc_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        "</Relationships>"
+    )
+
+    import io
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("word/document.xml", document_xml)
+        zf.writestr("word/styles.xml", styles_xml)
+        zf.writestr("word/_rels/document.xml.rels", doc_rels)
+    return out.getvalue()
+
+
+def _markdown_to_plain_lines(content: str, title: str = "Dokument") -> list[str]:
+    clean_title = (title or "Dokument").strip() or "Dokument"
+    lines = [clean_title, f"Erstellt mit KAHLE-Vinci | Stand: {_generated_at_label()}", ""]
+    in_code = False
+    first_content_heading_seen = False
+    for raw_line in (content or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+        if not stripped:
+            lines.append("")
+            continue
+        if in_code:
+            lines.append(line)
+            continue
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+            if not first_content_heading_seen and heading.lower() == clean_title.lower():
+                first_content_heading_seen = True
+                continue
+            first_content_heading_seen = True
+            lines.append(heading)
+            continue
+        if stripped.startswith(("- ", "* ")):
+            lines.append(f"- {stripped[2:].strip()}")
+            continue
+        lines.append(stripped)
+    return lines
+
+
+def _wrap_pdf_lines(lines: list[str], width: int = 92) -> list[str]:
+    wrapped: list[str] = []
+    for line in lines:
+        if not line:
+            wrapped.append("")
+            continue
+        words = line.split()
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) <= width:
+                current = candidate
+                continue
+            if current:
+                wrapped.append(current)
+            current = word
+        if current:
+            wrapped.append(current)
+    return wrapped
+
+
+def _pdf_escape_text(text: str) -> str:
+    encoded = (text or "").encode("cp1252", errors="replace").decode("cp1252")
+    return encoded.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _text_to_pdf_bytes(content: str, title: str = "Dokument") -> bytes:
+    """
+    Create a small text-only PDF with stdlib primitives.
+    This is intentionally simple and dependable for downloadable briefs.
+    """
+    title = (title or "Dokument").strip() or "Dokument"
+    lines = _wrap_pdf_lines(_markdown_to_plain_lines(content, title), width=88)
+    pages: list[list[str]] = []
+    page: list[str] = []
+    for idx, line in enumerate(lines):
+        if len(page) >= 48:
+            pages.append(page)
+            page = []
+        page.append(line)
+    pages.append(page or [""])
+
+    objects: list[bytes] = []
+
+    def add_obj(body: bytes) -> int:
+        objects.append(body)
+        return len(objects)
+
+    catalog_id = add_obj(b"<< /Type /Catalog /Pages 2 0 R >>")
+    pages_id = add_obj(b"<< /Type /Pages /Kids [] /Count 0 >>")
+    font_id = add_obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    bold_font_id = add_obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+
+    page_ids: list[int] = []
+    content_ids: list[int] = []
+    for page_number, page_lines in enumerate(pages, start=1):
+        commands = ["BT", "/F2 18 Tf", "50 790 Td", "18 TL"]
+        for idx, line in enumerate(page_lines):
+            if idx:
+                commands.append("T*")
+            if page_number == 1 and idx == 0:
+                commands.append("/F2 18 Tf")
+            elif page_number == 1 and idx == 1:
+                commands.append("/F1 8 Tf")
+            else:
+                commands.append("/F1 10 Tf")
+            commands.append(f"({_pdf_escape_text(line)}) Tj")
+        commands.append("ET")
+        commands.append("BT")
+        commands.append("/F1 8 Tf")
+        commands.append("50 32 Td")
+        commands.append(f"({_pdf_escape_text(f'KAHLE-Vinci | Seite {page_number} von {len(pages)}')}) Tj")
+        commands.append("ET")
+        stream = "\n".join(commands).encode("cp1252", errors="replace")
+        content_id = add_obj(b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream")
+        page_id = add_obj(
+            (
+                f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] "
+                f"/Resources << /Font << /F1 {font_id} 0 R /F2 {bold_font_id} 0 R >> >> /Contents {content_id} 0 R >>"
+            ).encode("ascii")
+        )
+        content_ids.append(content_id)
+        page_ids.append(page_id)
+
+    objects[pages_id - 1] = (
+        f"<< /Type /Pages /Kids [{' '.join(f'{pid} 0 R' for pid in page_ids)}] /Count {len(page_ids)} >>"
+    ).encode("ascii")
+
+    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for idx, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out.extend(f"{idx} 0 obj\n".encode("ascii"))
+        out.extend(body)
+        out.extend(b"\nendobj\n")
+
+    xref_offset = len(out)
+    out.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    out.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        out.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    out.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(out)
+
+
 def _sign_download(rel: str, exp: int) -> str:
     if not FILE_LINK_SECRET:
         raise HTTPException(status_code=500, detail="FILE_LINK_SECRET not set")
@@ -379,10 +660,31 @@ def _verify_sig(rel: str, exp: int, sig: str) -> None:
         raise HTTPException(status_code=401, detail="bad_signature")
 
 
+def _encode_download_token(rel: str, exp: int, sig: str) -> str:
+    payload = json.dumps({"rel": rel, "exp": exp, "sig": sig}, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_download_token(token: str) -> tuple[str, int, str]:
+    try:
+        padded = token + ("=" * (-len(token) % 4))
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(raw.decode("utf-8"))
+        rel = _safe_relpath(str(payload.get("rel") or ""))
+        exp = int(payload.get("exp"))
+        sig = str(payload.get("sig") or "")
+    except Exception:
+        raise HTTPException(status_code=401, detail="bad_download_token")
+    if not rel or not sig:
+        raise HTTPException(status_code=401, detail="bad_download_token")
+    return rel, exp, sig
+
+
 def _build_download_url(rel: str) -> str:
     exp = int(time.time()) + FILE_LINK_TTL_SECONDS
     sig = "unsigned" if ALLOW_UNSIGNED_DOWNLOADS else _sign_download(rel, exp)
-    path = f"/files/download?rel={rel}&exp={exp}&sig={sig}"
+    token = _encode_download_token(rel, exp, sig)
+    path = f"/files/download?token={token}"
     return f"{PUBLIC_BASE_URL}{path}" if PUBLIC_BASE_URL else path
 
 
@@ -486,6 +788,43 @@ class FileToMdSaveRequest(BaseModel):
     output_name: Optional[NonEmptyStr] = Field(None, description="Optional output filename, defaults to source stem + .md")
 
 
+class FileToDocxSaveRequest(BaseModel):
+    file_path: NonEmptyStr = Field(..., description="Exact filename in uploads (docx/pdf/md/txt/xlsx/csv)")
+    title: str = Field("Konvertiert", description="Heading title for DOCX conversion")
+    output_name: Optional[NonEmptyStr] = Field(None, description="Optional output filename, defaults to source stem + .docx")
+
+
+class TextCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field(..., description="Output filename ending in .md, .txt, or .csv")
+    content: str = Field(..., description="Text/Markdown/CSV content to save")
+
+
+class DocxCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field(..., description="Output filename ending in .docx")
+    content: str = Field(
+        ...,
+        description=(
+            "Markdown/text content to render into a simple DOCX. "
+            "When the user asks to create a document from the result, pass the full previous assistant result here. "
+            "Never leave this empty."
+        ),
+    )
+    title: str = Field("Dokument", description="Document title")
+
+
+class PdfCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field(..., description="Output filename ending in .pdf")
+    content: str = Field(
+        ...,
+        description=(
+            "Markdown/text content to render into a simple PDF. "
+            "When the user asks to create a PDF from the result, pass the full previous assistant result here. "
+            "Never leave this empty."
+        ),
+    )
+    title: str = Field("Dokument", description="Document title")
+
+
 class CleanupOldFilesRequest(BaseModel):
     days: int = Field(15, ge=1, le=3650, description="Delete files older than this many days")
     dry_run: bool = Field(False, description="If true, list files only, do not delete")
@@ -524,6 +863,7 @@ def health():
         "require_tool_api_key": REQUIRE_TOOL_API_KEY,
         "require_exact_file_path": REQUIRE_EXACT_FILE_PATH,
         "disallow_wildcards": DISALLOW_WILDCARDS,
+        "recent_upload_disambiguation_seconds": RECENT_UPLOAD_DISAMBIGUATION_SECONDS,
     }
 
 
@@ -811,15 +1151,87 @@ def files_save_b64(payload: SaveB64Request, x_api_key: Optional[str] = Header(de
     return saved
 
 
+@app.post("/text/create_save", operation_id="text_create_save")
+def text_create_save(payload: TextCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    """
+    Create a downloadable Markdown/TXT/CSV file from model-generated text.
+    Intended for research briefs, summaries, and structured Markdown outputs.
+    """
+    _require_api_key(x_api_key)
+
+    safe_name = _sanitize_filename(payload.filename)
+    ext = Path(safe_name).suffix.lower()
+    if ext not in {".md", ".txt", ".csv"}:
+        raise HTTPException(status_code=400, detail="text_create_save_allows_only_md_txt_csv")
+
+    data = payload.content.encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
+
+    saved = _save_bytes(safe_name, data)
+    saved["content_type"] = "text/markdown; charset=utf-8" if ext == ".md" else "text/plain; charset=utf-8"
+    return saved
+
+
+@app.post("/docx/create_save", operation_id="docx_create_save")
+def docx_create_save(payload: DocxCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    """
+    Create a simple downloadable DOCX from model-generated Markdown/text.
+    Use this after research when the user asks for a DOCX file.
+    """
+    _require_api_key(x_api_key)
+
+    out_name = _sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".docx"):
+        out_name = f"{out_name}.docx"
+
+    data = _markdown_to_docx_bytes(payload.content, payload.title)
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
+
+    saved = _save_bytes(out_name, data)
+    saved["content_type"] = DOCX_MIME
+    saved["conversion"] = "markdown_to_docx"
+    return saved
+
+
+@app.post("/pdf/create_save", operation_id="pdf_create_save")
+def pdf_create_save(payload: PdfCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    """
+    Create a simple downloadable PDF from model-generated Markdown/text.
+    Use this after research when the user asks for a PDF file.
+    """
+    _require_api_key(x_api_key)
+
+    out_name = _sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".pdf"):
+        out_name = f"{out_name}.pdf"
+
+    data = _text_to_pdf_bytes(payload.content, payload.title)
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
+
+    saved = _save_bytes(out_name, data)
+    saved["content_type"] = PDF_MIME
+    saved["conversion"] = "markdown_to_pdf"
+    return saved
+
+
 @app.get("/files/download", include_in_schema=False)
 def files_download(
-    rel: str = Query(..., description="Relative path under uploads"),
+    rel: Optional[str] = Query(default=None, description="Relative path under uploads"),
     exp: Optional[int] = Query(default=None, description="Expiry (unix timestamp)"),
     sig: Optional[str] = Query(default=None, description="HMAC signature"),
+    token: Optional[str] = Query(default=None, description="Opaque signed download token"),
     x_api_key: Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ):
-    rel = _safe_relpath(rel)
+    if token:
+        rel, exp, sig = _decode_download_token(token)
+    elif rel:
+        rel = _safe_relpath(rel)
+    else:
+        raise HTTPException(status_code=400, detail="download_token_or_rel_required")
 
     if not ALLOW_UNSIGNED_DOWNLOADS:
         # Compatibility fallback:
@@ -1075,6 +1487,45 @@ def file_to_md_save(payload: FileToMdSaveRequest, x_api_key: Optional[str] = Hea
     saved["content_type"] = "text/markdown; charset=utf-8"
     saved["source_file"] = str(path.name)
     saved["conversion"] = "file_to_md"
+    return saved
+
+
+@app.post("/file/to_docx_save", operation_id="file_to_docx_save")
+def file_to_docx_save(payload: FileToDocxSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    _require_api_key(x_api_key)
+
+    path = _resolve_path(
+        payload.file_path,
+        allowed_exts=(".docx", ".pdf", ".md", ".txt", ".xlsx", ".csv"),
+        require_exact=True,
+    )
+    data = _read_file(path)
+
+    title = (payload.title or "Konvertiert").strip() or "Konvertiert"
+    mfiles = [("files", (path.name, data, "application/octet-stream"))]
+
+    r = requests.post(
+        f"{DOC_WORKER_URL}/bundle/to_md",
+        headers=_worker_headers(),
+        files=mfiles,
+        data={"title": title, "mode": "raw"},
+        timeout=300,
+    )
+    _raise_for_worker_response(r)
+
+    if payload.output_name:
+        out_name = payload.output_name
+    else:
+        out_name = f"{Path(path.name).stem}.docx"
+    if not out_name.lower().endswith(".docx"):
+        out_name = f"{out_name}.docx"
+
+    markdown = r.content.decode("utf-8", errors="replace")
+    out = _markdown_to_docx_bytes(markdown, title)
+    saved = _save_bytes(out_name, out)
+    saved["content_type"] = DOCX_MIME
+    saved["source_file"] = str(path.name)
+    saved["conversion"] = "file_to_docx"
     return saved
 
 

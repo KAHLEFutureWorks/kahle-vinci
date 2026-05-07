@@ -105,14 +105,18 @@ def main() -> int:
     if status == 200:
         paths = set((spec.get("paths") or {}).keys())
         expected = {
+            "/docx/create_save",
             "/docx/replace_one_save",
             "/docx/delete_last_paragraphs_save",
+            "/text/create_save",
             "/text/apply_ops_save",
             "/xlsx/update_cells_save",
             "/docx/to_pdf_save",
             "/file/to_md_save",
+            "/file/to_docx_save",
             "/pdf/remove_pages_save",
             "/pdf/merge_save",
+            "/pdf/create_save",
             "/bundle/to_md_save",
         }
         expect(paths == expected, "openapi paths match save-only contract")
@@ -194,6 +198,29 @@ def main() -> int:
         },
         "text_apply_ops_save",
     )
+    _ = save_call(
+        "/text/create_save",
+        {"filename": "smoke_research.md", "content": "# Smoke Research\n\n- Downloadable markdown works.\n"},
+        "text_create_save",
+    )
+    _ = save_call(
+        "/docx/create_save",
+        {
+            "filename": "smoke_research.docx",
+            "title": "Smoke Research",
+            "content": "# Smoke Research\n\n- Downloadable DOCX works.\n",
+        },
+        "docx_create_save",
+    )
+    _ = save_call(
+        "/pdf/create_save",
+        {
+            "filename": "smoke_research.pdf",
+            "title": "Smoke Research",
+            "content": "# Smoke Research\n\n- Downloadable PDF works.\n",
+        },
+        "pdf_create_save",
+    )
     r_pdf_remove = save_call(
         "/pdf/remove_pages_save",
         {"file_path": args.pdf_file_a, "remove_pages": [1]},
@@ -218,6 +245,11 @@ def main() -> int:
         "/file/to_md_save",
         {"file_path": args.pdf_file_a, "title": "Smoke PDF zu MD", "output_name": "smoke_pdf_to_md.md"},
         "file_to_md_save",
+    )
+    _ = save_call(
+        "/file/to_docx_save",
+        {"file_path": args.pdf_file_a, "title": "Smoke PDF zu DOCX", "output_name": "smoke_pdf_to_docx.docx"},
+        "file_to_docx_save",
     )
 
     s_guard, b_guard = http_json(
@@ -266,29 +298,27 @@ def main() -> int:
 
         pu = parse.urlsplit(dl)
         q = parse.parse_qs(pu.query, keep_blank_values=True)
-        rel = (q.get("rel") or [""])[0]
-        if rel:
-            unsigned = parse.urlunsplit((pu.scheme, pu.netloc, pu.path, parse.urlencode({"rel": rel}), pu.fragment))
-            expect(http_status(unsigned) == 401, "unsigned rel-only download requires API key")
-            expect(http_status(unsigned, headers=headers) == 200, "authenticated rel-only download gets signed redirect")
+        token = (q.get("token") or [""])[0]
+        if token:
+            tampered_token = token[:-1] + ("A" if token[-1] != "A" else "B")
+            tampered = parse.urlunsplit(
+                (pu.scheme, pu.netloc, pu.path, parse.urlencode({"token": tampered_token}), pu.fragment)
+            )
+            expect(http_status(tampered) == 401, "tampered token rejected")
         else:
-            failures.append("signed download check: missing rel")
+            failures.append("signed download check: missing token")
 
+        rel = (q.get("rel") or [""])[0]
         sig = (q.get("sig") or [""])[0]
-        if sig:
+        if rel and sig:
             bad_sig = ("0" if sig[-1] != "0" else "1")
             q["sig"] = [sig[:-1] + bad_sig]
             tampered = parse.urlunsplit((pu.scheme, pu.netloc, pu.path, parse.urlencode(q, doseq=True), pu.fragment))
             expect(http_status(tampered) == 401, "tampered signature rejected")
-        else:
-            failures.append("signed download check: missing sig")
 
-        q_expired = parse.parse_qs(pu.query, keep_blank_values=True)
-        q_expired["exp"] = ["1"]
-        expired = parse.urlunsplit(
-            (pu.scheme, pu.netloc, pu.path, parse.urlencode(q_expired, doseq=True), pu.fragment)
-        )
-        expect(http_status(expired) == 410, "expired link rejected")
+            unsigned = parse.urlunsplit((pu.scheme, pu.netloc, pu.path, parse.urlencode({"rel": rel}), pu.fragment))
+            expect(http_status(unsigned) == 401, "unsigned rel-only download requires API key")
+            expect(http_status(unsigned, headers=headers) == 200, "authenticated rel-only download gets signed redirect")
     else:
         failures.append("signed download check skipped: no successful save result")
 

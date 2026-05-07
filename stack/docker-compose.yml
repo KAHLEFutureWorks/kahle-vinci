@@ -1,6 +1,6 @@
 services:
   open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.6.43
+    image: ghcr.io/open-webui/open-webui:v0.9.2
     container_name: open-webui
     restart: unless-stopped
     ports:
@@ -25,6 +25,9 @@ services:
       RAG_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
       RAG_EMBEDDING_BATCH_SIZE: "1"
       RAG_EMBEDDING_OPENAI_BATCH_SIZE: "1"
+      # Chat uploads are processed for direct file context/file tools, but not auto-indexed into OpenWebUI RAG.
+      # KAHLE-Vinci uses kb-sync + Qdrant for managed knowledgebases; this avoids IONOS embedding rate limits on every upload.
+      BYPASS_EMBEDDING_AND_RETRIEVAL: "True"
       VECTOR_DB: qdrant
       QDRANT_URI: http://qdrant:6333
 
@@ -36,19 +39,33 @@ services:
       N8N_SAFE_WEBSEARCH_WEBHOOK_URL: ${N8N_SAFE_WEBSEARCH_WEBHOOK_URL:-http://n8n:5678/webhook/safe-websearch/h576htdr-5b9t-89r8-61wx-8a50bh988m6a}
       N8N_SAFE_WEBSEARCH_API_KEY: ${N8N_SAFE_WEBSEARCH_API_KEY:-}
       N8N_SAFE_WEBSEARCH_TIMEOUT: ${N8N_SAFE_WEBSEARCH_TIMEOUT:-50}
+      OWUI_FILE_PROXY_URL: http://owui-file-proxy:8091
+      OWUI_FILE_PROXY_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      DEFAULT_PROMPT_SUGGESTIONS: >-
+        [
+          {"title":["Kundenmail formulieren","freundlich, klar, autohausnah"],"content":"Formuliere eine freundliche Antwort an einen Kunden. Nutze förmliches Sie, bleibe verbindlich und verwende Platzhalter für Namen, Standort und Kontaktdaten. Anliegen: "},
+          {"title":["Servicefall zusammenfassen","für Werkstatt oder Serviceleitung"],"content":"Fasse den folgenden Service- oder Werkstattfall intern zusammen: Ausgangslage, Kundenanliegen, bisherige Schritte, offener Punkt und empfohlener nächster Schritt. Text: "},
+          {"title":["Fahrzeug argumentieren","Verkaufsgespräch vorbereiten"],"content":"Erstelle eine sachliche Argumentationshilfe für ein Verkaufsgespräch. Berücksichtige Kundennutzen, Einwände, passende Fragen und eine kurze Abschlussformulierung. Fahrzeug/Kontext: "},
+          {"title":["Internes Wissen prüfen","Richtlinie, Prozess oder Standort"],"content":"Prüfe unser internes KAHLE-Wissen zu folgendem Thema und antworte nur auf Basis der internen Informationen: "},
+          {"title":["Text verbessern","professionell und verständlich"],"content":"Überarbeite den folgenden Text so, dass er klar, professionell und gut verständlich ist. Erhalte die Aussage, entferne Füllwörter und formuliere passend für den Autohauskontext. Text: "},
+          {"title":["Aufgabenliste erstellen","Prioritäten und nächste Schritte"],"content":"Erstelle aus dem folgenden Anliegen eine kurze Aufgabenliste mit Priorität, Fälligkeit falls erkennbar und konkretem nächsten Schritt. Anliegen: "}
+        ]
 
       TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: |-
        Available Tools: {{TOOLS}}
        Return ONLY valid JSON:
        {"tool_calls":[{"name":"<tool>","parameters":{...}}]}
        RULES:
-       - If you set a parameter named "query", it MUST be the user's last message verbatim (no rewrite, no keywords, no year injection).
+       - For safe_webcaller/safe_websearch, set query to a concise search-engine query, not to the full conversational user sentence. Include main entity, aspect, region/language, and timeframe when present.
+       - For current/news/latest web searches, include 2026 or the explicit date/range from the user. Do not add unrelated years.
+       - Do not include chat filler in search queries, e.g. "bitte", "recherchiere", "kannst du".
        - Set lang="de-DE" and maxResults=5 when present.
        - Current year: 2026 (Europe/Berlin). Do not add any year unless the user wrote it.
        - For file editing/conversion tasks, prefer *_save tools from the proxy.
        - If the user asks to edit/convert/summarize an uploaded/attached file, perform one matching *_save tool call ONLY when exact filename(s) are known from the current message context.
        - Exact filenames are listed in the user query block under: "Attached files in this message (use exact names for any file tool call):"
        - Use those names verbatim for file_path/file_paths.
+       - If the user asks for "the attached file" and exactly one attached filename is present in the current message context, use that filename directly; do not ask for confirmation.
        - If exact filename(s) are missing/ambiguous, return {"tool_calls":[]} and ask one short clarification question for the exact filename(s).
        - Never call /files/download as a tool; it is only for user-facing links.
        - For file tools, require exact uploaded filename(s) in file_path/file_paths.
@@ -57,6 +74,15 @@ services:
        - Never invent or guess filenames; use only real uploaded filenames from context.
        - Routing hints for attached files:
        - convert PDF/DOCX/TXT/MD/XLSX/CSV -> markdown: file_to_md_save
+       - convert PDF/DOCX/TXT/MD/XLSX/CSV -> Word/DOCX: file_to_docx_save
+       - generated research/text -> markdown/txt/csv download: text_create_save
+       - generated research/text -> Word/DOCX download: docx_create_save
+       - generated research/text -> PDF download: pdf_create_save
+       - Creating a new file from research/result/answer/history never requires an uploaded filename.
+       - If one user request combines research/web/RAG AND a downloadable PDF/DOCX/MD output, prefer kahle_workflow_execute once and set output_format to "pdf", "docx", or "md". Do not split this into separate search and file tools.
+       - For docx_create_save/pdf_create_save/text_create_save, parameters MUST include filename and content. Never call these tools with {}.
+       - If the user asks to create a file "from the result", "from this", or "from the previous answer", set content to the full relevant ASSISTANT message from History.
+       - If no relevant generated content exists in History, return {"tool_calls":[]} and ask what content should be put into the file.
        - DOCX -> PDF: docx_to_pdf_save
        - DOCX replace text: docx_replace_one_save
        - DOCX delete last paragraphs: docx_delete_last_paragraphs_save
@@ -74,10 +100,14 @@ services:
         [{"type":"openapi","url":"http://owui-file-proxy:8091","spec_type":"url","spec":"","path":"openapi.json","auth_type":"bearer","key":"${OWUI_FILE_PROXY_API_KEY}","config":{"enable":true},"info":{"id":"doc-worker","name":"Document Worker","description":"Local DOCX/XLSX/PDF file editing tools"}}]
       USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: "True"
       OWUI_APPEND_ATTACHED_FILE_NAMES_TO_USER_MESSAGE: "True"
+      KAHLE_TASKS_DB_PATH: /app/backend/data/kahle_vinci_tasks.db
+      KB_ROOT: /knowledgebases
+      KB_STATE_PATH: /kb-sync-state/kb-sync-state.json
+      KB_SYNC_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
     volumes:
       - open-webui:/app/backend/data
-      - ./open-webui-overrides/open_webui/utils/misc.py:/app/backend/open_webui/utils/misc.py:ro
-      - ./open-webui-overrides/open_webui/utils/middleware.py:/app/backend/open_webui/utils/middleware.py:ro
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/kb-sync-state:ro"
     depends_on:
       document-worker:
         condition: service_healthy
@@ -197,6 +227,31 @@ services:
       - "127.0.0.1:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    networks:
+      - appnet
+
+  kb-sync:
+    build:
+      context: ./kb-sync
+      dockerfile: Dockerfile
+    container_name: kb-sync
+    restart: unless-stopped
+    environment:
+      KB_ROOT: /knowledgebases
+      KB_STATE_PATH: /state/kb-sync-state.json
+      QDRANT_URL: http://qdrant:6333
+      IONOS_OPENAI_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
+      IONOS_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
+      IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
+      KB_SYNC_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
+      KB_SYNC_DEBOUNCE_SECONDS: "2"
+      KB_SYNC_RECONCILE_INTERVAL_SECONDS: "300"
+    volumes:
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/state"
+    depends_on:
+      qdrant:
+        condition: service_started
     networks:
       - appnet
 

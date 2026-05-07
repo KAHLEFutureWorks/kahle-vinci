@@ -2,7 +2,7 @@
 # Watcht NUR C:\kahle-vinci\knowledgebases\kahleallgemein rekursiv und sendet Webhook Events an n8n.
 
 $RootPath   = "C:\kahle-vinci\knowledgebases\kahleallgemein"
-$Webhook    = "http://localhost:5678/webhook/kb/kahleallgemein/sync"
+$Webhook    = "http://localhost:5678/webhook-test/kb/kahleallgemein/sync"
 $DebounceMs = 1200
 
 $allowedExt = @(".pdf",".docx",".csv",".txt",".json")

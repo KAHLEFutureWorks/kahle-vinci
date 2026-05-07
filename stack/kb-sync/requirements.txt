@@ -1,0 +1,4 @@
+requests==2.32.5
+watchdog==6.0.0
+pypdf==6.4.1
+python-docx==1.2.0

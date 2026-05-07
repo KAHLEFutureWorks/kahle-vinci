@@ -103,6 +103,9 @@ def yaml_checks(compose: dict[str, Any]) -> list[str]:
         if forbidden in services:
             failures.append(f"forbidden service present: {forbidden}")
 
+    failures.extend(check_kb_sync_contract(services))
+    failures.extend(check_open_webui_upload_contract(services))
+
     for service_name, service in services.items():
         if not isinstance(service, dict):
             continue
@@ -123,6 +126,65 @@ def yaml_checks(compose: dict[str, Any]) -> list[str]:
         for key, value in iter_environment(service.get("environment")):
             if looks_like_direct_secret(key, value):
                 failures.append(f"{service_name}: possible direct secret in environment key {key}")
+
+    return failures
+
+
+def check_kb_sync_contract(services: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    service = services.get("kb-sync")
+    if not isinstance(service, dict):
+        return ["kb-sync: service must be present for direct knowledgebase indexing"]
+
+    if service.get("ports"):
+        failures.append("kb-sync: must not publish host ports")
+
+    build = service.get("build") or {}
+    if not isinstance(build, dict) or str(build.get("context") or "").replace("\\", "/") != "./kb-sync":
+        failures.append("kb-sync: build context must be ./kb-sync")
+
+    environment = dict(iter_environment(service.get("environment")))
+    if environment.get("QDRANT_URL") != "http://qdrant:6333":
+        failures.append("kb-sync: QDRANT_URL must point to internal qdrant service")
+    if "${IONOS_API_KEY:?" not in environment.get("IONOS_API_KEY", ""):
+        failures.append("kb-sync: IONOS_API_KEY must be required")
+    if environment.get("IONOS_EMBEDDING_MODEL") != "${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}":
+        failures.append("kb-sync: embedding model must default to BAAI/bge-m3")
+
+    volumes = [str(volume).replace("\\", "/") for volume in as_list(service.get("volumes"))]
+    if not any(volume.endswith("/knowledgebases:/knowledgebases:ro") for volume in volumes):
+        failures.append("kb-sync: knowledgebases mount must be read-only")
+    if not any(volume.endswith("/kb-sync-state:/state") for volume in volumes):
+        failures.append("kb-sync: must persist state in kb-sync-state")
+
+    depends_on = service.get("depends_on") or {}
+    if "qdrant" not in depends_on:
+        failures.append("kb-sync: must depend on qdrant")
+
+    return failures
+
+
+def check_open_webui_upload_contract(services: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    service = services.get("open-webui")
+    if not isinstance(service, dict):
+        return ["open-webui: service must be present"]
+
+    environment = dict(iter_environment(service.get("environment")))
+    if environment.get("BYPASS_EMBEDDING_AND_RETRIEVAL") != "True":
+        failures.append(
+            "open-webui: BYPASS_EMBEDDING_AND_RETRIEVAL must be True so chat uploads do not hit IONOS embeddings"
+        )
+    if environment.get("OWUI_APPEND_ATTACHED_FILE_NAMES_TO_USER_MESSAGE") != "True":
+        failures.append("open-webui: must append attached file names to user messages for file tools")
+    if environment.get("KAHLE_TASKS_DB_PATH") != "/app/backend/data/kahle_vinci_tasks.db":
+        failures.append("open-webui: KAHLE_TASKS_DB_PATH must persist in OpenWebUI data volume")
+
+    volumes = [str(volume).replace("\\", "/") for volume in as_list(service.get("volumes"))]
+    if not any(volume.endswith("/knowledgebases:/knowledgebases:ro") for volume in volumes):
+        failures.append("open-webui: knowledgebases must be mounted read-only for admin diagnostics")
+    if not any(volume.endswith("/kb-sync-state:/kb-sync-state:ro") for volume in volumes):
+        failures.append("open-webui: kb-sync-state must be mounted read-only for admin diagnostics")
 
     return failures
 

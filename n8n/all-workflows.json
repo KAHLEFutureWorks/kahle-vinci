@@ -54,7 +54,7 @@
         ],
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -164,17 +164,10 @@
           "url": "https://openai.inference.de-txl.ionos.com/v1/chat/completions",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={{ { model: $env.IONOS_CHAT_MODEL_DEFAULT || 'mistralai/Mistral-Small-24B-Instruct', stream: false, messages: [ { role: 'system', content: 'Du bist ein Assistent, der von KAHLE-Vinci und n8n aufgerufen wird.' }, { role: 'user', content: $json['body']['prompt'] } ] } }}",
+          "jsonBody": "={{ { model: 'mistralai/Mistral-Small-24B-Instruct', stream: false, messages: [ { role: 'system', content: 'Du bist ein Assistent, der von KAHLE-Vinci und n8n aufgerufen wird.' }, { role: 'user', content: $json['body']['prompt'] } ] } }}",
           "options": {},
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "Authorization",
-                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
-              }
-            ]
-          }
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi"
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -183,7 +176,13 @@
           0
         ],
         "id": "5e94fe91-662c-46c6-b1b7-81a8013dc393",
-        "name": "LLM – IONOS Mistral Small"
+        "name": "LLM – IONOS Mistral Small",
+        "credentials": {
+          "openAiApi": {
+            "id": "8GSPNJyBh85lhZCz",
+            "name": "IONOS OpenAI Compatible"
+          }
+        }
       },
       {
         "parameters": {
@@ -327,7 +326,7 @@
         "name": "Embeddings IONOS",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -399,7 +398,7 @@
         "name": "IONOS Chat Model",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -461,7 +460,7 @@
         "name": "Embeddings IONOS1",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -601,7 +600,8 @@
         "parameters": {
           "httpMethod": "POST",
           "path": "kb/kahleallgemein/sync",
-          "options": {}
+          "options": {},
+          "responseMode": "onReceived"
         },
         "type": "n8n-nodes-base.webhook",
         "typeVersion": 2.1,
@@ -628,30 +628,27 @@
       },
       {
         "parameters": {
-          "method": "POST",
-          "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
-          "sendBody": true,
-          "specifyBody": "json",
-          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: 'dimension probe' } }}",
-          "options": {},
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
+          "assignments": {
+            "assignments": [
               {
-                "name": "Authorization",
-                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+                "id": "ionos-bge-m3-vector-size",
+                "name": "vector_size",
+                "value": 1024,
+                "type": "number"
               }
             ]
-          }
+          },
+          "options": {},
+          "includeOtherFields": true
         },
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.3,
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
         "position": [
           0,
           -224
         ],
         "id": "0447b99c-6684-4592-ac5d-98e642e646ff",
-        "name": "IONOS Probe Embedding"
+        "name": "Set Vector Size"
       },
       {
         "parameters": {
@@ -660,7 +657,14 @@
           "sendBody": true,
           "specifyBody": "json",
           "jsonBody": "={{ { vectors: { size: $json.vector_size || 1024, distance: 'Cosine' } } }}",
-          "options": {}
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -674,7 +678,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// IONOS/OpenAI-compatible embeddings response: { data: [{ embedding: [...] }] }\nconst emb = $json.data?.[0]?.embedding ?? $json.embedding ?? $json.embeddings?.[0] ?? [];\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\nreturn [{ json: { vector_size } }];"
+          "jsCode": "const vector_size = Number($json.vector_size || 1024);\nreturn [{ json: { ...$json, vector_size } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -812,7 +816,7 @@
         "name": "Embeddings IONOS",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -1080,15 +1084,17 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "deleted",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    },
-                    "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
-                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "deleted",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      },
+                      "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
+                    }
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1102,16 +1108,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "created",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "created",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1125,16 +1133,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "1ad1cd70-128e-4670-a781-70e546648d75",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "changed",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "1ad1cd70-128e-4670-a781-70e546648d75",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "changed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1148,16 +1158,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "8119a505-8265-462d-b384-6f28a26cebd7",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "renamed",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "8119a505-8265-462d-b384-6f28a26cebd7",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "renamed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1226,7 +1238,7 @@
         "main": [
           [
             {
-              "node": "Wait",
+              "node": "Code in JavaScript",
               "type": "main",
               "index": 0
             }
@@ -1237,21 +1249,14 @@
         "main": [
           [
             {
-              "node": "Count Points",
-              "type": "main",
-              "index": 0
-            }
-          ],
-          [
-            {
-              "node": "Route by event",
+              "node": "Set Vector Size",
               "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "IONOS Probe Embedding": {
+      "Set Vector Size": {
         "main": [
           [
             {
@@ -1274,7 +1279,15 @@
         ]
       },
       "Keep Kontext": {
-        "main": []
+        "main": [
+          [
+            {
+              "node": "Route by event",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
       },
       "Embeddings IONOS": {
         "ai_embedding": [
@@ -1343,15 +1356,7 @@
         ]
       },
       "Wait": {
-        "main": [
-          [
-            {
-              "node": "Code in JavaScript",
-              "type": "main",
-              "index": 0
-            }
-          ]
-        ]
+        "main": []
       },
       "HTTP Request3": {
         "main": []
@@ -1437,6 +1442,20 @@
             }
           ]
         ]
+      },
+      "Create Collection": {
+        "main": [
+          [
+            {
+              "node": "Keep Kontext",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Count Points": {
+        "main": []
       }
     },
     "settings": {
@@ -1487,7 +1506,8 @@
         "parameters": {
           "httpMethod": "POST",
           "path": "kb/kahlekontext/sync",
-          "options": {}
+          "options": {},
+          "responseMode": "onReceived"
         },
         "type": "n8n-nodes-base.webhook",
         "typeVersion": 2.1,
@@ -1514,30 +1534,27 @@
       },
       {
         "parameters": {
-          "method": "POST",
-          "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
-          "sendBody": true,
-          "specifyBody": "json",
-          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: 'dimension probe' } }}",
-          "options": {},
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
+          "assignments": {
+            "assignments": [
               {
-                "name": "Authorization",
-                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+                "id": "ionos-bge-m3-vector-size",
+                "name": "vector_size",
+                "value": 1024,
+                "type": "number"
               }
             ]
-          }
+          },
+          "options": {},
+          "includeOtherFields": true
         },
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.3,
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
         "position": [
           0,
           -224
         ],
         "id": "f1a2f66a-2c32-401a-bf83-ed156a389792",
-        "name": "IONOS Probe Embedding"
+        "name": "Set Vector Size"
       },
       {
         "parameters": {
@@ -1546,7 +1563,14 @@
           "sendBody": true,
           "specifyBody": "json",
           "jsonBody": "={{ { vectors: { size: $json.vector_size || 1024, distance: 'Cosine' } } }}",
-          "options": {}
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -1560,7 +1584,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// IONOS/OpenAI-compatible embeddings response: { data: [{ embedding: [...] }] }\nconst emb = $json.data?.[0]?.embedding ?? $json.embedding ?? $json.embeddings?.[0] ?? [];\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\nreturn [{ json: { vector_size } }];"
+          "jsCode": "const vector_size = Number($json.vector_size || 1024);\nreturn [{ json: { ...$json, vector_size } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -1613,7 +1637,7 @@
         "name": "Embeddings IONOS",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -1823,15 +1847,17 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "deleted",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    },
-                    "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
-                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "deleted",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      },
+                      "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
+                    }
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1845,16 +1871,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "created",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "created",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1868,16 +1896,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "1ad1cd70-128e-4670-a781-70e546648d75",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "changed",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "1ad1cd70-128e-4670-a781-70e546648d75",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "changed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1891,16 +1921,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "8119a505-8265-462d-b384-6f28a26cebd7",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "renamed",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "8119a505-8265-462d-b384-6f28a26cebd7",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "renamed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -1968,7 +2000,7 @@
         "main": [
           [
             {
-              "node": "Wait",
+              "node": "Code in JavaScript",
               "type": "main",
               "index": 0
             }
@@ -1979,14 +2011,14 @@
         "main": [
           [
             {
-              "node": "Route by event",
+              "node": "Set Vector Size",
               "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "IONOS Probe Embedding": {
+      "Set Vector Size": {
         "main": [
           [
             {
@@ -2075,15 +2107,7 @@
         ]
       },
       "Wait": {
-        "main": [
-          [
-            {
-              "node": "Code in JavaScript",
-              "type": "main",
-              "index": 0
-            }
-          ]
-        ]
+        "main": []
       },
       "HTTP Request3": {
         "main": []
@@ -2154,6 +2178,31 @@
             }
           ]
         ]
+      },
+      "Create Collection": {
+        "main": [
+          [
+            {
+              "node": "Keep Kontext",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Keep Kontext": {
+        "main": [
+          [
+            {
+              "node": "Route by event",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Count Points": {
+        "main": []
       }
     },
     "settings": {
@@ -2208,7 +2257,8 @@
         "parameters": {
           "httpMethod": "POST",
           "path": "kb/kahlerichtlinien/sync",
-          "options": {}
+          "options": {},
+          "responseMode": "onReceived"
         },
         "type": "n8n-nodes-base.webhook",
         "typeVersion": 2.1,
@@ -2235,30 +2285,27 @@
       },
       {
         "parameters": {
-          "method": "POST",
-          "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
-          "sendBody": true,
-          "specifyBody": "json",
-          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: 'dimension probe' } }}",
-          "options": {},
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
+          "assignments": {
+            "assignments": [
               {
-                "name": "Authorization",
-                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
+                "id": "ionos-bge-m3-vector-size",
+                "name": "vector_size",
+                "value": 1024,
+                "type": "number"
               }
             ]
-          }
+          },
+          "options": {},
+          "includeOtherFields": true
         },
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.3,
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
         "position": [
           0,
           -224
         ],
         "id": "5ebdcb4e-7fa8-404d-9b57-1c0770a686e0",
-        "name": "IONOS Probe Embedding"
+        "name": "Set Vector Size"
       },
       {
         "parameters": {
@@ -2267,7 +2314,14 @@
           "sendBody": true,
           "specifyBody": "json",
           "jsonBody": "={{ { vectors: { size: $json.vector_size || 1024, distance: 'Cosine' } } }}",
-          "options": {}
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -2281,7 +2335,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// IONOS/OpenAI-compatible embeddings response: { data: [{ embedding: [...] }] }\nconst emb = $json.data?.[0]?.embedding ?? $json.embedding ?? $json.embeddings?.[0] ?? [];\nconst vector_size = Array.isArray(emb) ? emb.length : 0;\nreturn [{ json: { vector_size } }];"
+          "jsCode": "const vector_size = Number($json.vector_size || 1024);\nreturn [{ json: { ...$json, vector_size } }];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -2335,7 +2389,7 @@
         "name": "Embeddings IONOS",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -2545,15 +2599,17 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "deleted",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    },
-                    "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
-                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "deleted",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      },
+                      "id": "d339cf50-c77c-4696-9dff-c9e4669b72bc"
+                    }
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2567,16 +2623,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "created",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "cef970fc-6e2f-4a69-bdd3-2aa65ac4a159",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "created",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2590,16 +2648,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "1ad1cd70-128e-4670-a781-70e546648d75",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "changed",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "1ad1cd70-128e-4670-a781-70e546648d75",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "changed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2613,16 +2673,18 @@
                     "typeValidation": "strict",
                     "version": 3
                   },
-                  "conditions": {
-                    "id": "8119a505-8265-462d-b384-6f28a26cebd7",
-                    "leftValue": "={{$json.event}}",
-                    "rightValue": "renamed",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals",
-                      "name": "filter.operator.equals"
+                  "conditions": [
+                    {
+                      "id": "8119a505-8265-462d-b384-6f28a26cebd7",
+                      "leftValue": "={{$json.event}}",
+                      "rightValue": "renamed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
                     }
-                  },
+                  ],
                   "combinator": "and"
                 },
                 "renameOutput": true,
@@ -2690,7 +2752,7 @@
         "main": [
           [
             {
-              "node": "Wait",
+              "node": "Code in JavaScript",
               "type": "main",
               "index": 0
             }
@@ -2701,14 +2763,14 @@
         "main": [
           [
             {
-              "node": "Route by event",
+              "node": "Set Vector Size",
               "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "IONOS Probe Embedding": {
+      "Set Vector Size": {
         "main": [
           [
             {
@@ -2797,15 +2859,7 @@
         ]
       },
       "Wait": {
-        "main": [
-          [
-            {
-              "node": "Code in JavaScript",
-              "type": "main",
-              "index": 0
-            }
-          ]
-        ]
+        "main": []
       },
       "HTTP Request3": {
         "main": []
@@ -2876,6 +2930,31 @@
             }
           ]
         ]
+      },
+      "Create Collection": {
+        "main": [
+          [
+            {
+              "node": "Keep Kontext",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Keep Kontext": {
+        "main": [
+          [
+            {
+              "node": "Route by event",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Count Points": {
+        "main": []
       }
     },
     "settings": {
@@ -3030,19 +3109,12 @@
           "url": "https://openai.inference.de-txl.ionos.com/v1/embeddings",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={{ { model: $env.IONOS_EMBEDDING_MODEL || 'BAAI/bge-m3', input: $json.query } }}",
+          "jsonBody": "={{ { model: 'BAAI/bge-m3', input: $json.query } }}",
           "options": {
             "timeout": 60000
           },
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "Authorization",
-                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
-              }
-            ]
-          }
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi"
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -3051,7 +3123,13 @@
           448
         ],
         "id": "af3457dc-41d5-48b4-ba05-378723b96994",
-        "name": "HTTP Request"
+        "name": "HTTP Request",
+        "credentials": {
+          "openAiApi": {
+            "id": "8GSPNJyBh85lhZCz",
+            "name": "IONOS OpenAI Compatible"
+          }
+        }
       },
       {
         "parameters": {
@@ -3168,9 +3246,7 @@
               "node": "Merge",
               "type": "main",
               "index": 0
-            }
-          ],
-          [
+            },
             {
               "node": "HTTP Request",
               "type": "main",
@@ -3391,16 +3467,18 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": {
-              "id": "9d758ba4-6533-4d82-99cb-daafbbde9358",
-              "leftValue": "={{$json.decision}}",
-              "rightValue": "ANSWER",
-              "operator": {
-                "type": "string",
-                "operation": "equals",
-                "name": "filter.operator.equals"
+            "conditions": [
+              {
+                "id": "9d758ba4-6533-4d82-99cb-daafbbde9358",
+                "leftValue": "={{$json.decision}}",
+                "rightValue": "ANSWER",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals",
+                  "name": "filter.operator.equals"
+                }
               }
-            },
+            ],
             "combinator": "and"
           },
           "options": {}
@@ -3420,17 +3498,10 @@
           "url": "https://openai.inference.de-txl.ionos.com/v1/chat/completions",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={{ { model: $env.IONOS_CHAT_MODEL_DEFAULT || 'mistralai/Mistral-Small-24B-Instruct', stream: false, temperature: 0.1, messages: [ { role: 'system', content: $json.system }, { role: 'user', content: $json.user } ] } }}",
+          "jsonBody": "={{ { model: 'mistralai/Mistral-Small-24B-Instruct', stream: false, temperature: 0.1, messages: [ { role: 'system', content: $json.system }, { role: 'user', content: $json.user } ] } }}",
           "options": {},
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "Authorization",
-                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
-              }
-            ]
-          }
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi"
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -3439,7 +3510,13 @@
           -112
         ],
         "id": "6de9b707-336b-44c7-be01-c7e785563e8c",
-        "name": "LLM Call"
+        "name": "LLM Call",
+        "credentials": {
+          "openAiApi": {
+            "id": "8GSPNJyBh85lhZCz",
+            "name": "IONOS OpenAI Compatible"
+          }
+        }
       }
     ],
     "connections": {
@@ -3959,15 +4036,17 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": {
-              "id": "59f8783c-1f70-40f3-a76e-b05724b1e20e",
-              "leftValue": "={{ $json.Text }}",
-              "rightValue": "",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
+            "conditions": [
+              {
+                "id": "59f8783c-1f70-40f3-a76e-b05724b1e20e",
+                "leftValue": "={{ $json.Text }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
               }
-            },
+            ],
             "combinator": "and"
           },
           "options": {}
@@ -4143,16 +4222,18 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": {
-              "id": "53dd8141-5f7b-4757-ab79-1ef4047a3718",
-              "leftValue": "={{ Boolean(($json.checks ?? []).some(c =>\n  ['personalData','customRegex','secretKeys'].includes(c.name) &&\n  (c.triggered === true || c.triggered === 'true')\n)) }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
+            "conditions": [
+              {
+                "id": "53dd8141-5f7b-4757-ab79-1ef4047a3718",
+                "leftValue": "={{ Boolean(($json.checks ?? []).some(c =>\n  ['personalData','customRegex','secretKeys'].includes(c.name) &&\n  (c.triggered === true || c.triggered === 'true')\n)) }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
               }
-            },
+            ],
             "combinator": "and"
           },
           "options": {}
@@ -4251,17 +4332,10 @@
           "url": "https://openai.inference.de-txl.ionos.com/v1/chat/completions",
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={{ { model: $env.IONOS_CHAT_MODEL_DEFAULT || 'mistralai/Mistral-Small-24B-Instruct', stream: false, messages: [ { role: 'system', content: $json.summaryPrompt.system }, { role: 'user', content: $json.summaryPrompt.user } ] } }}",
+          "jsonBody": "={{ { model: 'mistralai/Mistral-Small-24B-Instruct', stream: false, messages: [ { role: 'system', content: $json.summaryPrompt.system }, { role: 'user', content: $json.summaryPrompt.user } ] } }}",
           "options": {},
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "Authorization",
-                "value": "={{ 'Bearer ' + $env.IONOS_API_KEY }}"
-              }
-            ]
-          }
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi"
         },
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.3,
@@ -4271,7 +4345,13 @@
         ],
         "id": "36e0e5e9-4109-4fd6-8741-31086db66b9b",
         "name": "IONOS Chat Summarize",
-        "onError": "continueRegularOutput"
+        "onError": "continueRegularOutput",
+        "credentials": {
+          "openAiApi": {
+            "id": "8GSPNJyBh85lhZCz",
+            "name": "IONOS OpenAI Compatible"
+          }
+        }
       },
       {
         "parameters": {
@@ -4344,7 +4424,7 @@
         "name": "IONOS Chat Model",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -4796,7 +4876,7 @@
                 },
                 {
                   "name": "LICENSE_PLATE_DE_GOV",
-                  "value": "\\b(?:0|[Bb][Dd]|[Bb][Pp]|[Tt][Hh][Ww]|[Bb][Ww]|[Yy]|[Pp][Oo][Ll])[-\\s]?[A-Za-z]{0,2}\\s?\\d{1,6}\\s?[EeHh]?\\b"
+                  "value": "\\b(?:(?:0[-\\s]\\d{1,6})|(?:(?:[Bb][Dd]|[Bb][Pp]|[Tt][Hh][Ww]|[Bb][Ww]|[Yy]|[Pp][Oo][Ll])[-\\s]?[A-Za-z]{0,2}\\s?\\d{1,6}))\\s?[EeHh]?\\b"
                 },
                 {
                   "name": "LICENSE_PLATE_EU",
@@ -4824,16 +4904,18 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": {
-              "id": "8bd8f8f9-3c24-42ec-a54f-d53e21f7c068",
-              "leftValue": "={{ $json.policy.decision === 'block_high_risk' }}",
-              "rightValue": "block_high_risk",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
+            "conditions": [
+              {
+                "id": "8bd8f8f9-3c24-42ec-a54f-d53e21f7c068",
+                "leftValue": "={{ $json.policy.decision === 'block_high_risk' }}",
+                "rightValue": "block_high_risk",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
               }
-            },
+            ],
             "combinator": "or"
           },
           "options": {}
@@ -4955,7 +5037,7 @@
         "name": "IONOS Chat Model",
         "credentials": {
           "openAiApi": {
-            "id": "ionos-openai-compatible",
+            "id": "8GSPNJyBh85lhZCz",
             "name": "IONOS OpenAI Compatible"
           }
         }
@@ -5078,15 +5160,17 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": {
-              "id": "c1283f96-74ac-4234-acca-f46bdbfd1153",
-              "leftValue": "={{$json.policy.decision}}",
-              "rightValue": "=needs_clarification",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
+            "conditions": [
+              {
+                "id": "c1283f96-74ac-4234-acca-f46bdbfd1153",
+                "leftValue": "={{$json.policy.decision}}",
+                "rightValue": "=needs_clarification",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
               }
-            },
+            ],
             "combinator": "and"
           },
           "options": {}
@@ -5183,7 +5267,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// Original Query (nicht in Response ausgeben)\nconst originalQuery = $node[\"Init Request\"].json.query ?? \"\";\n\n// Guardrails Output: n8n Guardrails schreibt Sanitizing bei dir in `guardrailsInput`\nconst sanitizedTextRaw =\n  ($json.sanitizedText ?? $json.guardrailsInput ?? originalQuery).toString();\n\n// Zusätzlich: Ausgabe-Text für Notice (mit Platzhaltern), aber ohne Original-PII\nconst noticeQueryRaw = (sanitizedTextRaw || $json.guardrailsInput || \"\").toString().trim();\n\n// für UI/Logs begrenzen (optional, aber empfohlen)\nconst noticeQuery = noticeQueryRaw.length > 500\n  ? noticeQueryRaw.slice(0, 499) + \"…\"\n  : noticeQueryRaw;\n\n// Checks\nconst checks = Array.isArray($json.checks) ? $json.checks : [];\nconst triggeredChecks = checks\n  .filter(c => c && (c.triggered === true || c.triggered === 'true'))\n  .map(c => c.name);\n\n// Analyzer entityTypes (wenn vorhanden)\nconst analyzerResults = checks.flatMap(c => (c?.info?.analyzerResults ?? []));\nconst analyzerEntityTypes = analyzerResults.map(r => r?.entityType).filter(Boolean);\n\n// Placeholder Types aus Sanitizing (z.B. <IBAN>, <LICENSE_PLATE_DE>, ...)\nconst placeholderTypes = Array.from(\n  new Set(\n    [...sanitizedTextRaw.matchAll(/<([A-Z0-9_]+)>/g)].map(m => m[1])\n  )\n);\n\n// Secrets\nconst detectedSecrets = checks.flatMap(c => (c?.info?.detectedSecrets ?? []));\nconst hasSecrets = triggeredChecks.includes('secretKeys') || detectedSecrets.length > 0;\n\n// High-Risk analyzer entity types\n// ✅ Wichtig: LICENSE_PLATE_* hier aufnehmen, sonst bleibt hasHighRiskEntities bei Kennzeichen false\nconst HIGH_RISK_ENTITY_TYPES = new Set([\n  'US_BANK_NUMBER',\n  'IBAN',\n  'IBAN_CODE',\n  'CREDIT_CARD',\n  'CREDIT_CARD_NUMBER',\n  'BANK_ACCOUNT',\n  'TAX_ID',\n  'SSN',\n  'PASSPORT',\n  'DRIVER_LICENSE',\n  'LICENSE_PLATE_DE',\n  'LICENSE_PLATE_DE_GOV',\n  'LICENSE_PLATE_EU',\n]);\n\nconst hasHighRiskEntities =\n  analyzerEntityTypes.some(t => HIGH_RISK_ENTITY_TYPES.has(t) || String(t).startsWith('IBAN'));\n\n// High-/Medium-Risk über Placeholders (Custom Regex)\nconst HIGH_RISK_PLACEHOLDERS = new Set([\n  'FIN',\n  'LICENSE_PLATE_DE',\n  'LICENSE_PLATE_DE_GOV',\n  'LICENSE_PLATE_EU',\n  'IBAN',\n  'IBAN_DE',\n  'CREDIT_CARD',\n  'BANK_ACCOUNT',\n  'SECRET',\n  'API_KEY',\n  'TOKEN'\n]);\n\nconst MEDIUM_RISK_PLACEHOLDERS = new Set([\n  'CUSTOMER_ID',\n  'PERSON_DE',\n  'ADDRESS_DE',\n  'PHONE_INTL',\n  'LOCATION_DE'\n]);\n\nconst hasHighRiskCustomRegex = placeholderTypes.some(p => HIGH_RISK_PLACEHOLDERS.has(p));\nconst hasMediumRiskCustomRegex = placeholderTypes.some(p => MEDIUM_RISK_PLACEHOLDERS.has(p));\n\n// Suchquery: Placeholders entfernen, damit Websuche nicht mit \"<...>\" läuft\nconst searchQuery = sanitizedTextRaw\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Redaction/Unusable\nconst redacted =\n  sanitizedTextRaw.trim() !== originalQuery.toString().trim() || placeholderTypes.length > 0;\n\nconst unusable = searchQuery.length < 8;\n\n// --- Low-signal / Intent-Heuristik (DE) ---\nconst STOPWORDS_DE = new Set([\n  'wenn','dann','mit','aus','der','die','das','den','dem','des','ein','eine','einer','einem','einen',\n  'und','oder','aber','zu','zum','zur','von','im','in','am','an','auf','für','bitte','mal','noch',\n  'ich','du','er','sie','es','wir','ihr','mir','mich','dir','dich','uns','euch',\n\n  // Fragewörter\n  'was','wer','wen','wem','wessen','wie','wo','wann','warum','wieso','weshalb','welche','welcher','welches',\n  'wieviel','wieviele','viele','viel',\n\n  // Hilfs-/Allgemeinverben\n  'ist','sind','war','waren','sein','bin','bist','seid','hat','haben','habe','hast','gibt','geben',\n]);\n\nconst lower = searchQuery.toLowerCase();\nconst tokens = (lower.match(/[a-zäöüß0-9]+/g) ?? []).filter(t => t.length >= 2);\n\n// Meta-/Generic-Wörter (tragen selten Spezifität)\nconst GENERIC_WORDS = new Set([\n  'info','infos','information','informationen','detail','details','sache','sachen','ding','dinge',\n  'thema','themen','begriff','begriffe','konzept','konzepte',\n  'liste','listen','übersicht','uebersicht','beispiele','beispiel',\n  'kategorie','kategorien','allgemein','generell','spezifisch','präzisieren','praezisieren','möglich','moeglich',\n  'anzahl','gesamtzahl',\n  'suche','suchen','finde','finden','googeln','recherchieren','recherche',\n]);\n\nconst contentWords = Array.from(new Set(\n  tokens\n    .filter(w => w.length >= 3 && !STOPWORDS_DE.has(w))\n    .filter(w => !GENERIC_WORDS.has(w))\n));\n\nconst contentCount = contentWords.length;\n\nconst placeholderHits = (sanitizedTextRaw.match(/<[^>]+>/g) ?? []).length;\nconst placeholderDensity = placeholderHits / Math.max(1, placeholderHits + tokens.length);\n\nconst hasDemonstrative =\n  /\\b(das|dies|diese|dieses|so|hier|dort|daran|darüber|dazu|dafür)\\b/i.test(searchQuery);\n\nconst isCountQuestion =\n  /\\bwie\\s+viele\\b/i.test(searchQuery) || /\\banzahl\\b/i.test(searchQuery);\n\nconst properNounCandidates = (originalQuery.match(/\\b[A-ZÄÖÜ][a-zäöüß]{2,}\\b/g) ?? [])\n  .filter(w => !['Ich','Wie','Was','Wer','Wo','Wann','Warum','Wieso','Bitte','Suche','Finde','Infos','Informationen'].includes(w));\nconst hasProperNoun = properNounCandidates.length > 0;\n\nconst hasDigits = /\\d/.test(searchQuery);\nconst hasYear = /\\b(19|20)\\d{2}\\b/.test(searchQuery);\n\n// Spezifitäts-Score\nlet specificityScore = 0;\nif (contentCount >= 4) specificityScore += 3;\nelse if (contentCount === 3) specificityScore += 2;\nelse if (contentCount === 2) specificityScore += 1;\n\nif (hasProperNoun) specificityScore += 1;\nif (hasYear || hasDigits) specificityScore += 1;\n\nif (hasDemonstrative && contentCount < 2) specificityScore -= 2;\nif (isCountQuestion && contentCount < 2) specificityScore -= 2;\n\nif (tokens.length <= 3 && contentCount < 2) specificityScore -= 2;\nif (tokens.length <= 5 && contentCount === 0) specificityScore -= 2;\n\nconst isLowSpecificity =\n  specificityScore <= 0 ||\n  (contentCount < 2 && (hasDemonstrative || isCountQuestion)) ||\n  (contentCount === 0 && tokens.length <= 6);\n\n// --- Needs Clarification: vage / mehrdeutig ---\nconst VAGUE_MARKERS = /\\b(dafür|dazu|damit|das|dies|so etwas|irgendwas|etwas|darin|daran)\\b/i;\nconst GENERIC_NOUN = /\\b(angebot|deal|preis|option|lösung|infos?|information(en)?|details|vergleich|empfehlung(en)?)\\b/i;\n\nconst isVeryVague =\n  (VAGUE_MARKERS.test(searchQuery) && GENERIC_NOUN.test(searchQuery)) ||\n  (/^suche\\s+mir\\b/i.test(searchQuery) && VAGUE_MARKERS.test(searchQuery)) ||\n  (/^finde\\s+mir\\b/i.test(searchQuery) && VAGUE_MARKERS.test(searchQuery)) ||\n  (contentCount < 3 && GENERIC_NOUN.test(searchQuery));\n\nconst isAmbiguousApple =\n  /\\bapple\\b/i.test(searchQuery) &&\n  !/\\b(iphone|ipad|mac|macbook|imac|ios|macos|airpods|watch|apfel|obst|frucht|rezept|nährwert)\\b/i.test(searchQuery);\n\n// --- Input-Risiko: offensiv vs defensiv ---\nconst DEFENSIVE_CTX =\n  /\\b(erkenn\\w*|schutz\\w*|prävention\\w*|praevention\\w*|verhind\\w*|abwehr\\w*|sicher\\w*|mitigation\\w*|hardening\\w*|härt\\w*|haert\\w*|best\\s*practices\\w*|warnzeichen\\w*|was\\s+tun\\s+wenn|melden\\w*|anzeig\\w*|rechtlich\\w*|legal\\w*|aufklär\\w*|aufklaer\\w*|einordn\\w*|analys\\w*|wissenschaft\\w*|studie\\w*|forschung\\w*|deradikalisier\\w*|ausstieg\\w*)\\b/i;\n\nconst EXFILTRATION =\n  /\\b(api[- ]?key|apikey|token|passwort|password|secret|umgebungsvariablen|env\\b|logs?\\b|systemprompt|developer message|n8n_encryption_key)\\b/i;\nconst EXFILTRATION_VERB =\n  /\\b(gib|zeige|liste|extrahier|lies|auslesen|leak|dump)\\b/i;\n\nconst CSAM =\n  /\\b(kinderporno|kinderpornografie|kinderpornografisch|jugendpornografie|csam|child sexual abuse material|child porn)\\b/i;\n\nconst HATE_VIOLENCE =\n  /\\b(töten|umbringen|vernichten|ausrotten|vergase(n)?|abschlachten)\\b.*\\b(juden|muslime|christen|schwule|lesben|trans|ausländer|flüchtlinge|roma|sinti)\\b/i;\n\nconst EXTREMISM_GROUP =\n  /\\b(isis|isil|islamischer\\s+staat|daesh)\\b/i;\n\nconst EXTREMISM_PROPAGANDA =\n  /\\b(propoganda\\w*|propaganda\\w*|argument\\w*|slogan\\w*|überzeug\\w*|rekrutier\\w*|beitret\\w*|join\\w*|manifest\\w*|verherrlich\\w*|glorifizier\\w*|unterstütz\\w*|werb\\w*|video[- ]?script\\w*|flyer\\w*|poster\\w*)\\b/i;\n\nconst DRUGS =\n  /\\b(mdma|ecstasy|meth|crystal|kokain|heroin|lsd|amphetamin|dmt)\\b/i;\nconst DRUG_HOWTO =\n  /\\b(wie\\s+(stelle|mache|koche|mische)\\s+ich|stell(e)?\\s+ich.*\\s+her|herstellen|synthe(se|sieren)|rezept|anleitung|schritt[- ]für[- ]schritt)\\b/i;\n\nconst WEAPONS =\n  /\\b(bombe|sprengsatz|sprengstoff|molotow|rohrbombe|waffe(n)? bauen|munition herstellen|schalldämpfer)\\b/i;\nconst WEAPONS_HOWTO =\n  /\\b(wie\\s+(baue|mache|konstruiere)\\s+ich|anleitung|schritt[- ]für[- ]schritt|herstellen)\\b/i;\n\nconst CYBER =\n  /\\b(sql[- ]?injection|xss|rce|exploit|payload|malware|ransomware|keylogger|phishing|ddos|botnet)\\b/i;\nconst CYBER_OFFENSIVE =\n  /\\b(umgehen|bypass|admin[- ]?login|passwort knacken|credential stuffing|payload|exploit)\\b/i;\n\nconst FRAUD =\n  /\\b(betrug|scam|carding|kreditkarte(n)? fälschen|fake id|ausweis fälschen|kontoübernahme)\\b/i;\nconst FRAUD_DEFENSIVE =\n  /\\b(woran erkenne|wie erkenne|prüfen|echtheit|was mache ich wenn|was tun wenn|melden|anzeige)\\b/i;\n\n// Entscheidung\nlet decision = 'proceed';\nlet notice = '';\n\n// 1) Illegale/gefährliche Intents\nconst exfiltrationAttempt =\n  EXFILTRATION.test(searchQuery) && EXFILTRATION_VERB.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst csamAttempt = CSAM.test(searchQuery);\nconst hateViolenceAttempt = HATE_VIOLENCE.test(searchQuery);\n\nconst extremismPropagandaAttempt =\n  EXTREMISM_GROUP.test(searchQuery) && EXTREMISM_PROPAGANDA.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst drugHowToAttempt =\n  DRUGS.test(searchQuery) && DRUG_HOWTO.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst weaponsHowToAttempt =\n  WEAPONS.test(searchQuery) && WEAPONS_HOWTO.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst cyberOffensiveAttempt =\n  CYBER.test(searchQuery) && (CYBER_OFFENSIVE.test(searchQuery) || /\\banleitung|payload|exploit\\b/i.test(searchQuery)) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst fraudAttempt =\n  FRAUD.test(searchQuery) && !FRAUD_DEFENSIVE.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst illegalOrHarmfulAttempt =\n  exfiltrationAttempt || csamAttempt || hateViolenceAttempt ||\n  extremismPropagandaAttempt || drugHowToAttempt || weaponsHowToAttempt ||\n  cyberOffensiveAttempt || fraudAttempt;\n\n// ✅ 2) Sensitive High-Risk PII/Secrets: soll in deinen \"High-Risk\" Branch\nconst sensitiveHighRiskDetected = hasSecrets || hasHighRiskEntities || hasHighRiskCustomRegex;\n\nif (illegalOrHarmfulAttempt) {\n  decision = 'block_high_risk';\n  notice =\n    `Ich kann bei dieser Anfrage nicht helfen, da sie Exfiltration, illegale Inhalte oder gefährliche/kriminelle Handlungen betrifft. Formuliere defensiv/neutral. - Bereinigte Anfrage: \"${noticeQuery}\"`;\n\n} else if (sensitiveHighRiskDetected) {\n  // ✅ FIX: nicht mehr needs_clarification -> sondern block_high_risk\n  decision = 'block_high_risk';\n  notice =\n    `Ich kann die Websuche nicht ausführen, weil sensible Daten/Identifier erkannt wurden (z. B. Kennzeichen, IBAN, Kreditkarte, Token/API-Key). Bitte entferne diese Daten und stelle die Frage erneut – ohne Codes/IDs. - Bereinigte Anfrage: \"${noticeQuery}\"`;\n\n} else if (\n  unusable ||\n  isLowSpecificity ||\n  isVeryVague ||\n  isAmbiguousApple ||\n  (redacted && (contentCount < 2 || placeholderDensity >= 0.35))\n) {\n  decision = 'needs_clarification';\n  notice =\n    `Bitte präzisiere deine Anfrage (Thema, Ziel, Region/Zeitraum, Constraints). Beispiel: „VW ID.4: Leasingangebote DE, 24 Monate, 10.000 km/Jahr, 0 € Anzahlung, max. 350 €/Monat“. - Bereinigte Anfrage: \"${noticeQuery}\"`;\n\n} else if (redacted || hasMediumRiskCustomRegex) {\n  decision = 'proceed';\n  notice =\n    'Ich habe personenbezogene oder interne Daten aus der Anfrage entfernt/anonymisiert und führe die Websuche mit der bereinigten Anfrage aus. - Bereinigte Anfrage: \"${noticeQuery}\"';\n}\n\nreturn [{\n  json: {\n    ...$json,\n    searchQuery,\n    policy: {\n      decision,\n      redacted,\n      notice,\n      triggeredChecks,\n      triggeredPatterns: placeholderTypes,\n      triggeredEntityTypes: Array.from(new Set(analyzerEntityTypes)),\n      debug: {\n        illegalOrHarmfulAttempt,\n        sensitiveHighRiskDetected,\n        hasSecrets,\n        hasHighRiskEntities,\n        hasHighRiskCustomRegex,\n        tokensCount: tokens.length,\n        contentCount,\n        specificityScore,\n      }\n    }\n  }\n}];"
+          "jsCode": "// Original Query (nicht in Response ausgeben)\nconst originalQuery = $node[\"Init Request\"].json.query ?? \"\";\n\n// Guardrails Output: n8n Guardrails schreibt Sanitizing bei dir in `guardrailsInput`\nconst sanitizedTextRaw =\n  ($json.sanitizedText ?? $json.guardrailsInput ?? originalQuery).toString();\n\n// Zusätzlich: Ausgabe-Text für Notice (mit Platzhaltern), aber ohne Original-PII\nconst noticeQueryRaw = (sanitizedTextRaw || $json.guardrailsInput || \"\").toString().trim();\n\n// für UI/Logs begrenzen (optional, aber empfohlen)\nconst noticeQuery = noticeQueryRaw.length > 500\n  ? noticeQueryRaw.slice(0, 499) + \"…\"\n  : noticeQueryRaw;\n\n// Checks\nconst checks = Array.isArray($json.checks) ? $json.checks : [];\nconst triggeredChecks = checks\n  .filter(c => c && (c.triggered === true || c.triggered === 'true'))\n  .map(c => c.name);\n\n// Analyzer entityTypes (wenn vorhanden)\nconst analyzerResults = checks.flatMap(c => (c?.info?.analyzerResults ?? []));\nconst analyzerEntityTypes = analyzerResults.map(r => r?.entityType).filter(Boolean);\n\n// Placeholder Types aus Sanitizing (z.B. <IBAN>, <LICENSE_PLATE_DE>, ...)\nconst placeholderTypes = Array.from(\n  new Set(\n    [...sanitizedTextRaw.matchAll(/<([A-Z0-9_]+)>/g)].map(m => m[1])\n  )\n);\n\n// Secrets\nconst detectedSecrets = checks.flatMap(c => (c?.info?.detectedSecrets ?? []));\nconst hasSecrets = triggeredChecks.includes('secretKeys') || detectedSecrets.length > 0;\n\n// High-Risk analyzer entity types\n// ✅ Wichtig: LICENSE_PLATE_* hier aufnehmen, sonst bleibt hasHighRiskEntities bei Kennzeichen false\nconst HIGH_RISK_ENTITY_TYPES = new Set([\n  'US_BANK_NUMBER',\n  'IBAN',\n  'IBAN_CODE',\n  'CREDIT_CARD',\n  'CREDIT_CARD_NUMBER',\n  'BANK_ACCOUNT',\n  'TAX_ID',\n  'SSN',\n  'PASSPORT',\n  'DRIVER_LICENSE',\n  'LICENSE_PLATE_DE',\n  'LICENSE_PLATE_DE_GOV',\n  'LICENSE_PLATE_EU',\n]);\n\nconst hasHighRiskEntities =\n  analyzerEntityTypes.some(t => HIGH_RISK_ENTITY_TYPES.has(t) || String(t).startsWith('IBAN'));\n\n// High-/Medium-Risk über Placeholders (Custom Regex)\nconst HIGH_RISK_PLACEHOLDERS = new Set([\n  'FIN',\n  'LICENSE_PLATE_DE',\n  'LICENSE_PLATE_DE_GOV',\n  'LICENSE_PLATE_EU',\n  'IBAN',\n  'IBAN_DE',\n  'CREDIT_CARD',\n  'BANK_ACCOUNT',\n  'SECRET',\n  'API_KEY',\n  'TOKEN'\n]);\n\nconst MEDIUM_RISK_PLACEHOLDERS = new Set([\n  'CUSTOMER_ID',\n  'PERSON_DE',\n  'ADDRESS_DE',\n  'PHONE_INTL',\n  'LOCATION_DE'\n]);\n\nconst hasHighRiskCustomRegex = placeholderTypes.some(p => HIGH_RISK_PLACEHOLDERS.has(p));\nconst hasMediumRiskCustomRegex = placeholderTypes.some(p => MEDIUM_RISK_PLACEHOLDERS.has(p));\n\n// Suchquery: Placeholders entfernen, damit Websuche nicht mit \"<...>\" läuft\nconst searchQuery = sanitizedTextRaw\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Redaction/Unusable\nconst redacted =\n  sanitizedTextRaw.trim() !== originalQuery.toString().trim() || placeholderTypes.length > 0;\n\nconst unusable = searchQuery.length < 8;\n\n// --- Low-signal / Intent-Heuristik (DE) ---\nconst STOPWORDS_DE = new Set([\n  'wenn','dann','mit','aus','der','die','das','den','dem','des','ein','eine','einer','einem','einen',\n  'und','oder','aber','zu','zum','zur','von','im','in','am','an','auf','für','bitte','mal','noch',\n  'ich','du','er','sie','es','wir','ihr','mir','mich','dir','dich','uns','euch',\n\n  // Fragewörter\n  'was','wer','wen','wem','wessen','wie','wo','wann','warum','wieso','weshalb','welche','welcher','welches',\n  'wieviel','wieviele','viele','viel',\n\n  // Hilfs-/Allgemeinverben\n  'ist','sind','war','waren','sein','bin','bist','seid','hat','haben','habe','hast','gibt','geben',\n]);\n\nconst lower = searchQuery.toLowerCase();\nconst tokens = (lower.match(/[a-zäöüß0-9]+/g) ?? []).filter(t => t.length >= 2);\n\n// Meta-/Generic-Wörter (tragen selten Spezifität)\nconst GENERIC_WORDS = new Set([\n  'info','infos','information','informationen','detail','details','sache','sachen','ding','dinge',\n  'thema','themen','begriff','begriffe','konzept','konzepte',\n  'liste','listen','übersicht','uebersicht','beispiele','beispiel',\n  'kategorie','kategorien','allgemein','generell','spezifisch','präzisieren','praezisieren','möglich','moeglich',\n  'anzahl','gesamtzahl',\n  'suche','suchen','finde','finden','googeln','recherchieren','recherche',\n]);\n\nconst contentWords = Array.from(new Set(\n  tokens\n    .filter(w => w.length >= 3 && !STOPWORDS_DE.has(w))\n    .filter(w => !GENERIC_WORDS.has(w))\n));\n\nconst contentCount = contentWords.length;\n\nconst placeholderHits = (sanitizedTextRaw.match(/<[^>]+>/g) ?? []).length;\nconst placeholderDensity = placeholderHits / Math.max(1, placeholderHits + tokens.length);\n\nconst hasDemonstrative =\n  /\\b(das|dies|diese|dieses|so|hier|dort|daran|darüber|dazu|dafür)\\b/i.test(searchQuery);\n\nconst isCountQuestion =\n  /\\bwie\\s+viele\\b/i.test(searchQuery) || /\\banzahl\\b/i.test(searchQuery);\n\nconst properNounCandidates = (originalQuery.match(/\\b[A-ZÄÖÜ][a-zäöüß]{2,}\\b/g) ?? [])\n  .filter(w => !['Ich','Wie','Was','Wer','Wo','Wann','Warum','Wieso','Bitte','Suche','Finde','Infos','Informationen'].includes(w));\nconst hasProperNoun = properNounCandidates.length > 0;\n\nconst hasDigits = /\\d/.test(searchQuery);\nconst hasYear = /\\b(19|20)\\d{2}\\b/.test(searchQuery);\n\n// Spezifitäts-Score\nlet specificityScore = 0;\nif (contentCount >= 4) specificityScore += 3;\nelse if (contentCount === 3) specificityScore += 2;\nelse if (contentCount === 2) specificityScore += 1;\n\nif (hasProperNoun) specificityScore += 1;\nif (hasYear || hasDigits) specificityScore += 1;\n\nif (hasDemonstrative && contentCount < 2) specificityScore -= 2;\nif (isCountQuestion && contentCount < 2) specificityScore -= 2;\n\nif (tokens.length <= 3 && contentCount < 2) specificityScore -= 2;\nif (tokens.length <= 5 && contentCount === 0) specificityScore -= 2;\n\nconst isLowSpecificity =\n  specificityScore <= 0 ||\n  (contentCount < 2 && (hasDemonstrative || isCountQuestion)) ||\n  (contentCount === 0 && tokens.length <= 6);\n\n// --- Needs Clarification: vage / mehrdeutig ---\nconst VAGUE_MARKERS = /\\b(dafür|dazu|damit|das|dies|so etwas|irgendwas|etwas|darin|daran)\\b/i;\nconst GENERIC_NOUN = /\\b(angebot|deal|preis|option|lösung|infos?|information(en)?|details|vergleich|empfehlung(en)?)\\b/i;\n\nconst vagueGenericReference =\n  VAGUE_MARKERS.test(searchQuery) &&\n  GENERIC_NOUN.test(searchQuery) &&\n  contentCount < 3;\n\nconst isVeryVague =\n  vagueGenericReference ||\n  (/^suche\\s+mir\\b/i.test(searchQuery) && VAGUE_MARKERS.test(searchQuery) && contentCount < 3) ||\n  (/^finde\\s+mir\\b/i.test(searchQuery) && VAGUE_MARKERS.test(searchQuery) && contentCount < 3) ||\n  (contentCount < 3 && GENERIC_NOUN.test(searchQuery));\n\nconst isAmbiguousApple =\n  /\\bapple\\b/i.test(searchQuery) &&\n  !/\\b(iphone|ipad|mac|macbook|imac|ios|macos|airpods|watch|apfel|obst|frucht|rezept|nährwert)\\b/i.test(searchQuery);\n\n// --- Input-Risiko: offensiv vs defensiv ---\nconst DEFENSIVE_CTX =\n  /\\b(erkenn\\w*|schutz\\w*|prävention\\w*|praevention\\w*|verhind\\w*|abwehr\\w*|sicher\\w*|mitigation\\w*|hardening\\w*|härt\\w*|haert\\w*|best\\s*practices\\w*|warnzeichen\\w*|was\\s+tun\\s+wenn|melden\\w*|anzeig\\w*|rechtlich\\w*|legal\\w*|aufklär\\w*|aufklaer\\w*|einordn\\w*|analys\\w*|wissenschaft\\w*|studie\\w*|forschung\\w*|deradikalisier\\w*|ausstieg\\w*)\\b/i;\n\nconst EXFILTRATION =\n  /\\b(api[- ]?key|apikey|token|passwort|password|secret|umgebungsvariablen|env\\b|logs?\\b|systemprompt|developer message|n8n_encryption_key)\\b/i;\nconst EXFILTRATION_VERB =\n  /\\b(gib|zeige|liste|extrahier|lies|auslesen|leak|dump)\\b/i;\n\nconst CSAM =\n  /\\b(kinderporno|kinderpornografie|kinderpornografisch|jugendpornografie|csam|child sexual abuse material|child porn)\\b/i;\n\nconst HATE_VIOLENCE =\n  /\\b(töten|umbringen|vernichten|ausrotten|vergase(n)?|abschlachten)\\b.*\\b(juden|muslime|christen|schwule|lesben|trans|ausländer|flüchtlinge|roma|sinti)\\b/i;\n\nconst EXTREMISM_GROUP =\n  /\\b(isis|isil|islamischer\\s+staat|daesh)\\b/i;\n\nconst EXTREMISM_PROPAGANDA =\n  /\\b(propoganda\\w*|propaganda\\w*|argument\\w*|slogan\\w*|überzeug\\w*|rekrutier\\w*|beitret\\w*|join\\w*|manifest\\w*|verherrlich\\w*|glorifizier\\w*|unterstütz\\w*|werb\\w*|video[- ]?script\\w*|flyer\\w*|poster\\w*)\\b/i;\n\nconst DRUGS =\n  /\\b(mdma|ecstasy|meth|crystal|kokain|heroin|lsd|amphetamin|dmt)\\b/i;\nconst DRUG_HOWTO =\n  /\\b(wie\\s+(stelle|mache|koche|mische)\\s+ich|stell(e)?\\s+ich.*\\s+her|herstellen|synthe(se|sieren)|rezept|anleitung|schritt[- ]für[- ]schritt)\\b/i;\n\nconst WEAPONS =\n  /\\b(bombe|sprengsatz|sprengstoff|molotow|rohrbombe|waffe(n)? bauen|munition herstellen|schalldämpfer)\\b/i;\nconst WEAPONS_HOWTO =\n  /\\b(wie\\s+(baue|mache|konstruiere)\\s+ich|anleitung|schritt[- ]für[- ]schritt|herstellen)\\b/i;\n\nconst CYBER =\n  /\\b(sql[- ]?injection|xss|rce|exploit|payload|malware|ransomware|keylogger|phishing|ddos|botnet)\\b/i;\nconst CYBER_OFFENSIVE =\n  /\\b(umgehen|bypass|admin[- ]?login|passwort knacken|credential stuffing|payload|exploit)\\b/i;\n\nconst FRAUD =\n  /\\b(betrug|scam|carding|kreditkarte(n)? fälschen|fake id|ausweis fälschen|kontoübernahme)\\b/i;\nconst FRAUD_DEFENSIVE =\n  /\\b(woran erkenne|wie erkenne|prüfen|echtheit|was mache ich wenn|was tun wenn|melden|anzeige)\\b/i;\n\n// Entscheidung\nlet decision = 'proceed';\nlet notice = '';\n\n// 1) Illegale/gefährliche Intents\nconst exfiltrationAttempt =\n  EXFILTRATION.test(searchQuery) && EXFILTRATION_VERB.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst csamAttempt = CSAM.test(searchQuery);\nconst hateViolenceAttempt = HATE_VIOLENCE.test(searchQuery);\n\nconst extremismPropagandaAttempt =\n  EXTREMISM_GROUP.test(searchQuery) && EXTREMISM_PROPAGANDA.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst drugHowToAttempt =\n  DRUGS.test(searchQuery) && DRUG_HOWTO.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst weaponsHowToAttempt =\n  WEAPONS.test(searchQuery) && WEAPONS_HOWTO.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst cyberOffensiveAttempt =\n  CYBER.test(searchQuery) && (CYBER_OFFENSIVE.test(searchQuery) || /\\banleitung|payload|exploit\\b/i.test(searchQuery)) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst fraudAttempt =\n  FRAUD.test(searchQuery) && !FRAUD_DEFENSIVE.test(searchQuery) && !DEFENSIVE_CTX.test(searchQuery);\n\nconst illegalOrHarmfulAttempt =\n  exfiltrationAttempt || csamAttempt || hateViolenceAttempt ||\n  extremismPropagandaAttempt || drugHowToAttempt || weaponsHowToAttempt ||\n  cyberOffensiveAttempt || fraudAttempt;\n\n// ✅ 2) Sensitive High-Risk PII/Secrets: soll in deinen \"High-Risk\" Branch\nconst sensitiveHighRiskDetected = hasSecrets || hasHighRiskEntities || hasHighRiskCustomRegex;\n\nif (illegalOrHarmfulAttempt) {\n  decision = 'block_high_risk';\n  notice =\n    `Ich kann bei dieser Anfrage nicht helfen, da sie Exfiltration, illegale Inhalte oder gefährliche/kriminelle Handlungen betrifft. Formuliere defensiv/neutral. - Bereinigte Anfrage: \"${noticeQuery}\"`;\n\n} else if (sensitiveHighRiskDetected) {\n  // ✅ FIX: nicht mehr needs_clarification -> sondern block_high_risk\n  decision = 'block_high_risk';\n  notice =\n    `Ich kann die Websuche nicht ausführen, weil sensible Daten/Identifier erkannt wurden (z. B. Kennzeichen, IBAN, Kreditkarte, Token/API-Key). Bitte entferne diese Daten und stelle die Frage erneut – ohne Codes/IDs. - Bereinigte Anfrage: \"${noticeQuery}\"`;\n\n} else if (\n  unusable ||\n  isLowSpecificity ||\n  isVeryVague ||\n  isAmbiguousApple ||\n  (redacted && (contentCount < 2 || placeholderDensity >= 0.35))\n) {\n  decision = 'needs_clarification';\n  notice =\n    `Bitte präzisiere deine Anfrage (Thema, Ziel, Region/Zeitraum, Constraints). Beispiel: „VW ID.4: Leasingangebote DE, 24 Monate, 10.000 km/Jahr, 0 € Anzahlung, max. 350 €/Monat“. - Bereinigte Anfrage: \"${noticeQuery}\"`;\n\n} else if (redacted || hasMediumRiskCustomRegex) {\n  decision = 'proceed';\n  notice =\n    'Ich habe personenbezogene oder interne Daten aus der Anfrage entfernt/anonymisiert und führe die Websuche mit der bereinigten Anfrage aus. - Bereinigte Anfrage: \"${noticeQuery}\"';\n}\n\nreturn [{\n  json: {\n    ...$json,\n    searchQuery,\n    policy: {\n      decision,\n      redacted,\n      notice,\n      triggeredChecks,\n      triggeredPatterns: placeholderTypes,\n      triggeredEntityTypes: Array.from(new Set(analyzerEntityTypes)),\n      debug: {\n        illegalOrHarmfulAttempt,\n        sensitiveHighRiskDetected,\n        hasSecrets,\n        hasHighRiskEntities,\n        hasHighRiskCustomRegex,\n        tokensCount: tokens.length,\n        contentCount,\n        specificityScore,\n      }\n    }\n  }\n}];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -5213,7 +5297,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// Fast Output Gate (v2) — robust topic detection + routing to Output Gate (LLM)\n// Goals:\n// - Detect safety-relevant topics reliably (prompt injection, exfiltration, cyber, extremism, etc.)\n// - Route ANY non-PII topic detection to Output Gate via needsLLMGate=true\n// - PII-only: redact + respond via webhook (no Output Gate trigger)\n\nconst searchQuery = ($json.searchQuery ?? $json.query ?? \"\").toString();\nconst summary = ($json.summary ?? \"\").toString();\nconst sources = Array.isArray($json.sources) ? $json.sources : [];\n\nconst sourcesText = sources\n  .map(s => `${s.title ?? \"\"}\\n${s.snippet ?? \"\"}\\n${s.url ?? \"\"}`)\n  .join(\"\\n\");\n\n// Intent nur aus Query+Summary (wichtig: defensive Prompts nicht durch Snippets killen)\nconst intentText = `${searchQuery}\\n${summary}`.slice(0, 14000);\n\n// Fallback: wenn summary quasi leer ist (z.B. Tests), dann scannen wir ein kleines Stück sources\nconst sourceFallback = summary.trim().length < 30 ? sourcesText.slice(0, 6000) : \"\";\nconst detectText = `${intentText}\\n${sourceFallback}`.slice(0, 20000);\n\n// Für PII lieber das volle Material prüfen (kann in Snippets stecken)\nconst fullText = `${intentText}\\n${sourcesText}`.slice(0, 24000);\n\nconst triggered = [];\nconst add = (k, ok) => { if (ok) triggered.push(k); };\n\n// ✅ Defensive Kontext (DE+EN, inkl. Komposita/Flexionen)\n// Wird NICHT mehr verwendet, um Prompt-Injection *Topic* zu unterdrücken.\n// (Nur optional, um \"Attacke\" vs \"Diskussion\" zu unterscheiden.)\nconst DEFENSIVE_CTX =\n  /\\b(erkenn\\w*|schutz\\w*|prävention\\w*|praevention\\w*|verhind\\w*|abwehr\\w*|sicher\\w*|mitigation\\w*|hardening\\w*|härt\\w*|haert\\w*|best\\s*practices?\\w*|warnzeichen\\w*|was\\s+tun\\s+wenn|melden\\w*|anzeig\\w*|rechtlich\\w*|legal\\w*|aufklär\\w*|aufklaer\\w*|einordn\\w*|analys\\w*|wissenschaft\\w*|studie\\w*|forschung\\w*|deradikalisier\\w*|ausstieg\\w*|counter\\w*|defens\\w*|prevent\\w*|mitigate\\w*|awareness\\w*)\\b/i;\n\n// --- Prompt Injection (DE+EN) ---\n// Keywords (Topic)\nconst PROMPT_INJECTION =\n  /\\b(prompt[- ]?injection|jailbreak|dan\\b|do anything now|developer mode|system mode|dev mode)\\b/i;\n\n// Phrasen / Muster (Topic) — inkl. Tippfehler \"previos\"\nconst PROMPT_INJECTION_PHRASES =\n  /\\b(ignore|disregard|bypass|override|forget)\\b.{0,50}\\b(instructions?|rules?|polic(y|ies)|previous|previo\\w*|prior|earlier)\\b|\\b(you are now|from now on)\\b.{0,50}\\b(system|developer|admin)\\b|\\b(act(?:ing)?\\s+as)\\b.{0,50}\\b(system|developer|admin)\\b|\\b(rolle:\\s*system|rolle\\s*=\\s*system|role:\\s*system)\\b/i;\n\n// Attack-Verb (direktive Aufforderung)\nconst PI_ATTACK_VERBS =\n  /\\b(respond as|answer as|act(?:ing)? as|from now on|you are now|ignore|disregard|override|bypass|forget|rolle:\\s*system|role:\\s*system)\\b/i;\n\n// Topic vs Attack\nconst PI_TOPIC =\n  PROMPT_INJECTION.test(detectText) ||\n  PROMPT_INJECTION_PHRASES.test(detectText) ||\n  /\\b(ignorier(e|en)?|prompt[- ]?injection|jailbreak|dan)\\b/i.test(detectText);\n\n// Attack: nur wenn es im Intent (Query+Summary) wie eine direkte Instruktion aussieht\nconst PI_ATTACK =\n  (PROMPT_INJECTION.test(intentText) || PROMPT_INJECTION_PHRASES.test(intentText)) &&\n  PI_ATTACK_VERBS.test(intentText) &&\n  !DEFENSIVE_CTX.test(intentText); // defensiv im Intent => eher Diskussion als Attack\n\n// ✅ Trigger: immer wenn Topic ODER Attack erkannt (damit Output Gate übernehmen kann)\nadd(\"prompt_injection\", PI_TOPIC || PI_ATTACK);\n\n// --- Exfiltration / Secrets (DE+EN) ---\nconst EXFIL_KW =\n  /\\b(system\\s*prompt|developer\\s*message(s)?|hidden\\s*(prompt|instructions)|internal\\s*(prompt|instructions)|n8n_encryption_key|api[- ]?key|apikey|access\\s*token|refresh\\s*token|bearer\\s*token|secret|password|passwort|credential(s)?|cookie(s)?|session|env(?:ironment)?\\s*variables?|umgebungsvariablen|private\\s*key)\\b/i;\n\nconst EXFIL_VERB =\n  /\\b(show|print|reveal|leak|dump|extract|read|display|output|list|give|provide|gib|zeige|liste|extrahier|lies|auslesen)\\b/i;\n\n// Exfil Topic (schon wenn Keywords vorkommen)\nconst EXFIL_TOPIC = EXFIL_KW.test(detectText);\n\n// Exfil Attempt (keywords + verb + nicht defensiv)\nconst EXFIL_ATTEMPT = EXFIL_KW.test(intentText) && EXFIL_VERB.test(intentText) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"exfiltration\", EXFIL_TOPIC || EXFIL_ATTEMPT);\n\n// --- Extremismus ---\nconst EXTREMISM_GROUP = /\\b(isis|isil|islamischer\\s+staat|daesh)\\b/i;\nconst EXTREMISM_PROPAGANDA =\n  /\\b(propoganda\\w*|propaganda\\w*|argument\\w*|slogan\\w*|überzeug\\w*|rekrutier\\w*|beitret\\w*|join\\w*|manifest\\w*|verherrlich\\w*|glorifizier\\w*|unterstütz\\w*|werb\\w*)\\b/i;\n\nconst EXTREMISM_TOPIC = EXTREMISM_GROUP.test(detectText);\nconst EXTREMISM_ATTEMPT =\n  EXTREMISM_GROUP.test(intentText) && EXTREMISM_PROPAGANDA.test(intentText) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"extremism_propaganda\", EXTREMISM_ATTEMPT || (EXTREMISM_TOPIC && EXTREMISM_PROPAGANDA.test(detectText)));\n\n// --- Hate / CSAM ---\nconst CSAM =\n  /\\b(kinderporno|kinderpornografie|kinderpornografisch|jugendpornografie|csam|child sexual abuse material|child porn)\\b/i;\n\nconst HATE_VIOLENCE =\n  /\\b(töten|umbringen|vernichten|ausrotten|vergase(n)?|abschlachten|kill|murder)\\b.*\\b(juden|muslime|christen|schwule|lesben|trans|ausländer|flüchtlinge|roma|sinti|jews|muslims|christians|gays|lesbians|trans)\\b/i;\n\nadd(\"csam\", CSAM.test(detectText));\nadd(\"hate_violence\", HATE_VIOLENCE.test(detectText));\n\n// --- Cyber / Fraud / Phishing ---\nconst CYBER =\n  /\\b(sql[- ]?injection|xss|rce|exploit|payload|malware|ransomware|keylogger|phishing|ddos|botnet)\\b/i;\n\nconst SQLI_TOKENS =\n  /\\b(or\\s+1\\s*=\\s*1|union\\s+select|--\\s|\\/\\*|\\bxp_cmdshell\\b)\\b/i;\n\nconst CYBER_OFFENSIVE =\n  /\\b(umgehen|bypass|admin[- ]?login|passwort\\s+knacken|credential\\s+stuffing|exploit|payload|bypass login|evade|steal)\\b/i;\n\nconst HOWTO =\n  /\\b(anleitung|schritt[- ]für[- ]schritt|tutorial|how\\s*to|guide|walkthrough|rezept|herstellen|synthe(se|sieren)|bauen|konstruier|kochen|mischen|wie\\s+(mache|baue|erstelle|create|build|generate))\\b/i;\n\nconst CYBER_TOPIC = CYBER.test(detectText) || SQLI_TOKENS.test(detectText);\n\nconst CYBER_ATTEMPT =\n  (CYBER.test(intentText) || SQLI_TOKENS.test(intentText)) &&\n  (CYBER_OFFENSIVE.test(intentText) || HOWTO.test(intentText) || SQLI_TOKENS.test(intentText)) &&\n  !DEFENSIVE_CTX.test(intentText);\n\nadd(\"cyber_offensive\", CYBER_ATTEMPT || CYBER_TOPIC);\n\n// Fraud\nconst FRAUD =\n  /\\b(betrug|scam|carding|fake id|ausweis fälschen|kontoübernahme|account takeover|impersonat(e|ion))\\b/i;\n\nconst FRAUD_DEFENSIVE =\n  /\\b(woran erkenne|wie erkenne|prüfen|echtheit|was mache ich wenn|was tun wenn|melden|anzeige|how to spot|how to detect|prevention|mitigation)\\b/i;\n\nconst FRAUD_TOPIC = FRAUD.test(detectText);\nconst FRAUD_ATTEMPT = FRAUD.test(intentText) && !FRAUD_DEFENSIVE.test(intentText) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"fraud_offensive\", FRAUD_ATTEMPT || FRAUD_TOPIC);\n\n// Phishing (Topic + Attempt)\nconst PHISHING =\n  /\\b(phishing|fake\\s+login|credential\\s+harvest|harvest\\s+credentials|spoof|lookalike\\s+domain|clone\\s+site|brand(ing)?\\s+copy|copy(ing)?\\s+the\\s+brand|gefälscht(e|er)?\\s+(mail|e-?mail)|login[- ]?link)\\b/i;\n\nconst PHISHING_VERB =\n  /\\b(create|write|generate|draft|build|make|erstell|schreib|verfass|bau)\\b/i;\n\nconst PHISHING_TOPIC = PHISHING.test(detectText);\nconst PHISHING_ATTEMPT = PHISHING.test(intentText) && (PHISHING_VERB.test(intentText) || HOWTO.test(intentText)) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"phishing\", PHISHING_ATTEMPT || PHISHING_TOPIC);\n\n// --- PII detection (safer phone) ---\nconst EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i;\n\nfunction extractPhones(text) {\n  const candidates = text.match(/(?:\\+|00)?\\d[\\d\\s\\-()\\/]{8,}\\d/g) ?? [];\n  const phones = [];\n  for (const c of candidates) {\n    if (/[.:]/.test(c)) continue; // IP/Version\n    const digits = (c.match(/\\d/g) ?? []).join(\"\");\n    if (digits.length < 10 || digits.length > 15) continue;\n    const trimmed = c.trim();\n    if (!(trimmed.startsWith(\"+\") || trimmed.startsWith(\"00\") || trimmed.startsWith(\"0\"))) continue;\n    phones.push(c);\n  }\n  return phones;\n}\n\nconst hasEmail = EMAIL_RE.test(fullText);\nconst phones = extractPhones(fullText);\nconst hasPhone = phones.length > 0;\n\nadd(\"pii_email\", hasEmail);\nadd(\"pii_phone\", hasPhone);\n\nconst hasHowTo = HOWTO.test(intentText);\n\n// --- Routing-Entscheidung ---\n// PII -> NICHT ins Output Gate\nconst nonPIITriggered = triggered.filter(k => !k.startsWith(\"pii_\"));\nconst piiOnly = nonPIITriggered.length === 0 && (hasEmail || hasPhone);\n\n// Alles “Thema erkannt” -> Output Gate (LLM) übernehmen lassen\nconst needsLLMGate = nonPIITriggered.length > 0;\n\n// Optional: “hardBlock” nur als Debug/Signal für Output Gate\n// (Hier strenger nur bei echten Attempts)\nconst hardBlock =\n  PI_ATTACK ||\n  EXFIL_ATTEMPT ||\n  nonPIITriggered.includes(\"csam\") ||\n  nonPIITriggered.includes(\"hate_violence\") ||\n  nonPIITriggered.includes(\"extremism_propaganda\") ||\n  CYBER_ATTEMPT ||\n  PHISHING_ATTEMPT ||\n  FRAUD_ATTEMPT;\n\n// Output shaping\nlet notice = ($json.notice ?? \"\").toString();\nlet outSummary = summary;\nlet outSources = sources;\nlet redacted = false;\n\n// PII redaction: direkt Webhook, keine Quellen\nif (hasEmail) { outSummary = outSummary.replace(EMAIL_RE, \"[REDACTED_EMAIL]\"); redacted = true; }\nif (hasPhone) { outSummary = outSummary.replace(/(?:\\+|00)?\\d[\\d\\s\\-()\\/]{8,}\\d/g, \"[REDACTED_PHONE]\"); redacted = true; }\n\nif (piiOnly) {\n  outSources = [];\n  notice = notice || \"Ich habe potenziell personenbezogene Daten erkannt und im Output entfernt; Quellen wurden vorsorglich nicht ausgegeben.\";\n}\n\n// Wenn LLM Gate: lieber keine Snippets (optional), damit Output Gate sauber antwortet.\nif (needsLLMGate) {\n  // Optional: Summary behalten oder leeren\n  outSummary = summary;\n  // Snippets weglassen, nur Title+URL durchreichen\n  outSources = sources.map(s => ({ title: s.title ?? \"\", url: s.url ?? \"\" }));\n  notice = notice || \"Sicherheitsrelevantes Thema erkannt – wird im Output Gate geprüft.\";\n}\n\nreturn [{\n  json: {\n    ...$json,\n    blocked: false, // Flow soll weiterlaufen\n    notice,\n    summary: outSummary,\n    sources: outSources,\n    fastGate: {\n      triggered,\n      hasHowTo,\n      hardBlock,\n      softFlag: nonPIITriggered.length > 0 || redacted,\n      needsLLMGate,\n      // extra debug (kannst du später entfernen)\n      debug: {\n        piiOnly,\n        nonPIITriggered,\n        PI_TOPIC,\n        PI_ATTACK,\n        EXFIL_TOPIC,\n        EXFIL_ATTEMPT,\n        CYBER_TOPIC,\n        CYBER_ATTEMPT,\n        PHISHING_TOPIC,\n        PHISHING_ATTEMPT,\n        FRAUD_TOPIC,\n        FRAUD_ATTEMPT\n      }\n    }\n  }\n}];"
+          "jsCode": "// Fast Output Gate (v2) — robust topic detection + routing to Output Gate (LLM)\n// Goals:\n// - Detect safety-relevant topics reliably (prompt injection, exfiltration, cyber, extremism, etc.)\n// - Route ANY non-PII topic detection to Output Gate via needsLLMGate=true\n// - PII-only: redact + respond via webhook (no Output Gate trigger)\n\nconst searchQuery = ($json.searchQuery ?? $json.query ?? \"\").toString();\nconst summary = ($json.summary ?? \"\").toString();\nconst sources = Array.isArray($json.sources) ? $json.sources : [];\n\nconst sourcesText = sources\n  .map(s => `${s.title ?? \"\"}\\n${s.snippet ?? \"\"}\\n${s.url ?? \"\"}`)\n  .join(\"\\n\");\n\n// Intent nur aus Query+Summary (wichtig: defensive Prompts nicht durch Snippets killen)\nconst intentText = `${searchQuery}\\n${summary}`.slice(0, 14000);\n\n// Fallback: wenn summary quasi leer ist (z.B. Tests), dann scannen wir ein kleines Stück sources\nconst sourceFallback = summary.trim().length < 30 ? sourcesText.slice(0, 6000) : \"\";\nconst detectText = `${intentText}\\n${sourceFallback}`.slice(0, 20000);\n\n// Für PII lieber das volle Material prüfen (kann in Snippets stecken)\nconst fullText = `${intentText}\\n${sourcesText}`.slice(0, 24000);\n\nconst triggered = [];\nconst add = (k, ok) => { if (ok) triggered.push(k); };\n\n// ✅ Defensive Kontext (DE+EN, inkl. Komposita/Flexionen)\n// Wird NICHT mehr verwendet, um Prompt-Injection *Topic* zu unterdrücken.\n// (Nur optional, um \"Attacke\" vs \"Diskussion\" zu unterscheiden.)\nconst DEFENSIVE_CTX =\n  /\\b(erkenn\\w*|schutz\\w*|prävention\\w*|praevention\\w*|verhind\\w*|abwehr\\w*|sicher\\w*|mitigation\\w*|hardening\\w*|härt\\w*|haert\\w*|best\\s*practices?\\w*|warnzeichen\\w*|was\\s+tun\\s+wenn|melden\\w*|anzeig\\w*|rechtlich\\w*|legal\\w*|aufklär\\w*|aufklaer\\w*|einordn\\w*|analys\\w*|wissenschaft\\w*|studie\\w*|forschung\\w*|deradikalisier\\w*|ausstieg\\w*|counter\\w*|defens\\w*|prevent\\w*|mitigate\\w*|awareness\\w*)\\b/i;\n\n// --- Prompt Injection (DE+EN) ---\n// Keywords (Topic)\nconst PROMPT_INJECTION =\n  /\\b(prompt[- ]?injection|jailbreak|dan\\b|do anything now|developer mode|system mode|dev mode)\\b/i;\n\n// Phrasen / Muster (Topic) — inkl. Tippfehler \"previos\"\nconst PROMPT_INJECTION_PHRASES =\n  /\\b(ignore|disregard|bypass|override|forget)\\b.{0,50}\\b(instructions?|rules?|polic(y|ies)|previous|previo\\w*|prior|earlier)\\b|\\b(you are now|from now on)\\b.{0,50}\\b(system|developer|admin)\\b|\\b(act(?:ing)?\\s+as)\\b.{0,50}\\b(system|developer|admin)\\b|\\b(rolle:\\s*system|rolle\\s*=\\s*system|role:\\s*system)\\b/i;\n\n// Attack-Verb (direktive Aufforderung)\nconst PI_ATTACK_VERBS =\n  /\\b(respond as|answer as|act(?:ing)? as|from now on|you are now|ignore|disregard|override|bypass|forget|rolle:\\s*system|role:\\s*system)\\b/i;\n\n// Topic vs Attack\nconst PI_TOPIC =\n  PROMPT_INJECTION.test(detectText) ||\n  PROMPT_INJECTION_PHRASES.test(detectText) ||\n  /\\b(ignorier(e|en)?|prompt[- ]?injection|jailbreak|dan)\\b/i.test(detectText);\n\n// Attack: nur wenn es im Intent (Query+Summary) wie eine direkte Instruktion aussieht\nconst PI_ATTACK =\n  (PROMPT_INJECTION.test(intentText) || PROMPT_INJECTION_PHRASES.test(intentText)) &&\n  PI_ATTACK_VERBS.test(intentText) &&\n  !DEFENSIVE_CTX.test(intentText); // defensiv im Intent => eher Diskussion als Attack\n\n// ✅ Trigger: immer wenn Topic ODER Attack erkannt (damit Output Gate übernehmen kann)\nadd(\"prompt_injection\", PI_TOPIC || PI_ATTACK);\n\n// --- Exfiltration / Secrets (DE+EN) ---\nconst EXFIL_KW =\n  /\\b(system\\s*prompt|developer\\s*message(s)?|hidden\\s*(prompt|instructions)|internal\\s*(prompt|instructions)|n8n_encryption_key|api[- ]?key|apikey|access\\s*token|refresh\\s*token|bearer\\s*token|secret|password|passwort|credential(s)?|cookie(s)?|session|env(?:ironment)?\\s*variables?|umgebungsvariablen|private\\s*key)\\b/i;\n\nconst EXFIL_VERB =\n  /\\b(show|print|reveal|leak|dump|extract|read|display|output|list|give|provide|gib|zeige|liste|extrahier|lies|auslesen)\\b/i;\n\n// Exfil Topic (schon wenn Keywords vorkommen)\nconst EXFIL_TOPIC = EXFIL_KW.test(detectText);\n\n// Exfil Attempt (keywords + verb + nicht defensiv)\nconst EXFIL_ATTEMPT = EXFIL_KW.test(intentText) && EXFIL_VERB.test(intentText) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"exfiltration\", EXFIL_TOPIC || EXFIL_ATTEMPT);\n\n// --- Extremismus ---\nconst EXTREMISM_GROUP = /\\b(isis|isil|islamischer\\s+staat|daesh)\\b/i;\nconst EXTREMISM_PROPAGANDA =\n  /\\b(propoganda\\w*|propaganda\\w*|argument\\w*|slogan\\w*|überzeug\\w*|rekrutier\\w*|beitret\\w*|join\\w*|manifest\\w*|verherrlich\\w*|glorifizier\\w*|unterstütz\\w*|werb\\w*)\\b/i;\n\nconst EXTREMISM_TOPIC = EXTREMISM_GROUP.test(detectText);\nconst EXTREMISM_ATTEMPT =\n  EXTREMISM_GROUP.test(intentText) && EXTREMISM_PROPAGANDA.test(intentText) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"extremism_propaganda\", EXTREMISM_ATTEMPT || (EXTREMISM_TOPIC && EXTREMISM_PROPAGANDA.test(detectText)));\n\n// --- Hate / CSAM ---\nconst CSAM =\n  /\\b(kinderporno|kinderpornografie|kinderpornografisch|jugendpornografie|csam|child sexual abuse material|child porn)\\b/i;\n\nconst HATE_VIOLENCE =\n  /\\b(töten|umbringen|vernichten|ausrotten|vergase(n)?|abschlachten|kill|murder)\\b.*\\b(juden|muslime|christen|schwule|lesben|trans|ausländer|flüchtlinge|roma|sinti|jews|muslims|christians|gays|lesbians|trans)\\b/i;\n\nadd(\"csam\", CSAM.test(detectText));\nadd(\"hate_violence\", HATE_VIOLENCE.test(detectText));\n\n// --- Cyber / Fraud / Phishing ---\nconst CYBER =\n  /\\b(sql[- ]?injection|xss|rce|exploit|payload|malware|ransomware|keylogger|phishing|ddos|botnet)\\b/i;\n\nconst SQLI_TOKENS =\n  /\\b(or\\s+1\\s*=\\s*1|union\\s+select|--\\s|\\/\\*|\\bxp_cmdshell\\b)\\b/i;\n\nconst CYBER_OFFENSIVE =\n  /\\b(umgehen|bypass|admin[- ]?login|passwort\\s+knacken|credential\\s+stuffing|exploit|payload|bypass login|evade|steal)\\b/i;\n\nconst HOWTO =\n  /\\b(anleitung|schritt[- ]für[- ]schritt|tutorial|how\\s*to|guide|walkthrough|rezept|herstellen|synthe(se|sieren)|bauen|konstruier|kochen|mischen|wie\\s+(mache|baue|erstelle|create|build|generate))\\b/i;\n\nconst CYBER_TOPIC = CYBER.test(detectText) || SQLI_TOKENS.test(detectText);\n\nconst CYBER_ATTEMPT =\n  (CYBER.test(intentText) || SQLI_TOKENS.test(intentText)) &&\n  (CYBER_OFFENSIVE.test(intentText) || HOWTO.test(intentText) || SQLI_TOKENS.test(intentText)) &&\n  !DEFENSIVE_CTX.test(intentText);\n\nadd(\"cyber_offensive\", CYBER_ATTEMPT || CYBER_TOPIC);\n\n// Fraud\nconst FRAUD =\n  /\\b(betrug|scam|carding|fake id|ausweis fälschen|kontoübernahme|account takeover|impersonat(e|ion))\\b/i;\n\nconst FRAUD_DEFENSIVE =\n  /\\b(woran erkenne|wie erkenne|prüfen|echtheit|was mache ich wenn|was tun wenn|melden|anzeige|how to spot|how to detect|prevention|mitigation)\\b/i;\n\nconst FRAUD_TOPIC = FRAUD.test(detectText);\nconst FRAUD_ATTEMPT = FRAUD.test(intentText) && !FRAUD_DEFENSIVE.test(intentText) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"fraud_offensive\", FRAUD_ATTEMPT || FRAUD_TOPIC);\n\n// Phishing (Topic + Attempt)\nconst PHISHING =\n  /\\b(phishing|fake\\s+login|credential\\s+harvest|harvest\\s+credentials|spoof|lookalike\\s+domain|clone\\s+site|brand(ing)?\\s+copy|copy(ing)?\\s+the\\s+brand|gefälscht(e|er)?\\s+(mail|e-?mail)|login[- ]?link)\\b/i;\n\nconst PHISHING_VERB =\n  /\\b(create|write|generate|draft|build|make|erstell|schreib|verfass|bau)\\b/i;\n\nconst PHISHING_TOPIC = PHISHING.test(detectText);\nconst PHISHING_ATTEMPT = PHISHING.test(intentText) && (PHISHING_VERB.test(intentText) || HOWTO.test(intentText)) && !DEFENSIVE_CTX.test(intentText);\n\nadd(\"phishing\", PHISHING_ATTEMPT || PHISHING_TOPIC);\n\n// --- PII detection (safer phone) ---\nconst EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i;\n\nfunction extractPhones(text) {\n  const candidates = text.match(/(?:\\+|00)?\\d[\\d\\s\\-()\\/]{8,}\\d/g) ?? [];\n  const phones = [];\n  for (const c of candidates) {\n    if (/[.:]/.test(c)) continue; // IP/Version/Zeit mit Doppelpunkt\n    if (/\\b(?:19|20)\\d{2}\\b/.test(c)) continue; // Datum/Jahreszahl, z. B. \"04 05 2026 14\"\n    const digits = (c.match(/\\d/g) ?? []).join(\"\");\n    if (digits.length < 10 || digits.length > 15) continue;\n    const trimmed = c.trim();\n    if (!(trimmed.startsWith(\"+\") || trimmed.startsWith(\"00\") || trimmed.startsWith(\"0\"))) continue;\n    phones.push(c);\n  }\n  return phones;\n}\n\nconst hasEmail = EMAIL_RE.test(fullText);\nconst phones = extractPhones(fullText);\nconst hasPhone = phones.length > 0;\n\nadd(\"pii_email\", hasEmail);\nadd(\"pii_phone\", hasPhone);\n\nconst hasHowTo = HOWTO.test(intentText);\n\n// --- Routing-Entscheidung ---\n// PII -> NICHT ins Output Gate\nconst nonPIITriggered = triggered.filter(k => !k.startsWith(\"pii_\"));\nconst piiOnly = nonPIITriggered.length === 0 && (hasEmail || hasPhone);\n\n// Alles “Thema erkannt” -> Output Gate (LLM) übernehmen lassen\nconst needsLLMGate = nonPIITriggered.length > 0;\n\n// Optional: “hardBlock” nur als Debug/Signal für Output Gate\n// (Hier strenger nur bei echten Attempts)\nconst hardBlock =\n  PI_ATTACK ||\n  EXFIL_ATTEMPT ||\n  nonPIITriggered.includes(\"csam\") ||\n  nonPIITriggered.includes(\"hate_violence\") ||\n  nonPIITriggered.includes(\"extremism_propaganda\") ||\n  CYBER_ATTEMPT ||\n  PHISHING_ATTEMPT ||\n  FRAUD_ATTEMPT;\n\n// Output shaping\nlet notice = ($json.notice ?? \"\").toString();\nlet outSummary = summary;\nlet outSources = sources;\nlet redacted = false;\n\n// PII redaction: direkt Webhook, keine Quellen\nif (hasEmail) { outSummary = outSummary.replace(EMAIL_RE, \"[REDACTED_EMAIL]\"); redacted = true; }\nif (hasPhone) {\n  for (const phone of phones) outSummary = outSummary.replace(phone, \"[REDACTED_PHONE]\");\n  redacted = true;\n}\n\nif (piiOnly) {\n  outSources = [];\n  notice = notice || \"Ich habe potenziell personenbezogene Daten erkannt und im Output entfernt; Quellen wurden vorsorglich nicht ausgegeben.\";\n}\n\n// Wenn LLM Gate: lieber keine Snippets (optional), damit Output Gate sauber antwortet.\nif (needsLLMGate) {\n  // Optional: Summary behalten oder leeren\n  outSummary = summary;\n  // Snippets weglassen, nur Title+URL durchreichen\n  outSources = sources.map(s => ({ title: s.title ?? \"\", url: s.url ?? \"\" }));\n  notice = notice || \"Sicherheitsrelevantes Thema erkannt – wird im Output Gate geprüft.\";\n}\n\nreturn [{\n  json: {\n    ...$json,\n    blocked: false, // Flow soll weiterlaufen\n    notice,\n    summary: outSummary,\n    sources: outSources,\n    fastGate: {\n      triggered,\n      hasHowTo,\n      hardBlock,\n      softFlag: nonPIITriggered.length > 0 || redacted,\n      needsLLMGate,\n      // extra debug (kannst du später entfernen)\n      debug: {\n        piiOnly,\n        nonPIITriggered,\n        PI_TOPIC,\n        PI_ATTACK,\n        EXFIL_TOPIC,\n        EXFIL_ATTEMPT,\n        CYBER_TOPIC,\n        CYBER_ATTEMPT,\n        PHISHING_TOPIC,\n        PHISHING_ATTEMPT,\n        FRAUD_TOPIC,\n        FRAUD_ATTEMPT\n      }\n    }\n  }\n}];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -5233,16 +5317,18 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": {
-              "id": "7d6fe9ab-bfe6-4be3-9bad-302d0a4d65ff",
-              "leftValue": "={{$json.fastGate.needsLLMGate === true}}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
+            "conditions": [
+              {
+                "id": "7d6fe9ab-bfe6-4be3-9bad-302d0a4d65ff",
+                "leftValue": "={{$json.fastGate.needsLLMGate === true}}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
               }
-            },
+            ],
             "combinator": "and"
           },
           "options": {}
@@ -5311,7 +5397,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// Deterministic snippet summarizer (no LLM)\n// Expects: query/searchQuery + results/sources array with {title,url,snippet|content}\n// Returns: { summary, sources } merged into existing item\n\nfunction stripHtml(s) {\n  return (s || \"\")\n    .replace(/<script[\\s\\S]*?>[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?>[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<[^>]+>/g, \" \")\n    .replace(/\\s+/g, \" \")\n    .trim();\n}\n\nfunction decodeEntities(s) {\n  return (s || \"\")\n    .replace(/&amp;/g, \"&\")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\");\n}\n\nfunction safeText(s, maxLen = 1100) {\n  const t = decodeEntities(stripHtml(s)).trim();\n  if (!t) return \"\";\n  return t.length > maxLen ? t.slice(0, maxLen - 1) + \"…\" : t;\n}\n\nfunction hostOf(url) {\n  try {\n    const u = new URL(url);\n    return u.hostname.replace(/^www\\./, \"\");\n  } catch {\n    return \"\";\n  }\n}\n\nfunction tokenizeDE(text) {\n  const stop = new Set([\n    \"der\",\"die\",\"das\",\"den\",\"dem\",\"des\",\"ein\",\"eine\",\"einer\",\"einem\",\"einen\",\n    \"und\",\"oder\",\"aber\",\"zu\",\"zum\",\"zur\",\"von\",\"im\",\"in\",\"am\",\"an\",\"auf\",\"für\",\n    \"mit\",\"ohne\",\"um\",\"bei\",\"über\",\"unter\",\"nach\",\"vor\",\"hinter\",\"zwischen\",\n    \"ich\",\"du\",\"er\",\"sie\",\"es\",\"wir\",\"ihr\",\"mir\",\"mich\",\"dir\",\"dich\",\"uns\",\"euch\",\n    \"bitte\",\"mal\",\"noch\",\"auch\",\"nur\",\"sehr\",\"mehr\",\"weniger\",\n    \"was\",\"wer\",\"wie\",\"wo\",\"wann\",\"warum\",\"wieso\",\"weshalb\",\"welche\",\"welcher\",\"welches\",\n    \"gibt\",\"geben\",\"ist\",\"sind\",\"war\",\"waren\",\"sein\",\"habe\",\"hast\",\"hat\",\"haben\",\n    \"infos\",\"info\",\"information\",\"informationen\",\"details\",\"detail\",\n    \"suche\",\"suchen\",\"finde\",\"finden\"\n  ]);\n  const toks = (text || \"\").toLowerCase().match(/[a-zäöüß0-9]{2,}/g) ?? [];\n  return toks.filter(t => t.length >= 3 && !stop.has(t));\n}\n\nfunction redactPII(s) {\n  const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/ig;\n  const PHONE_RE = /(?:\\+|00)?\\d[\\d\\s\\-()\\/]{8,}\\d/g;\n  let out = s || \"\";\n  out = out.replace(EMAIL_RE, \"[REDACTED_EMAIL]\");\n  out = out.replace(PHONE_RE, (m) => {\n    if (/[.:]/.test(m)) return m; // avoid IP/Version\n    const digits = (m.match(/\\d/g) ?? []).join(\"\");\n    if (digits.length < 10 || digits.length > 15) return m;\n    return \"[REDACTED_PHONE]\";\n  });\n  return out;\n}\n\n// Take first item (workflow typically works with 1 item)\nconst item = $input.first().json;\n\nconst query = (item.searchQuery ?? item.query ?? \"\").toString().trim();\n\n// Support different shapes: results OR sources OR data.results\nconst rawArr =\n  (Array.isArray(item.results) && item.results) ||\n  (Array.isArray(item.sources) && item.sources) ||\n  (Array.isArray(item.data?.results) && item.data.results) ||\n  [];\n\n// Normalize sources\nconst normalized = rawArr\n  .map((r, idx) => {\n    const url = (r.url ?? r.link ?? \"\").toString();\n    const title = safeText(r.title ?? r.name ?? \"\", 140);\n\n    // 👇 Snippet-Länge hier zentral steuerbar\n    const snippetMax = Number(item.snippetMaxLen ?? 1100);\n    const snippet = safeText(r.snippet ?? r.content ?? r.description ?? \"\", isFinite(snippetMax) ? snippetMax : 1100);\n\n    const host = hostOf(url);\n    return {\n      id: idx + 1,\n      title,\n      url,\n      host,\n      snippet: redactPII(snippet),\n      _raw: r\n    };\n  })\n  .filter(s => s.url || s.title || s.snippet);\n\n// Dedupe by url/host+title\nconst seen = new Set();\nconst deduped = [];\nfor (const s of normalized) {\n  const key = (s.url || (s.host + \"|\" + s.title)).toLowerCase();\n  if (seen.has(key)) continue;\n  seen.add(key);\n  deduped.push(s);\n}\n\n// Rank by keyword overlap with query\nconst qTokens = tokenizeDE(query);\nconst qSet = new Set(qTokens);\nfunction scoreSource(s) {\n  const t = tokenizeDE(`${s.title} ${s.snippet}`);\n  let overlap = 0;\n  for (const tok of t) if (qSet.has(tok)) overlap++;\n  const hostBonus = s.host ? 0.2 : 0;\n  const titleBonus = s.title ? 0.2 : 0;\n  return overlap + hostBonus + titleBonus;\n}\n\nconst ranked = deduped\n  .map(s => ({ ...s, _score: scoreSource(s) }))\n  .sort((a, b) => b._score - a._score);\n\n// pick top N sources for summary + return list\nconst maxSources = Number(item.maxSourcesInSummary ?? 10);\nconst MAX_SOURCES = Math.min(isFinite(maxSources) ? maxSources : 10, ranked.length);\nconst top = ranked.slice(0, MAX_SOURCES);\n\n// Build extractive “key points” (1 point per source)\nfunction firstGoodSentence(text) {\n  const cleaned = (text || \"\").replace(/\\s+/g, \" \").trim();\n  if (!cleaned) return \"\";\n\n  // ✅ kompatibel ohne Lookbehind:\n  const parts = cleaned.split(/[.!?]\\s+/);\n\n  const bulletMax = Number(item.bulletMaxLen ?? 360);\n  const max = isFinite(bulletMax) ? bulletMax : 360;\n\n  for (const p of parts) {\n    const pp = (p || \"\").trim();\n    if (pp.length >= 40) {\n      return pp.length > max ? pp.slice(0, max - 1) + \"…\" : pp;\n    }\n  }\n\n  // fallback: truncate whole snippet\n  return cleaned.length > max ? cleaned.slice(0, max - 1) + \"…\" : cleaned;\n}\n\n// Guard against snippet prompt-injection / instructions in snippets\nconst INJECTION_LINE =\n  /\\b(ignorier(e|en)?|systemprompt|developer message|rolle:\\s*system|jailbreak|do anything now|prompt[- ]injection)\\b/i;\n\nconst bullets = [];\nfor (const s of top) {\n  const sentence = firstGoodSentence(s.snippet);\n  if (!sentence) continue;\n  if (INJECTION_LINE.test(sentence)) continue;\n  bullets.push(`- ${sentence} [${s.id}]`);\n}\n\n// Final summary\nlet summary = \"\";\nif (bullets.length === 0) {\n  summary = `Keine brauchbaren Snippets gefunden. Bitte präzisiere die Anfrage oder erhöhe maxResults.`;\n} else {\n  summary =\n    `**Kurz-Zusammenfassung (aus Snippets, untrusted):**\\n` +\n    bullets.join(\"\\n\");\n}\n\n// Return sources in expected structure\nconst outSources = top.map(s => ({\n  id: s.id,\n  title: s.title,\n  url: s.url,\n  snippet: s.snippet\n}));\n\nreturn [{\n  json: {\n    ...item,\n    summary,\n    sources: outSources\n  }\n}];"
+          "jsCode": "// Rich research context builder (SearXNG -> fetch top pages -> extract article text)\n// Builds informative context for the LLM instead of relying on short search snippets only.\n\nfunction stripHtml(s) {\n  return (s || \"\")\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<noscript[\\s\\S]*?<\\/noscript>/gi, \" \")\n    .replace(/<svg[\\s\\S]*?<\\/svg>/gi, \" \")\n    .replace(/<[^>]+>/g, \" \")\n    .replace(/\\s+/g, \" \")\n    .trim();\n}\n\nfunction decodeEntities(s) {\n  return (s || \"\")\n    .replace(/&amp;/g, \"&\")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCharCode(parseInt(d, 10)));\n}\n\nfunction cleanText(s, maxLen = 5000) {\n  const t = decodeEntities(stripHtml(s)).replace(/\\s+/g, \" \").trim();\n  if (!t) return \"\";\n  return t.length > maxLen ? t.slice(0, maxLen - 1) + \"?\" : t;\n}\n\nfunction normalizeUrl(url) {\n  const s = (url || \"\").toString().trim();\n  if (!s) return \"\";\n  const withProtocol = s.startsWith(\"//\") ? `https:${s}` : s;\n  if (!/^https?:\\/\\//i.test(withProtocol)) return \"\";\n  return withProtocol.replace(/#.*$/, \"\");\n}\n\nfunction hostOf(url) {\n  const s = normalizeUrl(url);\n  const m = s.match(/^https?:\\/\\/([^\\/?#]+)/i);\n  return m ? m[1].replace(/^www\\./i, \"\").toLowerCase() : \"\";\n}\n\nfunction sourceUrl(r) {\n  const direct = r?.url ?? r?.link ?? r?.href ?? r?.pretty_url ?? \"\";\n  if (typeof direct === \"string\" && direct.trim()) return direct.trim();\n  if (Array.isArray(r?.parsed_url) && r.parsed_url.length >= 3) {\n    const [scheme, host, path, query] = r.parsed_url;\n    if (scheme && host) return `${scheme}://${host}${path || \"\"}${query ? `?${query}` : \"\"}`;\n  }\n  return \"\";\n}\n\nfunction extractTitle(html, fallback = \"\") {\n  const og = html.match(/<meta[^>]+property=[\"']og:title[\"'][^>]+content=[\"']([^\"']+)[\"']/i)?.[1];\n  const tw = html.match(/<meta[^>]+name=[\"']twitter:title[\"'][^>]+content=[\"']([^\"']+)[\"']/i)?.[1];\n  const title = html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i)?.[1];\n  return cleanText(og || tw || title || fallback, 180);\n}\n\nfunction extractPublishedAt(html) {\n  const patterns = [\n    /<meta[^>]+property=[\"']article:published_time[\"'][^>]+content=[\"']([^\"']+)[\"']/i,\n    /<meta[^>]+name=[\"']date[\"'][^>]+content=[\"']([^\"']+)[\"']/i,\n    /<meta[^>]+name=[\"']pubdate[\"'][^>]+content=[\"']([^\"']+)[\"']/i,\n    /<time[^>]+datetime=[\"']([^\"']+)[\"']/i,\n  ];\n  for (const p of patterns) {\n    const v = html.match(p)?.[1];\n    if (v) return cleanText(v, 80);\n  }\n  return \"\";\n}\n\nfunction extractArticleText(html) {\n  const candidates = [];\n  const article = html.match(/<article[\\s\\S]*?<\\/article>/i)?.[0];\n  if (article) candidates.push(article);\n  const main = html.match(/<main[\\s\\S]*?<\\/main>/i)?.[0];\n  if (main) candidates.push(main);\n  const roleMain = html.match(/<[^>]+role=[\"']main[\"'][\\s\\S]*?<\\/[^>]+>/i)?.[0];\n  if (roleMain) candidates.push(roleMain);\n\n  const paragraphText = (block) => {\n    const paragraphs = [...(block || \"\").matchAll(/<p[^>]*>([\\s\\S]*?)<\\/p>/gi)]\n      .map(m => cleanText(m[1], 1200))\n      .filter(t => t.length >= 50);\n    return paragraphs.join(\"\\n\");\n  };\n\n  let best = \"\";\n  for (const c of candidates) {\n    const text = paragraphText(c) || cleanText(c, 9000);\n    if (text.length > best.length) best = text;\n  }\n  if (!best) best = paragraphText(html);\n  if (!best) best = cleanText(html, 9000);\n\n  // Remove common cookie/nav boilerplate fragments.\n  best = best\n    .replace(/\\b(Cookies?|Datenschutz|Privacy|Newsletter abonnieren|Anzeige|Werbung)\\b.{0,120}/gi, \" \")\n    .replace(/\\s{2,}/g, \" \")\n    .trim();\n  return best.length > 4500 ? best.slice(0, 4499) + \"?\" : best;\n}\n\nfunction tokenizeDE(text) {\n  const stop = new Set([\"der\",\"die\",\"das\",\"den\",\"dem\",\"des\",\"ein\",\"eine\",\"einer\",\"einem\",\"einen\",\"und\",\"oder\",\"aber\",\"zu\",\"zum\",\"zur\",\"von\",\"im\",\"in\",\"am\",\"an\",\"auf\",\"f?r\",\"mit\",\"ohne\",\"um\",\"bei\",\"?ber\",\"unter\",\"nach\",\"vor\",\"bitte\",\"suche\",\"suchen\",\"finde\",\"finden\",\"alle\",\"wichtigen\",\"nachrichten\"]);\n  return ((text || \"\").toLowerCase().match(/[a-z????0-9]{3,}/g) || []).filter(t => !stop.has(t));\n}\n\nfunction scoreSource(s, query) {\n  const q = new Set(tokenizeDE(query));\n  const text = `${s.title} ${s.snippet} ${s.extract || \"\"}`;\n  let overlap = 0;\n  for (const tok of tokenizeDE(text)) if (q.has(tok)) overlap++;\n  const preferred = /(tagesschau|zdf|deutschlandfunk|reuters|apnews|sueddeutsche|faz|spiegel|zeit|welt)\\./i.test(s.domain || \"\") ? 3 : 0;\n  const extracted = (s.extract || \"\").length > 800 ? 2 : (s.extract || \"\").length > 250 ? 1 : 0;\n  return overlap + preferred + extracted;\n}\n\nconst httpRequest = this.helpers.httpRequest.bind(this.helpers);\n\nfunction headerValue(headers, name) {\n  const wanted = name.toLowerCase();\n  for (const key of Object.keys(headers || {})) {\n    if (key.toLowerCase() === wanted) return headers[key];\n  }\n  return \"\";\n}\n\nasync function fetchWithTimeout(url, options, timeoutMs) {\n  const response = await httpRequest({\n    method: \"GET\",\n    url,\n    headers: options.headers || {},\n    timeout: timeoutMs,\n    returnFullResponse: true,\n    json: false,\n  });\n  const status = Number(response.statusCode ?? response.status ?? 200);\n  const headers = response.headers || {};\n  const body = response.body ?? response.data ?? response;\n  return {\n    ok: status >= 200 && status < 300,\n    status,\n    headers: { get: (name) => headerValue(headers, name) },\n    text: async () => typeof body === \"string\" ? body : JSON.stringify(body ?? \"\"),\n  };\n}\n\nasync function fetchTopPages(sources, limit) {\n  const pageTimeoutMs = 6500;\n  const out = [];\n  for (const source of sources.slice(0, limit)) {\n    const url = normalizeUrl(source.url || source.link || \"\");\n    if (!url || /\\.(pdf|jpg|jpeg|png|gif|webp|zip)(\\?|$)/i.test(url)) {\n      out.push({ ...source, url, fetchStatus: \"skipped\", extract: \"\" });\n      continue;\n    }\n    try {\n      const res = await fetchWithTimeout(url, {\n        headers: {\n          \"User-Agent\": \"KAHLE-Vinci research bot/1.0 (+local)\",\n          \"Accept\": \"text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5\",\n        },\n      }, pageTimeoutMs);\n      const ct = res.headers.get(\"content-type\") || \"\";\n      if (!res.ok || !/(text\\/html|text\\/plain|application\\/xhtml\\+xml)/i.test(ct)) {\n        out.push({ ...source, url, fetchStatus: `http_${res.status}`, extract: \"\" });\n        continue;\n      }\n      const html = await res.text();\n      out.push({\n        ...source,\n        url,\n        domain: hostOf(url),\n        title: extractTitle(html, source.title || \"\"),\n        publishedAt: extractPublishedAt(html),\n        extract: extractArticleText(html),\n        fetchStatus: \"ok\",\n      });\n    } catch (e) {\n      const reason = (e?.message || e?.name || \"request\").toString().replace(/[^a-z0-9_-]+/gi, \"_\").slice(0, 60);\n      out.push({ ...source, url, domain: hostOf(url), fetchStatus: `error_${reason}`, extract: \"\" });\n    }\n  }\n  return out;\n}\n\nfunction firstUsefulSentences(text, maxChars = 900) {\n  const cleaned = cleanText(text, 5000);\n  const parts = cleaned.split(/(?<=[.!?])\\s+/).filter(p => p.length >= 60 && !/cookie|newsletter|werbung/i.test(p));\n  const selected = [];\n  for (const p of parts) {\n    selected.push(p);\n    if (selected.join(\" \").length >= maxChars) break;\n  }\n  const out = selected.join(\" \") || cleaned;\n  return out.length > maxChars ? out.slice(0, maxChars - 1) + \"?\" : out;\n}\n\nconst item = $input.first().json;\nconst query = (item.searchQuery ?? item.query ?? \"\").toString().trim();\nconst raw = (Array.isArray(item.results) && item.results) || (Array.isArray(item.sources) && item.sources) || (Array.isArray(item.data?.results) && item.data.results) || [];\n\nconst normalized = raw.map((r, idx) => {\n  const url = normalizeUrl(sourceUrl(r));\n  return {\n    id: idx + 1,\n    title: cleanText(r.title ?? r.name ?? \"\", 180),\n    url,\n    domain: hostOf(url),\n    snippet: cleanText(r.snippet ?? r.content ?? r.description ?? \"\", 900),\n  };\n}).filter(s => s.url || s.title || s.snippet);\n\nconst seenDomains = new Map();\nconst deduped = [];\nconst seenUrls = new Set();\nfor (const s of normalized) {\n  const key = (s.url || `${s.domain}|${s.title}`).toLowerCase();\n  if (seenUrls.has(key)) continue;\n  seenUrls.add(key);\n  const domainCount = seenDomains.get(s.domain) || 0;\n  if (s.domain && domainCount >= 2) continue;\n  seenDomains.set(s.domain, domainCount + 1);\n  deduped.push(s);\n}\n\nconst fetchLimit = Math.min(Number(item.fetchPageLimit ?? 6) || 6, deduped.length);\nconst fetched = await fetchTopPages(deduped, fetchLimit);\nconst combined = [\n  ...fetched,\n  ...deduped.slice(fetchLimit).map(s => ({ ...s, fetchStatus: \"not_fetched\", extract: \"\" }))\n].map(s => ({ ...s, score: scoreSource(s, query) })).sort((a, b) => b.score - a.score);\n\nconst selected = combined.slice(0, Math.min(Number(item.maxSourcesInSummary ?? 8) || 8, combined.length));\nconst sources = selected.map((s, idx) => ({\n  id: idx + 1,\n  title: s.title,\n  url: s.url,\n  domain: s.domain,\n  publishedAt: s.publishedAt || \"\",\n  snippet: s.snippet,\n  extract: firstUsefulSentences(s.extract || s.snippet, Number(item.extractMaxLen ?? 1200) || 1200),\n  fetchStatus: s.fetchStatus || \"snippet_only\",\n}));\n\nconst keyFindings = sources\n  .filter(s => (s.extract || s.snippet || \"\").length > 80)\n  .map(s => ({\n    sourceId: s.id,\n    topic: s.title || s.domain || `Quelle ${s.id}`,\n    finding: firstUsefulSentences(s.extract || s.snippet, 420),\n  }));\n\nlet summary;\nif (keyFindings.length) {\n  summary = \"**Recherchekontext (aus abgerufenen Webseiten, untrusted):**\\n\" + keyFindings.map(k => `- ${k.finding} [${k.sourceId}]`).join(\"\\n\");\n} else {\n  summary = \"Keine ausreichend informativen Seiteninhalte gefunden. Es wurden nur Such-Snippets gefunden.\";\n}\n\nconst researchContext = sources.map(s => (\n  `[${s.id}] ${s.title}\\nDomain: ${s.domain}\\nURL: ${s.url}\\nDatum: ${s.publishedAt || \"unbekannt\"}\\nFetch: ${s.fetchStatus}\\nAuszug: ${s.extract || s.snippet || \"\"}`\n)).join(\"\\n\\n\");\n\nreturn [{\n  json: {\n    ...item,\n    query,\n    summary,\n    keyFindings,\n    sources,\n    researchContext,\n    quality: {\n      resultCount: normalized.length,\n      fetchedCount: fetched.filter(s => s.fetchStatus === \"ok\").length,\n      sourcesWithExtract: sources.filter(s => (s.extract || \"\").length > 250).length,\n    }\n  }\n}];"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -5320,7 +5406,7 @@
           256
         ],
         "id": "0e4bfd76-238a-4159-b003-17d5a752789e",
-        "name": "Summarize Snippets"
+        "name": "Build Rich Research Context"
       },
       {
         "parameters": {
@@ -5349,6 +5435,36 @@
                 "name": "blocked",
                 "value": false,
                 "type": "boolean"
+              },
+              {
+                "id": "rich-ok",
+                "name": "ok",
+                "value": true,
+                "type": "boolean"
+              },
+              {
+                "id": "rich-decision",
+                "name": "decision",
+                "value": "proceed",
+                "type": "string"
+              },
+              {
+                "id": "rich-researchContext",
+                "name": "researchContext",
+                "value": "={{ $json.researchContext ?? \"\" }}",
+                "type": "string"
+              },
+              {
+                "id": "rich-keyFindings",
+                "name": "keyFindings",
+                "value": "={{ $json.keyFindings ?? [] }}",
+                "type": "array"
+              },
+              {
+                "id": "rich-quality",
+                "name": "quality",
+                "value": "={{ $json.quality ?? {} }}",
+                "type": "object"
               }
             ]
           },
@@ -5491,19 +5607,19 @@
                 "id": "0afe3d34-323a-4594-b912-360d166d9b5d",
                 "name": "sources",
                 "value": "={{ $json.sources ?? [] }}",
-                "type": "string"
+                "type": "array"
               },
               {
                 "id": "8522a688-a24f-4b90-8c83-1420f537e866",
                 "name": "query",
-                "value": "={{ $json.query ?? '' }}",
+                "value": "={{ $json.query ?? $json.searchQuery ?? $node['Normalize Request'].json.query ?? '' }}",
                 "type": "string"
               },
               {
                 "id": "9f2fc17f-ae6b-4cc8-a353-94aaf6bab4ba",
                 "name": "meta",
                 "value": "={{ $json.body?.meta ?? $json.meta ?? {} }}",
-                "type": "string"
+                "type": "object"
               }
             ]
           },
@@ -5555,8 +5671,8 @@
               {
                 "id": "0afe3d34-323a-4594-b912-360d166d9b5d",
                 "name": "sources",
-                "value": "={{ '' }}",
-                "type": "string"
+                "value": "={{ [] }}",
+                "type": "array"
               },
               {
                 "id": "8522a688-a24f-4b90-8c83-1420f537e866",
@@ -5568,13 +5684,7 @@
                 "id": "9f2fc17f-ae6b-4cc8-a353-94aaf6bab4ba",
                 "name": "meta",
                 "value": "={{ $json.body?.meta ?? $json.meta ?? {} }}",
-                "type": "string"
-              },
-              {
-                "id": "38382ae2-ce6a-49fd-8529-1f587a1b61cf",
-                "name": "sources",
-                "value": "={{ [] }}",
-                "type": "array"
+                "type": "object"
               }
             ]
           },
@@ -5653,7 +5763,7 @@
         "main": [
           [
             {
-              "node": "Kontext/Policy sauber durchreichen",
+              "node": "Build Rich Research Context",
               "type": "main",
               "index": 0
             }
@@ -5823,17 +5933,6 @@
           ]
         ]
       },
-      "Summarize Snippets": {
-        "main": [
-          [
-            {
-              "node": "Pick Summary1",
-              "type": "main",
-              "index": 0
-            }
-          ]
-        ]
-      },
       "Pick Summary1": {
         "main": [
           [
@@ -5915,6 +6014,17 @@
           [
             {
               "node": "Proceed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Rich Research Context": {
+        "main": [
+          [
+            {
+              "node": "Pick Summary1",
               "type": "main",
               "index": 0
             }
@@ -6155,16 +6265,18 @@
               "typeValidation": "strict",
               "version": 3
             },
-            "conditions": {
-              "id": "e80eca57-c645-4869-b7af-92f7f5236747",
-              "leftValue": "={{ $json.success !== true || $json.stale === true }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
+            "conditions": [
+              {
+                "id": "e80eca57-c645-4869-b7af-92f7f5236747",
+                "leftValue": "={{ $json.success !== true || $json.stale === true }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
               }
-            },
+            ],
             "combinator": "and"
           },
           "options": {}
