@@ -4,12 +4,15 @@
 
 body.kahle-branding-ready {
   --kahle-brand-blue: #0071bc;
+  --kahle-chat-background-left: 0px;
 }
 
-body.kahle-branding-ready::before {
-  content: "";
+#kahle-chat-background-layer {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--kahle-chat-background-left);
   pointer-events: none;
   z-index: 0;
   background-image:
@@ -20,14 +23,19 @@ body.kahle-branding-ready::before {
   background-size: min(92vw, 1760px) auto;
 }
 
-.dark body.kahle-branding-ready::before,
-body.kahle-branding-ready.dark::before {
+.dark #kahle-chat-background-layer,
+body.kahle-branding-ready.dark #kahle-chat-background-layer {
   background-image:
     linear-gradient(rgba(18, 18, 18, 0.86), rgba(18, 18, 18, 0.86)),
     var(--kahle-chat-background);
 }
 
-body.kahle-branding-ready > * {
+body.kahle-branding-ready [data-kahle-chat-transparent="true"] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+body.kahle-branding-ready [data-kahle-app-foreground="true"] {
   position: relative;
   z-index: 1;
 }

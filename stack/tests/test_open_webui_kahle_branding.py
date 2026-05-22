@@ -32,22 +32,28 @@ def test_dockerfile_copies_brand_assets():
 def test_branding_js_contains_access_contract():
     text = (BRANDING_ROOT / "static" / "kahle-branding.js").read_text(encoding="utf-8")
     assert 'const BRAND_NAME = "KAHLE-Vinci"' in text
-    assert '"Geschaeftsleitung"' in text
-    assert '"Geschäftsleitung"' in text
-    assert '"AI-Pilot"' in text
+    assert '"geschaeftsleitung"' in text
+    assert '"geschaftsleitung"' in text
+    assert '"ai-pilot"' in text
+    assert "normalizeLabel" in text
+    assert "ensureBackgroundLayer" in text
+    assert "findSettingsRow" in text
     assert 'user?.role === "admin"' in text
     assert '"/api/v1/auths/"' in text
     assert '"/api/v1/groups/"' in text
-    assert '"Benutzeroberfläche"' in text
-    assert '"Verbindungen"' in text
-    assert '"Integrationen"' in text
-    assert '"Datenkontrolle"' in text
-    assert '"Advanced Parameters"' in text
+    assert '"benutzeroberflache"' in text
+    assert '"verbindungen"' in text
+    assert '"integrationen"' in text
+    assert '"datenkontrolle"' in text
+    assert '"advanced parameters"' in text
 
 
 def test_branding_css_contains_background_contract():
     text = (BRANDING_ROOT / "static" / "kahle-branding.css").read_text(encoding="utf-8")
     assert '--kahle-chat-background: url("/static/kahle/chat-background.jpg")' in text
+    assert "#kahle-chat-background-layer" in text
+    assert "body.kahle-branding-ready > *" not in text
+    assert "data-kahle-chat-transparent" in text
     assert "kahle-hide-advanced-settings" in text
     assert "data-kahle-hidden" in text
 
