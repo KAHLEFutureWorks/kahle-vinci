@@ -105,10 +105,8 @@ def main() -> int:
     if status == 200:
         paths = set((spec.get("paths") or {}).keys())
         expected = {
-            "/docx/create_save",
             "/docx/replace_one_save",
             "/docx/delete_last_paragraphs_save",
-            "/text/create_save",
             "/text/apply_ops_save",
             "/xlsx/update_cells_save",
             "/docx/to_pdf_save",
@@ -116,10 +114,11 @@ def main() -> int:
             "/file/to_docx_save",
             "/pdf/remove_pages_save",
             "/pdf/merge_save",
-            "/pdf/create_save",
             "/bundle/to_md_save",
         }
-        expect(paths == expected, "openapi paths match save-only contract")
+        expect(paths == expected, "openapi paths expose upload/transform tools only")
+        hidden_create_paths = {"/text/create_save", "/docx/create_save", "/pdf/create_save", "/pptx/create_save"}
+        expect(not (paths & hidden_create_paths), "generated-file create endpoints are hidden from model schema")
 
     s_wild, b_wild = http_json(
         "POST",
@@ -220,6 +219,15 @@ def main() -> int:
             "content": "# Smoke Research\n\n- Downloadable PDF works.\n",
         },
         "pdf_create_save",
+    )
+    _ = save_call(
+        "/pptx/create_save",
+        {
+            "filename": "smoke_research.pptx",
+            "title": "Smoke Research",
+            "content": "# Smoke Research\n\n## Ergebnis\n\n- Downloadable PPTX works.\n",
+        },
+        "pptx_create_save",
     )
     r_pdf_remove = save_call(
         "/pdf/remove_pages_save",

@@ -74,6 +74,25 @@ def _build_context(chunks):
     return "\n\n".join(parts).strip()
 
 
+def _prefer_top_source_chunks(chunks, max_chunks, score_floor):
+    """Keep the model grounded in the best matching document."""
+    if not chunks:
+        return []
+
+    top = chunks[0]
+    top_source = (top.get("collection") or "", top.get("source_path") or "")
+    if not top_source[1]:
+        return chunks[: int(max_chunks)]
+
+    filtered = [
+        chunk
+        for chunk in chunks
+        if (chunk.get("collection") or "", chunk.get("source_path") or "") == top_source
+        and float(chunk.get("score") or 0.0) >= float(score_floor)
+    ]
+    return (filtered or [top])[: int(max_chunks)]
+
+
 class Tools:
     class Valves(BaseModel):
         QDRANT_URL: str = Field(
@@ -156,11 +175,11 @@ class Tools:
             return f"KAHLE_RAG_RESULT\nFOUND: false\nERROR: {exc}"
 
         all_chunks.sort(key=lambda item: item["score"], reverse=True)
-        top_chunks = all_chunks[: int(self.valves.MAX_CHUNKS)]
-        top_score = top_chunks[0]["score"] if top_chunks else 0.0
+        top_candidates = all_chunks[: int(self.valves.MAX_CHUNKS)]
+        top_score = top_candidates[0]["score"] if top_candidates else 0.0
         threshold = float(self.valves.ANSWER_THRESHOLD)
 
-        if not top_chunks or top_score < threshold:
+        if not top_candidates or top_score < threshold:
             return (
                 "KAHLE_RAG_RESULT\n"
                 "FOUND: false\n"
@@ -170,12 +189,15 @@ class Tools:
                 f"META: top1_score={top_score:.3f} threshold={threshold:.2f}"
             )
 
+        top_chunks = _prefer_top_source_chunks(top_candidates, int(self.valves.MAX_CHUNKS), threshold)
         return (
             "KAHLE_RAG_RESULT\n"
             "FOUND: true\n"
             f"QUERY: {query}\n"
             "INSTRUCTION: Nutze AUSSCHLIESSLICH den Kontext unten. "
-            "Keine Vermutungen oder Ergänzungen. Jede KAHLE-Aussage muss eine Quellenmarke [#] enthalten.\n"
+            "Der RAG-Kontext hat Vorrang vor Chatverlauf und Modellwissen. "
+            "Korrigiere fruehere Antworten, wenn sie abweichen. "
+            "Keine Vermutungen oder Ergaenzungen. Jede KAHLE-Aussage muss eine Quellenmarke [#] enthalten.\n"
             f"META: top1_score={top_score:.3f} threshold={threshold:.2f} model={model}\n\n"
             "KONTEXT (zitierbar mit [#]):\n"
             f"{_build_context(top_chunks)}"

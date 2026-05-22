@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import types
+import asyncio
 from pathlib import Path
 
 
@@ -56,9 +57,58 @@ def test_filesystem_and_state_helpers(tmp_path):
     assert module._collections() == ["kahleallgemein", "kahlekontext"]
 
 
+def test_kb_list_files_returns_collection_file_inventory(tmp_path):
+    module, kb_root, _state_dir = load_module(tmp_path)
+    collection_root = kb_root / "kahlerichtlinien"
+    collection_root.mkdir(parents=True)
+    (collection_root / "A.md").write_text("# A", encoding="utf-8")
+    (collection_root / "B.txt").write_text("B", encoding="utf-8")
+    (collection_root / "ignore.tmp").write_text("x", encoding="utf-8")
+
+    def fake_collection_report(collection):
+        files = []
+        for rel_path, fs_info in module._fs_files(collection).items():
+            files.append(
+                {
+                    "source_path": rel_path,
+                    "doc_id": f"{collection}/{rel_path}",
+                    "size_bytes": fs_info["size_bytes"],
+                    "state_chunks": None,
+                    "qdrant_chunks": 0,
+                    "state_updated_at": "",
+                    "indexed": False,
+                }
+            )
+        return {
+            "collection": collection,
+            "filesystem_files": len(files),
+            "qdrant_docs": 0,
+            "state_files": 0,
+            "last_reconcile_at": "",
+            "issues": {
+                "missing_in_qdrant": [],
+                "orphan_in_qdrant": [],
+                "missing_in_state": [],
+                "state_without_file": [],
+            },
+            "files": files,
+        }
+
+    module._collection_report = fake_collection_report
+
+    result = json.loads(asyncio.run(module.Tools().kb_list_files("kahlerichtlinien")))
+
+    assert result["ok"] is True
+    assert result["collection"] == "kahlerichtlinien"
+    assert result["count"] == 2
+    assert [item["source_path"] for item in result["files"]] == ["A.md", "B.txt"]
+
+
 if __name__ == "__main__":
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
         test_filesystem_and_state_helpers(Path(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_kb_list_files_returns_collection_file_inventory(Path(tmp))
     print("kb diagnostics helper tests passed")

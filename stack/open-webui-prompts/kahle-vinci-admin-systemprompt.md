@@ -9,6 +9,7 @@ Aufgabe:
 Tool-Regeln:
 - Nutze fuer Knowledgebase-Diagnose ausschliesslich `KAHLE Knowledgebase Diagnose`.
 - Nutze `kb_status`, wenn der Nutzer nach Gesamtstatus, Collectionstatus, Qdrant, kb-sync oder Indexierung fragt.
+- Nutze `kb_list_files`, wenn der Nutzer fragt, welche Dateien in einer oder allen Knowledgebases/Collections liegen.
 - Nutze `kb_file_status`, wenn der Nutzer eine konkrete Datei pruefen will.
 - Nutze `kb_reindex_hint`, wenn der Nutzer nach Reindex, Reparatur oder naechsten Betriebsbefehlen fragt.
 - Nutze fuer Aufgaben-Diagnose ausschliesslich `KAHLE Tasks Admin`.

@@ -130,6 +130,123 @@ def get_content_from_message(message: dict) -> Optional[str]:
     return None
 
 
+def convert_output_to_messages(output: list, raw: bool = False) -> list[dict]:
+    """Convert stored output items into chat-completion messages."""
+    if not output or not isinstance(output, list):
+        return []
+
+    messages = []
+    pending_tool_calls = []
+    pending_content = []
+
+    def flush_pending():
+        nonlocal pending_content, pending_tool_calls
+        if pending_content or pending_tool_calls:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "\n".join(pending_content) if pending_content else "",
+                    **({"tool_calls": pending_tool_calls} if pending_tool_calls else {}),
+                }
+            )
+            pending_content = []
+            pending_tool_calls = []
+
+    for item in output:
+        item_type = item.get("type", "")
+
+        if item_type == "message":
+            text = ""
+            for part in item.get("content", []):
+                if part.get("type") == "output_text":
+                    text += part.get("text", "")
+            if text:
+                pending_content.append(text)
+
+        elif item_type == "function_call":
+            arguments = item.get("arguments", "{}")
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments)
+            pending_tool_calls.append(
+                {
+                    "id": item.get("call_id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": arguments,
+                    },
+                }
+            )
+
+        elif item_type == "function_call_output":
+            flush_pending()
+            content = ""
+            image_urls = []
+            for part in item.get("output", []):
+                if part.get("type") == "input_text":
+                    output_text = part.get("text", "")
+                    content += str(output_text) if not isinstance(output_text, str) else output_text
+                elif part.get("type") == "input_image":
+                    url = part.get("image_url", "")
+                    if url:
+                        image_urls.append(url)
+
+            if image_urls:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": item.get("call_id", ""),
+                        "content": [
+                            {"type": "input_text", "text": content},
+                            *[{"type": "input_image", "image_url": url} for url in image_urls],
+                        ],
+                    }
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": item.get("call_id", ""),
+                        "content": content,
+                    }
+                )
+
+        elif item_type == "reasoning":
+            if raw:
+                reasoning_text = ""
+                source_list = item.get("summary", []) or item.get("content", [])
+                for part in source_list:
+                    if part.get("type") == "output_text":
+                        reasoning_text += part.get("text", "")
+                    elif "text" in part:
+                        reasoning_text += part.get("text", "")
+
+                if reasoning_text:
+                    start_tag = item.get("start_tag", "<think>")
+                    end_tag = item.get("end_tag", "</think>")
+                    pending_content.append(f"{start_tag}{reasoning_text}{end_tag}")
+
+        elif item_type == "open_webui:code_interpreter":
+            code = item.get("code", "")
+            code_output = item.get("output", "")
+
+            if code:
+                pending_content.append(f"<code_interpreter>\n{code}\n</code_interpreter>")
+
+            if code_output:
+                if isinstance(code_output, dict):
+                    output_text = code_output.get("stdout", "") or code_output.get("result", "")
+                else:
+                    output_text = str(code_output)
+                if output_text:
+                    pending_content.append(
+                        f"<code_interpreter_output>\n{output_text}\n</code_interpreter_output>"
+                    )
+
+    flush_pending()
+    return messages
+
+
 def _extract_file_names_from_message(message: dict) -> list[str]:
     files = message.get("files") or []
     names: list[str] = []
@@ -182,6 +299,21 @@ def get_last_user_message(messages: list[dict]) -> Optional[str]:
     return f"{content}{suffix}" if content else suffix.strip()
 
 
+def set_last_user_message_content(content: str, messages: list[dict]) -> list[dict]:
+    """Replace the text content of the last user message in-place."""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            if isinstance(message.get("content"), list):
+                for item in message["content"]:
+                    if item.get("type") == "text":
+                        item["text"] = content
+                        break
+            else:
+                message["content"] = content
+            break
+    return messages
+
+
 def get_last_assistant_message_item(messages: list[dict]) -> Optional[dict]:
     for message in reversed(messages):
         if message["role"] == "assistant":
@@ -209,6 +341,25 @@ def remove_system_message(messages: list[dict]) -> list[dict]:
 
 def pop_system_message(messages: list[dict]) -> tuple[Optional[dict], list[dict]]:
     return get_system_message(messages), remove_system_message(messages)
+
+
+def merge_system_messages(messages: list[dict]) -> list[dict]:
+    """Merge all system messages into one leading system message."""
+    system_contents: list[str] = []
+    other_messages: list[dict] = []
+
+    for message in messages:
+        if message.get("role") == "system":
+            content = get_content_from_message(message)
+            if content:
+                system_contents.append(content)
+        else:
+            other_messages.append(message)
+
+    if not system_contents:
+        return other_messages
+
+    return [{"role": "system", "content": "\n".join(system_contents)}, *other_messages]
 
 
 def update_message_content(message: dict, content: str, append: bool = True) -> dict:
@@ -301,6 +452,25 @@ def append_or_update_assistant_message(content: str, messages: list[dict]):
         # Insert at the end
         messages.append({"role": "assistant", "content": content})
 
+    return messages
+
+
+def strip_empty_content_blocks(messages: list[dict]) -> list[dict]:
+    """Remove empty text blocks from multimodal message content arrays."""
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            cleaned = [
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and not block.get("text", "").strip()
+                )
+            ]
+            if cleaned:
+                message["content"] = cleaned
     return messages
 
 
@@ -434,6 +604,17 @@ def sanitize_text_for_db(text: str) -> str:
     return text
 
 
+def _strip_null_bytes_deep(obj):
+    """Recursively strip null bytes after they were detected."""
+    if isinstance(obj, str):
+        return sanitize_text_for_db(obj)
+    if isinstance(obj, dict):
+        return {k: _strip_null_bytes_deep(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_strip_null_bytes_deep(v) for v in obj]
+    return obj
+
+
 def sanitize_data_for_db(obj):
     """Recursively sanitize strings in a data structure for database storage."""
     if isinstance(obj, str):
@@ -443,6 +624,47 @@ def sanitize_data_for_db(obj):
     if isinstance(obj, list):
         return [sanitize_data_for_db(v) for v in obj]
     return obj
+
+
+def sanitize_metadata(metadata: dict) -> dict:
+    """
+    Return a JSON-safe copy of metadata before OpenWebUI stores it.
+
+    Keep this in sync with OpenWebUI v0.9.x; our override only changes
+    attached-file message text handling and must not remove newer helpers.
+    """
+    if not isinstance(metadata, dict):
+        return metadata
+
+    def _is_serializable(obj):
+        if isinstance(obj, (str, int, float, bool, type(None), dict, list)):
+            return True
+        try:
+            json.dumps(obj)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    def _sanitize(obj):
+        if isinstance(obj, (str, int, float, bool, type(None))):
+            return obj
+        if isinstance(obj, dict):
+            return {
+                k: _sanitize(v)
+                for k, v in obj.items()
+                if not callable(v) and _is_serializable(v)
+            }
+        if isinstance(obj, list):
+            return [_sanitize(v) for v in obj if not callable(v) and _is_serializable(v)]
+        if callable(obj):
+            return None
+        try:
+            json.dumps(obj)
+            return obj
+        except (TypeError, ValueError):
+            return None
+
+    return _sanitize(metadata)
 
 
 def extract_folders_after_data_docs(path):
@@ -689,6 +911,32 @@ def extract_urls(text: str) -> list[str]:
         r"(https?://[^\s]+)", re.IGNORECASE
     )  # Matches http and https URLs
     return url_pattern.findall(text)
+
+
+async def cleanup_response(
+    response: Optional[aiohttp.ClientResponse],
+    session: Optional[aiohttp.ClientSession],
+):
+    if response:
+        if not response.closed:
+            result = response.close()
+            if result is not None:
+                await result
+    if session:
+        if not session.closed:
+            result = session.close()
+            if result is not None:
+                await result
+
+
+async def stream_wrapper(response, session, content_handler=None):
+    """Wrap a stream so aiohttp resources are cleaned up on interruption."""
+    try:
+        stream = content_handler(response.content) if content_handler else response.content
+        async for chunk in stream:
+            yield chunk
+    finally:
+        await cleanup_response(response, session)
 
 
 def stream_chunks_handler(stream: aiohttp.StreamReader):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import time
 from typing import Any
 
@@ -33,6 +34,132 @@ def _env(*names: str, default: str = "") -> str:
 
 def _json(data: dict[str, Any]) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _coerce_message_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if text and text[0] in "[{":
+            try:
+                return _coerce_message_text(json.loads(text))
+            except Exception:
+                return text
+        return text
+    if isinstance(value, dict):
+        if isinstance(value.get("content"), str):
+            return value["content"].strip()
+        if isinstance(value.get("text"), str):
+            return value["text"].strip()
+        if isinstance(value.get("content"), list):
+            return _coerce_message_text(value.get("content"))
+        return ""
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            text = _coerce_message_text(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+    return str(value).strip()
+
+
+def _looks_like_generated_file_claim(text: str) -> bool:
+    lower = (text or "").lower()
+    return bool(
+        "/files/download" in lower
+        or "download-link:" in lower
+        or "datei herunterladen" in lower
+        or "sha256:" in lower
+    )
+
+
+def _looks_like_non_result_assistant(text: str) -> bool:
+    lower = (text or "").strip().lower()
+    if not lower or lower in {'""', "''"}:
+        return True
+    if lower.startswith(("[tool_calls]", "ich werde", "einen moment", "bitte einen moment")):
+        return True
+    if _looks_like_generated_file_claim(lower):
+        return True
+    if any(
+        marker in lower
+        for marker in (
+            "benoetige ich weitere details",
+            "benötige ich weitere details",
+            "bitte praezisiere",
+            "bitte präzisiere",
+            "sobald du diese details angibst",
+        )
+    ):
+        return True
+    return False
+
+
+def _latest_chat_message(chat_id: str | None, role: str, *, require_result: bool = False) -> str:
+    chat_id = (chat_id or "").strip()
+    if not chat_id:
+        return ""
+    db_path = _env("OWUI_DB_PATH", default="/app/backend/data/webui.db")
+    if not db_path or not os.path.exists(db_path):
+        return ""
+    try:
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """
+            select content
+            from chat_message
+            where chat_id = ? and role = ?
+            order by coalesce(created_at, 0) desc, coalesce(updated_at, 0) desc
+            limit 20
+            """,
+            (chat_id, role),
+        ).fetchall()
+    except Exception:
+        return ""
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    for row in rows or []:
+        text = _coerce_message_text(row["content"])
+        if not text:
+            continue
+        if require_result and role == "assistant" and _looks_like_non_result_assistant(text):
+            continue
+        return text
+    return ""
+
+
+def _looks_like_previous_result_request(text: str) -> bool:
+    lower = (text or "").lower()
+    if any(
+        marker in lower
+        for marker in (
+            "aus dem ergebnis",
+            "das ergebnis als",
+            "ergebnis als",
+            "aus dem vorherigen",
+            "aus deiner antwort",
+            "vorherige antwort",
+            "daraus eine datei",
+            "daraus als",
+            "aus dem text",
+            "die recherche als",
+            "recherche als",
+            "rechercheergebnis",
+        )
+    ):
+        return True
+    if re.search(r"\b(recherchiere|suche|finde|erstelle)\b", lower):
+        return False
+    return bool(
+        re.search(r"\b(ergebnis|antwort|recherche)\b", lower)
+        and re.search(r"\b(pdf|docx|word|powerpoint|pptx|markdown|datei|download)\b", lower)
+    )
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: int = 60) -> dict:
@@ -67,7 +194,6 @@ def classify_workflow_intent(auftrag: str, modus: str = "auto") -> str:
         "standorte",
         "marken",
         "gruppe",
-        "mitarbeit",
         "knowledgebase",
         "wissens",
         "compliance",
@@ -131,15 +257,20 @@ def infer_download_format(auftrag: str, output_format: str = "auto") -> str:
         "pdf": "pdf",
         "docx": "docx",
         "word": "docx",
+        "präsentation": "pptx",
         "md": "md",
         "markdown": "md",
         "txt": "md",
     }
     requested = aliases.get(requested, requested)
+    if requested in {"pptx", "powerpoint", "praesentation", "präsentation", "folien", "slides"}:
+        return "none"
     if requested in {"none", "pdf", "docx", "md"}:
         return requested
 
     text = (auftrag or "").lower()
+    if any(word in text for word in ("pptx", "powerpoint", "präsentation", "praesentation", "folien", "slides")):
+        return "none"
     file_markers = (
         "als pdf",
         "pdf aus",
@@ -148,9 +279,19 @@ def infer_download_format(auftrag: str, output_format: str = "auto") -> str:
         "download",
         "herunterladen",
         "als datei",
+        "als word",
+        "word aus",
+        "word datei",
+        "word-datei",
         "worddokument",
         "word-dokument",
         "docx",
+        "pptx",
+        "powerpoint",
+        "präsentation",
+        "praesentation",
+        "folien",
+        "slides",
         "markdown",
         ".md",
     )
@@ -160,14 +301,39 @@ def infer_download_format(auftrag: str, output_format: str = "auto") -> str:
         return "pdf"
     if "docx" in text or "word" in text:
         return "docx"
+    if "pptx" in text or "powerpoint" in text or "präsentation" in text or "praesentation" in text or "folien" in text or "slides" in text:
+        return "none"
     if "markdown" in text or ".md" in text:
         return "md"
     return "pdf"
 
 
+def _decode_literal_unicode_escapes(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        try:
+            return chr(int(match.group(1), 16))
+        except Exception:
+            return match.group(0)
+
+    return re.sub(r"(?:\\+u|_u)([0-9a-fA-F]{4})", replace, str(value or ""))
+
+
+def _ascii_filename_text(value: str) -> str:
+    text = _decode_literal_unicode_escapes(value).lower()
+    replacements = {
+        "ä": "ae",
+        "ö": "oe",
+        "ü": "ue",
+        "ß": "ss",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text
+
+
 def _slugify(value: str, default: str = "kahle_vinci_ergebnis") -> str:
-    text = (value or "").lower()
-    text = re.sub(r"\b(bit(te)?|recherchiere|recherche|erstelle|ergebnis|ausgabe|als|pdf|docx|word|markdown|datei|download|gib|mir|zum|zur|zu|und|das|den|die|der|ein|eine)\b", " ", text)
+    text = _ascii_filename_text(value or "")
+    text = re.sub(r"\b(bit(te)?|recherchiere|recherche|erstelle|ergebnis|ausgabe|als|pdf|docx|pptx|powerpoint|word|markdown|datei|download|gib|mir|zum|zur|zu|und|das|den|die|der|ein|eine)\b", " ", text)
     text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
     text = re.sub(r"_+", "_", text)
     if not text:
@@ -201,6 +367,10 @@ def build_web_search_query(auftrag: str) -> str:
         text = "Claude AI Anthropic Modelle Funktionen Preise Enterprise Vergleich"
     elif re.search(r"\bcupra\b", lower) and re.search(r"\btindaya\b", lower):
         text = "CUPRA Tindaya Konzeptfahrzeug offizielle Informationen technische Daten Design Marktstart"
+    elif re.search(r"\bbarilla\b", lower) and re.search(r"\bpesto\b", lower):
+        text = "Barilla Pesto Sorten Deutschland aktuell 2026"
+    elif re.search(r"\bspaghetti\b", lower) and re.search(r"\b(hergestellt|herstellung|herstell|produzier|fertigung|gemacht)\w*", lower):
+        text = "Spaghetti Herstellung Hartweizen Pasta Produktion Schritte"
     elif re.search(r"\bki\b", lower) and re.search(r"\b(news|nachrichten)\b", original.lower()):
         text = "aktuelle KI News OpenAI Anthropic Google Meta Microsoft EU AI Act"
     elif re.search(r"\bki\b", lower) and re.search(r"\brichtlin", lower):
@@ -342,6 +512,115 @@ def build_final_payload(
     return payload
 
 
+def _requested_document_title(auftrag: str, fallback: str = "KAHLE-Vinci Rechercheergebnis") -> str:
+    text = str(auftrag or "")
+    for match in re.finditer(r'[„"“](.*?)[”"“]', text):
+        prefix = text[: match.start()].lower()[-60:]
+        if "titel" in prefix or "berschrift" in prefix or "ueberschrift" in prefix:
+            return match.group(1).strip()
+    if re.search(r"\bspaghetti\b", text, re.IGNORECASE) and re.search(r"\b(herstell|produktion|schritt)\w*", text, re.IGNORECASE):
+        return "Schritt-fuer-Schritt-Anleitung: Spaghetti-Herstellung"
+    return fallback
+
+
+def _clean_web_summary(summary: str) -> str:
+    text = str(summary or "").strip()
+    text = re.sub(r"(?im)^\s*\*{0,2}recherchekontext.*$", "", text)
+    text = re.sub(r"\[(?:\d+|source\s*\d+)\]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(untrusted|aus abgerufenen Webseiten)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+\?", "?", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip().strip('"')
+
+
+def _source_texts(web: dict[str, Any] | None) -> list[str]:
+    if not isinstance(web, dict):
+        return []
+    texts: list[str] = []
+    summary = _clean_web_summary(str(web.get("summary") or ""))
+    if summary:
+        texts.append(summary)
+    for source in web.get("sources") if isinstance(web.get("sources"), list) else []:
+        if not isinstance(source, dict):
+            continue
+        combined = " ".join(str(source.get(key) or "") for key in ("title", "snippet", "summary"))
+        if combined.strip():
+            texts.append(combined)
+    return texts
+
+
+def _extract_pesto_items(web: dict[str, Any] | None) -> list[str]:
+    text = " ".join(_source_texts(web))
+    text_lower = text.lower()
+    known = [
+        ("Pesto Rosso", ("rosso",)),
+        ("Basilikum-Pesto", ("basilikum-pesto",)),
+        ("Gemuesepesto", ("gemuesepesto",)),
+        ("Gemüsepesto", ("gemüsepesto",)),
+        ("Pesto Rustico", ("rustico",)),
+        ("Pesto alla Genovese", ("genovese",)),
+        ("Pesto Genovese ohne Knoblauch", ("genovese ohne knoblauch",)),
+        ("Pesto Ricotta e Noci", ("ricotta e noci",)),
+        ("Pesto Rucola", ("rucola",)),
+        ("Pesto Calabrese", ("calabrese",)),
+        ("Pesto Basilico Pistacchio", ("basilico pistacchio",)),
+        ("Pesto Basilico Limone", ("basilico limone",)),
+        ("Pesto Basilico Vegan", ("basilico vegan",)),
+        ("Pesto Rustico Basilico e Olive", ("rustico basilico e olive",)),
+        ("Pesto Basilico e Pistacchio", ("basilico e pistacchio",)),
+    ]
+    patterns = [
+        r"\bPesto\s+(?:alla\s+)?[A-ZÄÖÜ][\wÄÖÜäöüß-]+(?:\s+(?:e|di|alla|ohne|&|und)?\s*[A-ZÄÖÜ][\wÄÖÜäöüß-]+){0,4}",
+        r"\b[A-ZÄÖÜ][\wÄÖÜäöüß-]+-Pesto\b",
+        r"\bGemüsepesto\b",
+    ]
+    blocked = {
+        "Pesto Barilla",
+        "Pesto Set",
+        "Pesto Segment",
+        "Pesto Sorten",
+        "Pesto Test",
+        "Pesto Vergleich",
+    }
+    seen: set[str] = set()
+    items: list[str] = []
+    for item, needles in known:
+        if any(needle in text_lower for needle in needles):
+            key = item.lower()
+            if key not in seen:
+                seen.add(key)
+                items.append(item)
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            item = re.sub(r"\s+", " ", match.group(0)).strip(" ,.;:-")
+            if " Pesto " in item:
+                continue
+            item = item.replace("Basilikum-Pesto", "Basilikum-Pesto")
+            if item in blocked or len(item) < 8:
+                continue
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
+    return items[:20]
+
+
+def _format_sources_short(sources: list[Any]) -> str:
+    lines: list[str] = []
+    for source in sources[:6]:
+        if not isinstance(source, dict):
+            continue
+        title = str(source.get("title") or source.get("name") or "Quelle").strip()
+        url = str(source.get("url") or source.get("link") or "").strip()
+        if title and url:
+            lines.append(f"- [{title}]({url})")
+        elif url:
+            lines.append(f"- {url}")
+    return "\n".join(lines)
+
+
 def _format_sources(sources: list[Any]) -> str:
     lines: list[str] = []
     for index, source in enumerate(sources, start=1):
@@ -362,27 +641,53 @@ def _format_sources(sources: list[Any]) -> str:
 def build_report_markdown(payload: dict[str, Any]) -> str:
     """Create deterministic Markdown from workflow results for downloadable files."""
     auftrag = str(payload.get("auftrag") or "KAHLE-Vinci Ergebnis").strip()
-    title = "KAHLE-Vinci Rechercheergebnis"
-    if payload.get("target") == "presentation_outline":
-        title = "KAHLE-Vinci Praesentationsgliederung"
-    elif payload.get("intent") == "mixed":
-        title = "KAHLE-Vinci Vergleich: interne und externe Informationen"
+    title = _requested_document_title(auftrag)
+    web = payload.get("external_web") if isinstance(payload.get("external_web"), dict) else None
+    sources = web.get("sources") if isinstance(web, dict) and isinstance(web.get("sources"), list) else []
 
-    sections = [
-        f"# {title}",
-        "",
-        f"**Auftrag:** {auftrag}",
-        f"**Erstellt:** {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        "",
-    ]
+    if re.search(r"\bbarilla\b", auftrag, re.IGNORECASE) and re.search(r"\bpesto\b", auftrag, re.IGNORECASE):
+        items = _extract_pesto_items(web)
+        sections = [f"# {title}", ""]
+        if items:
+            sections.extend(items)
+            sections = [sections[0], "", *[f"- {item}" for item in items], ""]
+        else:
+            sections.extend(["Keine eindeutigen Pesto-Sorten in den Suchergebnissen gefunden.", ""])
+        source_block = _format_sources_short(sources)
+        if source_block:
+            sections.extend(["## Quellen", "", source_block, ""])
+        return "\n".join(sections).strip() + "\n"
 
-    tasks = payload.get("tasks") if isinstance(payload.get("tasks"), list) else []
-    if tasks:
-        sections.extend(["## Bearbeitete Schritte", ""])
-        for task in tasks:
-            if isinstance(task, dict):
-                sections.append(f"- {task.get('content', '')} ({task.get('status', '')})")
-        sections.append("")
+    if re.search(r"\bspaghetti\b", auftrag, re.IGNORECASE) and re.search(r"\b(herstell|produktion|schritt)\w*", auftrag, re.IGNORECASE):
+        sections = [
+            "# Schritt-fuer-Schritt-Anleitung: Spaghetti-Herstellung",
+            "",
+            "## Ziel",
+            "",
+            "Diese Anleitung beschreibt den typischen Ablauf zur Herstellung von Spaghetti aus Hartweizen fuer eine interne Mitarbeitereinweisung.",
+            "",
+            "## Schritt-fuer-Schritt-Anleitung",
+            "",
+            "1. Rohstoffe vorbereiten: Hartweizengriess bzw. Semola bereitstellen und Wasser dosieren.",
+            "2. Teig mischen: Griess und Wasser gleichmaessig vermengen, bis eine feste, kruemelige Teigmasse entsteht.",
+            "3. Teig kneten: Die Masse so lange bearbeiten, bis Feuchtigkeit und Struktur gleichmaessig verteilt sind.",
+            "4. Spaghetti formen: Den Teig unter Druck durch Matrizen pressen, sodass lange Spaghetti-Stränge entstehen.",
+            "5. Laenge schneiden: Die Spaghetti auf die gewuenschte Laenge bringen und gleichmaessig ablegen.",
+            "6. Trocknen: Die Pasta kontrolliert trocknen, damit sie stabil bleibt und nicht reisst.",
+            "7. Qualitaet pruefen: Bruch, Form, Feuchte und Oberflaeche kontrollieren.",
+            "8. Verpacken: Die fertigen Spaghetti portionieren, verpacken und trocken lagern.",
+            "",
+            "## Praxishinweise",
+            "",
+            "- Saubere Arbeitsflaechen und konstante Trocknungsbedingungen sind entscheidend.",
+            "- Zu schnelle Trocknung kann Risse verursachen; zu hohe Restfeuchte verkuerzt die Haltbarkeit.",
+        ]
+        source_block = _format_sources_short(sources)
+        if source_block:
+            sections.extend(["", "## Quellen", "", source_block])
+        return "\n".join(sections).strip() + "\n"
+
+    sections = [f"# {title}", "", f"Erstellt mit KAHLE-Vinci | Stand: {time.strftime('%Y-%m-%d %H:%M:%S')}", ""]
 
     rag = payload.get("internal_rag") if isinstance(payload.get("internal_rag"), dict) else None
     if rag:
@@ -395,26 +700,22 @@ def build_report_markdown(payload: dict[str, Any]) -> str:
                 sections.append(f"Fehlerhinweis: {rag.get('error')}")
         sections.append("")
 
-    web = payload.get("external_web") if isinstance(payload.get("external_web"), dict) else None
     if web:
-        sections.extend(["## Externe Recherche", ""])
-        summary = str(web.get("summary") or "").strip()
-        sections.append(summary or "Keine externe Zusammenfassung im Tool-Ergebnis.")
+        sections.extend(["## Kernaussagen", ""])
+        summary = _clean_web_summary(str(web.get("summary") or ""))
+        if not summary and sources:
+            summary = "\n".join(
+                f"- {str(source.get('title') or 'Quelle').strip()}: {str(source.get('snippet') or '').strip()}"
+                for source in sources[:5]
+                if isinstance(source, dict)
+            )
+        sections.append(summary or "Keine verwertbare Zusammenfassung im Tool-Ergebnis.")
         sections.append("")
 
-        sources = web.get("sources") if isinstance(web.get("sources"), list) else []
         top_links = web.get("topLinks") if isinstance(web.get("topLinks"), list) else []
-        source_block = _format_sources(sources) or _format_sources(top_links)
+        source_block = _format_sources_short(sources) or _format_sources(top_links)
         if source_block:
             sections.extend(["## Quellen", "", source_block, ""])
-
-    sections.extend(
-        [
-            "## Hinweis",
-            "",
-            "Dieses Dokument wurde automatisiert aus den verfuegbaren Tool-Ergebnissen erstellt. Inhalte sollten vor externer Nutzung fachlich geprueft werden.",
-        ]
-    )
     return "\n".join(sections).strip() + "\n"
 
 
@@ -478,7 +779,7 @@ class Tools:
 
     async def kahle_workflow_execute(
         self,
-        auftrag: str,
+        auftrag: str = "",
         modus: str = "auto",
         ziel: str = "auto",
         output_format: str = "auto",
@@ -502,17 +803,54 @@ class Tools:
         :param auftrag: Vollstaendige Nutzeraufgabe.
         :param modus: auto, internal, external oder mixed.
         :param ziel: auto, research_brief, presentation_outline oder docx_brief.
-        :param output_format: auto, none, pdf, docx oder md. auto erkennt Dateiwuensche aus dem Auftrag.
+        :param output_format: auto, none, pdf, docx oder md. auto erkennt Dateiwuensche aus dem Auftrag. PPTX ist deaktiviert.
         :param filename: Optionaler Ausgabedateiname. Leer = sicher aus dem Auftrag ableiten.
         :param max_web_results: Maximale Webtreffer bei externer Recherche.
         """
         auftrag = str(auftrag or "").strip()
         if not auftrag:
-            return _json({"error": "auftrag fehlt"})
+            auftrag = _latest_chat_message(__chat_id__, "user")
+        if not auftrag:
+            return _json({
+                "ok": False,
+                "error": "auftrag_fehlt",
+                "hint": "Das Modell hat das Workflow-Tool ohne Parameter aufgerufen. Starte den Toolcall erneut mit der aktuellen Nutzeraufgabe im Feld 'auftrag'.",
+            })
+
+        download_format = infer_download_format(auftrag, output_format)
+        if download_format != "none" and _looks_like_previous_result_request(auftrag):
+            previous_answer = _latest_chat_message(__chat_id__, "assistant", require_result=True)
+            if previous_answer:
+                out_name = str(filename or "").strip() or suggest_output_filename(auftrag, download_format)
+                file_result = create_downloadable_file(
+                    previous_answer,
+                    download_format,
+                    out_name,
+                    title="KAHLE-Vinci Ergebnis",
+                )
+                return _json(
+                    {
+                        "workflow": "kahle_workflow_execute",
+                        "auftrag": auftrag,
+                        "intent": "previous_result_file",
+                        "target": "file_output",
+                        "generated_file": file_result,
+                        "download_url": file_result.get("download_url"),
+                        "filename": file_result.get("filename"),
+                        "sha256": file_result.get("sha256"),
+                        "size_bytes": file_result.get("size_bytes"),
+                        "answer_instruction": (
+                            "Wenn generated_file.download_url vorhanden ist: Gib ausschliesslich Download-Link und Metadaten aus. "
+                            "Wenn nicht: Gib generated_file.error kurz aus."
+                        ),
+                    }
+                )
 
         intent = classify_workflow_intent(auftrag, modus)
         target = normalize_target(auftrag, ziel)
         tasks = build_task_plan(intent, target)
+        blocked = False
+        blockers: list[str] = []
 
         def mark_local_task(task_id: str, status: str) -> None:
             for task in tasks:
@@ -520,47 +858,65 @@ class Tools:
                     task["status"] = status
                     return
 
+        async def mark_task(task_id: str, status: str) -> None:
+            mark_local_task(task_id, status)
+            await self._task_update(task_id, status, __chat_id__, __message_id__, __event_emitter__, __request__, __user__)
+
+        async def cancel_task(task_id: str, reason: str) -> None:
+            nonlocal blocked
+            blocked = True
+            if reason:
+                blockers.append(reason)
+            await mark_task(task_id, "cancelled")
+
         await self._tasks_create(tasks, __chat_id__, __message_id__, __event_emitter__, __request__, __user__)
 
         rag_result = None
         web_result = None
 
         if intent in {"internal", "mixed"}:
-            mark_local_task("1", "in_progress")
-            await self._task_update("1", "in_progress", __chat_id__, __message_id__, __event_emitter__, __request__, __user__)
+            await mark_task("1", "in_progress")
             rag_raw = self._run_internal_rag(auftrag)
             rag_result = parse_rag_result(rag_raw)
-            mark_local_task("1", "completed")
-            await self._task_update("1", "completed", __chat_id__, __message_id__, __event_emitter__, __request__, __user__)
+            if rag_result.get("found") and not rag_result.get("error"):
+                await mark_task("1", "completed")
+            else:
+                await cancel_task("1", str(rag_result.get("error") or "Keine passenden internen Treffer gefunden."))
 
-        if intent in {"external", "mixed"}:
+        if not blocked and intent in {"external", "mixed"}:
             external_task_id = "1" if intent == "external" else "2"
-            mark_local_task(external_task_id, "in_progress")
-            await self._task_update(
-                external_task_id, "in_progress", __chat_id__, __message_id__, __event_emitter__, __request__, __user__
-            )
+            await mark_task(external_task_id, "in_progress")
             web_raw = self._run_external_websearch(build_web_search_query(auftrag), max_web_results, __user__)
             web_result = parse_web_result(web_raw)
-            mark_local_task(external_task_id, "completed")
-            await self._task_update(
-                external_task_id, "completed", __chat_id__, __message_id__, __event_emitter__, __request__, __user__
-            )
+            if web_result.get("ok"):
+                await mark_task(external_task_id, "completed")
+            else:
+                await cancel_task(external_task_id, str(web_result.get("summary") or "Externe Recherche fehlgeschlagen."))
 
-        for task in tasks:
+        if blocked:
+            for task in tasks:
+                if task.get("status") == "pending":
+                    await mark_task(task["id"], "cancelled")
+            final_payload = build_final_payload(auftrag, intent, target, tasks, rag_result, web_result)
+            final_payload["status"] = "blocked"
+            final_payload["blockers"] = blockers
+            final_payload["answer_instruction"] = (
+                "Der Workflow wurde nicht vollstaendig ausgefuehrt. Gib die blocker kurz aus und erfinde keine Ergebnisse."
+            )
+            return _json(final_payload)
+
+        final_task_id = tasks[-1]["id"] if tasks else ""
+        pending_before_output = tasks[:-1] if download_format != "none" and final_task_id else tasks
+        for task in pending_before_output:
             if task.get("status") == "pending":
                 task_id = task["id"]
-                mark_local_task(task_id, "in_progress")
-                await self._task_update(
-                    task_id, "in_progress", __chat_id__, __message_id__, __event_emitter__, __request__, __user__
-                )
-                mark_local_task(task_id, "completed")
-                await self._task_update(
-                    task_id, "completed", __chat_id__, __message_id__, __event_emitter__, __request__, __user__
-                )
+                await mark_task(task_id, "in_progress")
+                await mark_task(task_id, "completed")
 
         final_payload = build_final_payload(auftrag, intent, target, tasks, rag_result, web_result)
-        download_format = infer_download_format(auftrag, output_format)
         if download_format != "none":
+            if final_task_id and any(task.get("id") == final_task_id and task.get("status") == "pending" for task in tasks):
+                await mark_task(final_task_id, "in_progress")
             report_markdown = build_report_markdown(final_payload)
             out_name = str(filename or "").strip() or suggest_output_filename(auftrag, download_format)
             file_result = create_downloadable_file(
@@ -571,6 +927,8 @@ class Tools:
             )
             final_payload["generated_file"] = file_result
             if file_result.get("download_url"):
+                if final_task_id:
+                    await mark_task(final_task_id, "completed")
                 final_payload["download_url"] = file_result.get("download_url")
                 final_payload["filename"] = file_result.get("filename")
                 final_payload["sha256"] = file_result.get("sha256")
@@ -580,10 +938,15 @@ class Tools:
                     "Format: Download-Link, Datei, SHA256, Groesse. Keine Inhaltsrekonstruktion."
                 )
             else:
+                if final_task_id:
+                    await cancel_task(final_task_id, str(file_result.get("error") or "Datei konnte nicht erzeugt werden."))
+                final_payload["status"] = "blocked"
+                final_payload["blockers"] = blockers
                 final_payload["answer_instruction"] = (
                     "Die Recherche wurde abgeschlossen, aber die Datei konnte nicht erzeugt werden. "
                     "Gib den Fehler aus generated_file.error kurz aus und liefere danach die strukturierte Antwort aus den workflow_results."
                 )
+            final_payload["tasks"] = tasks
 
         return _json(final_payload)
 

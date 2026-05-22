@@ -54,11 +54,23 @@ n8n/n8nEventLog*.log
 knowledgebases/
 *.pdf
 *.docx
+*.pptx
 *.xlsx
 *.xlsm
 *.csv
 *.mp3
 *.webm
+
+# Local brand/output templates and image libraries.
+# Keep only README/JSON/placeholders in Git unless assets are explicitly cleared.
+assets/templates/**/*.pdf
+assets/templates/**/*.docx
+assets/templates/**/*.pptx
+assets/brand/logos/*
+assets/presentation-images/**/*
+!assets/**/.gitkeep
+!assets/**/*.md
+!assets/**/*.json
 
 # OS/editor noise
 .DS_Store

@@ -1,0 +1,19 @@
+{
+  "name": "KAHLE-Vinci",
+  "colors": {
+    "ink": "0F2430",
+    "blue": "0069B3",
+    "blue_dark": "00457A",
+    "cyan": "00A3D7",
+    "light": "F4F7FA",
+    "muted": "8A8A8A",
+    "anthracite": "111111",
+    "signal_red": "CC0000",
+    "white": "FFFFFF"
+  },
+  "fonts": {
+    "headings": "Barlow Condensed",
+    "body": "VW Text",
+    "fallback": "Arial"
+  }
+}

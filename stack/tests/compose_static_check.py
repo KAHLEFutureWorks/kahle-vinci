@@ -185,6 +185,18 @@ def check_open_webui_upload_contract(services: dict[str, Any]) -> list[str]:
         failures.append("open-webui: knowledgebases must be mounted read-only for admin diagnostics")
     if not any(volume.endswith("/kb-sync-state:/kb-sync-state:ro") for volume in volumes):
         failures.append("open-webui: kb-sync-state must be mounted read-only for admin diagnostics")
+    if not any(
+        "/stack/open-webui-overrides/open_webui/utils/middleware.py:/app/backend/open_webui/utils/middleware.py:ro"
+        in volume
+        for volume in volumes
+    ):
+        failures.append("open-webui: middleware override must be mounted so file tool routing fixes are active")
+    if not any(
+        "/stack/open-webui-overrides/open_webui/utils/misc.py:/app/backend/open_webui/utils/misc.py:ro"
+        in volume
+        for volume in volumes
+    ):
+        failures.append("open-webui: misc override must be mounted so attached filenames reach tool routing")
 
     return failures
 

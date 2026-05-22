@@ -12,6 +12,8 @@ import json
 import sqlite3
 import html
 import zipfile
+import io
+import copy
 import requests
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -22,8 +24,55 @@ from fastapi import FastAPI, HTTPException, Header, Query, Request
 from fastapi.responses import Response, JSONResponse, FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, constr
 
+try:
+    from docx import Document  # type: ignore
+    from docx.shared import RGBColor  # type: ignore
+except Exception:  # pragma: no cover - optional runtime dependency
+    Document = None  # type: ignore
+    RGBColor = None  # type: ignore
+
+try:
+    from pptx import Presentation  # type: ignore
+    from pptx.util import Inches, Pt  # type: ignore
+except Exception:  # pragma: no cover - optional runtime dependency
+    Presentation = None  # type: ignore
+    Inches = None  # type: ignore
+    Pt = None  # type: ignore
+
+try:
+    from reportlab.lib import colors  # type: ignore
+    from reportlab.lib.pagesizes import A4  # type: ignore
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore
+    from reportlab.lib.units import mm  # type: ignore
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle  # type: ignore
+except Exception:  # pragma: no cover - optional runtime dependency
+    colors = None  # type: ignore
+    A4 = None  # type: ignore
+    ParagraphStyle = None  # type: ignore
+    getSampleStyleSheet = None  # type: ignore
+    mm = None  # type: ignore
+    Paragraph = None  # type: ignore
+    SimpleDocTemplate = None  # type: ignore
+    Spacer = None  # type: ignore
+    Table = None  # type: ignore
+    TableStyle = None  # type: ignore
+
+try:
+    from pypdf import PdfReader, PdfWriter  # type: ignore
+except Exception:  # pragma: no cover - optional runtime dependency
+    PdfReader = None  # type: ignore
+    PdfWriter = None  # type: ignore
+
 OWUI_UPLOAD_DIR = os.getenv("OWUI_UPLOAD_DIR", "/app/backend/data/uploads")
 DOC_WORKER_URL = os.getenv("DOC_WORKER_URL", "http://document-worker:8090")
+KAHLE_ASSETS_ROOT = Path(os.getenv("KAHLE_ASSETS_ROOT", "/assets")).resolve()
+KAHLE_DOCX_TEMPLATE = Path(os.getenv("KAHLE_DOCX_TEMPLATE", str(KAHLE_ASSETS_ROOT / "templates/docx/KAHLE-DOCX-VORLAGE.docx")))
+KAHLE_PDF_TEMPLATE = Path(os.getenv("KAHLE_PDF_TEMPLATE", str(KAHLE_ASSETS_ROOT / "templates/pdf/KAHLE-PDF-VORLAGE.pdf")))
+KAHLE_PPTX_TEMPLATE = Path(os.getenv("KAHLE_PPTX_TEMPLATE", str(KAHLE_ASSETS_ROOT / "templates/pptx/KAHLE-PPTX-Vorlage.pptx")))
+KAHLE_BRAND_CONFIG = Path(os.getenv("KAHLE_BRAND_CONFIG", str(KAHLE_ASSETS_ROOT / "brand/colors/kahle-brand.json")))
+KAHLE_LOGO_PRIMARY = Path(
+    os.getenv("KAHLE_LOGO_PRIMARY", str(KAHLE_ASSETS_ROOT / "brand/logos/Logo_Kahle_Gruppe_positiv.png"))
+)
 
 # Backwards-compatible: TOOL_API_KEY protects proxy endpoints (optional),
 # and is also forwarded to worker as x-api-key (optional).
@@ -60,9 +109,10 @@ RECENT_UPLOAD_DISAMBIGUATION_SECONDS = int(os.getenv("RECENT_UPLOAD_DISAMBIGUATI
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PDF_MIME = "application/pdf"
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 # Allow saving these file types from worker results
-ALLOWED_SAVE_EXT = {".docx", ".md", ".txt", ".csv", ".pdf", ".xlsx"}
+ALLOWED_SAVE_EXT = {".docx", ".md", ".txt", ".csv", ".pdf", ".xlsx", ".pptx"}
 
 WILDCARD_RE = re.compile(r"[*?\[\]{}]")
 OWUI_UUID_PREFIX_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_.+", re.I)
@@ -72,6 +122,9 @@ NonEmptyStr = constr(strip_whitespace=True, min_length=1)
 app = FastAPI(title="OWUI File Proxy", version="1.5.0")
 
 _REQUEST_API_KEY: ContextVar[str] = ContextVar("request_api_key", default="")
+_DOCX_TEMPLATE_USED: ContextVar[bool] = ContextVar("docx_template_used", default=False)
+_PDF_TEMPLATE_USED: ContextVar[bool] = ContextVar("pdf_template_used", default=False)
+_PPTX_TEMPLATE_USED: ContextVar[bool] = ContextVar("pptx_template_used", default=False)
 AUTH_EXEMPT_PATHS = {"/health", "/files/download"}
 
 
@@ -144,8 +197,35 @@ def _safe_relpath(rel: str) -> str:
     return "/".join(parts)
 
 
+def _decode_literal_unicode_escapes(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        try:
+            return chr(int(match.group(1), 16))
+        except Exception:
+            return match.group(0)
+
+    return re.sub(r"(?:\\+u|_u)([0-9a-fA-F]{4})", replace, str(value or ""))
+
+
+def _ascii_filename_text(value: str) -> str:
+    text = _decode_literal_unicode_escapes(value)
+    replacements = {
+        "ä": "ae",
+        "ö": "oe",
+        "ü": "ue",
+        "ß": "ss",
+        "Ä": "Ae",
+        "Ö": "Oe",
+        "Ü": "Ue",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text
+
+
 def _sanitize_filename(name: str) -> str:
-    name = os.path.basename(name or "")
+    name = _decode_literal_unicode_escapes(name)
+    name = re.split(r"[\\/]", _ascii_filename_text(name))[-1]
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     if not name:
         name = f"file_{uuid.uuid4().hex}"
@@ -392,15 +472,172 @@ def _write_atomic(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def _docx_paragraph_xml(text: str, style: str = "", bold: bool = False) -> str:
+def _file_exists(path: Path) -> bool:
+    try:
+        return path.exists() and path.is_file()
+    except Exception:
+        return False
+
+
+def _load_brand_config() -> dict[str, Any]:
+    if not _file_exists(KAHLE_BRAND_CONFIG):
+        return {}
+    try:
+        with open(KAHLE_BRAND_CONFIG, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _brand_value(section: str, key: str, default: str) -> str:
+    data = _load_brand_config()
+    section_data = data.get(section, {})
+    if isinstance(section_data, dict):
+        value = section_data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lstrip("#")
+    return default
+
+
+def _safe_style(document: Any, preferred: str, fallback: str = "Normal") -> str:
+    try:
+        _ = document.styles[preferred]
+        return preferred
+    except Exception:
+        return fallback
+
+
+def _strip_single_markdown_markers(text: str) -> str:
+    cleaned = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text or "")
+    cleaned = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", cleaned)
+    return cleaned.replace("**", "").replace("__", "")
+
+
+def _markdown_inline_segments(text: str, bold: bool = False) -> list[tuple[str, bool]]:
+    segments: list[tuple[str, bool]] = []
+    pos = 0
+    for match in re.finditer(r"(\*\*|__)(.+?)\1", text or ""):
+        if match.start() > pos:
+            plain = _strip_single_markdown_markers((text or "")[pos : match.start()])
+            if plain:
+                segments.append((plain, bool(bold)))
+        strong = _strip_single_markdown_markers(match.group(2))
+        if strong:
+            segments.append((strong, True))
+        pos = match.end()
+
+    tail = _strip_single_markdown_markers((text or "")[pos:])
+    if tail or not segments:
+        segments.append((tail, bool(bold)))
+    return segments
+
+
+def _add_docx_paragraph(document: Any, text: str, style: str = "Normal", bold: bool = False, color_hex: str = "") -> None:
+    paragraph = document.add_paragraph(style=_safe_style(document, style))
+    for segment_text, segment_bold in _markdown_inline_segments(text or "", bold):
+        run = paragraph.add_run(segment_text)
+        run.bold = bool(segment_bold)
+        if color_hex and RGBColor is not None:
+            value = color_hex.strip().lstrip("#")
+            try:
+                run.font.color.rgb = RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+            except Exception:
+                pass
+
+
+def _markdown_lines(content: str) -> list[str]:
+    lines: list[str] = []
+    in_code = False
+    for raw_line in (content or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            lines.append(line)
+        else:
+            lines.append(stripped)
+    return lines
+
+
+def _docx_run_xml(text: str, bold: bool = False) -> str:
     escaped = html.escape(text or "")
-    style_xml = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
     run_props = "<w:rPr><w:b/></w:rPr>" if bold else ""
-    return f"<w:p>{style_xml}<w:r>{run_props}<w:t xml:space=\"preserve\">{escaped}</w:t></w:r></w:p>"
+    return f'<w:r>{run_props}<w:t xml:space="preserve">{escaped}</w:t></w:r>'
+
+
+def _docx_paragraph_xml(text: str, style: str = "", bold: bool = False) -> str:
+    style_xml = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
+    runs = "".join(_docx_run_xml(segment_text, segment_bold) for segment_text, segment_bold in _markdown_inline_segments(text or "", bold))
+    return f"<w:p>{style_xml}{runs}</w:p>"
 
 
 def _generated_at_label() -> str:
     return time.strftime("%Y-%m-%d %H:%M Europe/Berlin")
+
+
+def _markdown_to_template_docx_bytes(content: str, title: str = "Dokument") -> Optional[bytes]:
+    if Document is None or not _file_exists(KAHLE_DOCX_TEMPLATE):
+        return None
+
+    try:
+        document = Document(str(KAHLE_DOCX_TEMPLATE))
+
+        # Use the supplied file as style/theme template, but replace body content.
+        body = document._element.body  # noqa: SLF001 - python-docx has no public clear-body API.
+        section_props = None
+        for child in list(body):
+            if child.tag.endswith("sectPr"):
+                section_props = child
+                continue
+            body.remove(child)
+        if section_props is not None and section_props.getparent() is None:
+            body.append(section_props)
+
+        clean_title = (title or "Dokument").strip() or "Dokument"
+        brand_blue = _brand_value("colors", "blue", "0069B3")
+        brand_ink = _brand_value("colors", "ink", "0F2430")
+        _add_docx_paragraph(document, clean_title, "Title", bold=True, color_hex=brand_blue)
+        _add_docx_paragraph(document, f"Erstellt mit KAHLE-Vinci | Stand: {_generated_at_label()}", "Subtitle")
+        document.add_paragraph()
+
+        first_content_heading_seen = False
+        for stripped in _markdown_lines(content):
+            if not stripped:
+                document.add_paragraph()
+                continue
+            if stripped.startswith("#"):
+                heading = stripped.lstrip("#").strip()
+                if not first_content_heading_seen and heading.lower() == clean_title.lower():
+                    first_content_heading_seen = True
+                    continue
+                first_content_heading_seen = True
+                level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 3)
+                _add_docx_paragraph(
+                    document,
+                    heading,
+                    f"Heading {level}",
+                    bold=True,
+                    color_hex=brand_blue if level == 1 else brand_ink,
+                )
+                continue
+            if stripped.startswith(("- ", "* ")):
+                _add_docx_paragraph(document, stripped[2:].strip(), "List Bullet")
+                continue
+            numbered = re.match(r"^\d+[.)]\s+(.+)$", stripped)
+            if numbered:
+                _add_docx_paragraph(document, stripped, "List Number")
+                continue
+            _add_docx_paragraph(document, stripped)
+
+        out = io.BytesIO()
+        document.save(out)
+        _DOCX_TEMPLATE_USED.set(True)
+        return out.getvalue()
+    except Exception:
+        return None
 
 
 def _markdown_to_docx_bytes(content: str, title: str = "Dokument") -> bytes:
@@ -408,6 +645,10 @@ def _markdown_to_docx_bytes(content: str, title: str = "Dokument") -> bytes:
     Render plain Markdown-ish text into a simple valid DOCX using only stdlib.
     This intentionally favors dependable downloadable files over advanced layout.
     """
+    templated = _markdown_to_template_docx_bytes(content, title)
+    if templated:
+        return templated
+
     paragraphs: list[str] = []
     title = (title or "Dokument").strip() or "Dokument"
     paragraphs.append(_docx_paragraph_xml(title, "Title", bold=True))
@@ -459,9 +700,9 @@ def _markdown_to_docx_bytes(content: str, title: str = "Dokument") -> bytes:
         '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
         '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>'
         '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:style>'
-        '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/><w:color w:val="0F2430"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/><w:color w:val="0069B3"/></w:rPr></w:style>'
         '<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:sz w:val="18"/><w:color w:val="666666"/></w:rPr></w:style>'
-        '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:pPr><w:spacing w:before="260" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/><w:color w:val="0F2430"/></w:rPr></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:pPr><w:spacing w:before="260" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/><w:color w:val="0069B3"/></w:rPr></w:style>'
         '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/><w:color w:val="0F2430"/></w:rPr></w:style>'
         '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr><w:rPr><w:b/><w:sz w:val="23"/><w:color w:val="0F2430"/></w:rPr></w:style>'
         '<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="19"/></w:rPr></w:style>'
@@ -559,11 +800,200 @@ def _pdf_escape_text(text: str) -> str:
     return encoded.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
+def _markdown_inline_to_reportlab(text: str) -> str:
+    safe = html.escape(text or "")
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
+    safe = re.sub(r"\*(.+?)\*", r"<i>\1</i>", safe)
+    return safe
+
+
+def _text_to_reportlab_pdf_bytes(content: str, title: str = "Dokument") -> Optional[bytes]:
+    if not all([colors, A4, ParagraphStyle, getSampleStyleSheet, mm, Paragraph, SimpleDocTemplate, Spacer]):
+        return None
+
+    try:
+        clean_title = (title or "Dokument").strip() or "Dokument"
+        brand_ink = _brand_value("colors", "ink", "0F2430")
+        brand_blue = _brand_value("colors", "blue", "005A8F")
+        brand_muted = _brand_value("colors", "muted", "6B7280")
+        font_body = _brand_value("fonts", "body", "Helvetica")
+        font_heading = _brand_value("fonts", "headings", font_body)
+
+        styles = getSampleStyleSheet()
+        styles.add(
+            ParagraphStyle(
+                name="KahleTitle",
+                parent=styles["Title"],
+                fontName="Helvetica-Bold",
+                fontSize=22,
+                leading=26,
+                textColor=colors.HexColor(f"#{brand_blue}"),
+                spaceAfter=8,
+            )
+        )
+        styles.add(
+            ParagraphStyle(
+                name="KahleSubtitle",
+                parent=styles["Normal"],
+                fontName="Helvetica",
+                fontSize=8.5,
+                leading=11,
+                textColor=colors.HexColor(f"#{brand_muted}"),
+                spaceAfter=16,
+            )
+        )
+        styles.add(
+            ParagraphStyle(
+                name="KahleHeading1",
+                parent=styles["Heading1"],
+                fontName="Helvetica-Bold",
+                fontSize=15,
+                leading=19,
+                textColor=colors.HexColor(f"#{brand_blue}"),
+                spaceBefore=12,
+                spaceAfter=6,
+            )
+        )
+        styles.add(
+            ParagraphStyle(
+                name="KahleHeading2",
+                parent=styles["Heading2"],
+                fontName="Helvetica-Bold",
+                fontSize=12.5,
+                leading=16,
+                textColor=colors.HexColor(f"#{brand_ink}"),
+                spaceBefore=10,
+                spaceAfter=4,
+            )
+        )
+        styles.add(
+            ParagraphStyle(
+                name="KahleBody",
+                parent=styles["BodyText"],
+                fontName="Helvetica",
+                fontSize=9.7,
+                leading=13.5,
+                textColor=colors.HexColor(f"#{brand_ink}"),
+                spaceAfter=5,
+            )
+        )
+        styles.add(
+            ParagraphStyle(
+                name="KahleBullet",
+                parent=styles["KahleBody"],
+                leftIndent=12,
+                firstLineIndent=-8,
+            )
+        )
+
+        out = io.BytesIO()
+        doc = SimpleDocTemplate(
+            out,
+            pagesize=A4,
+            rightMargin=18 * mm,
+            leftMargin=18 * mm,
+            topMargin=24 * mm,
+            bottomMargin=18 * mm,
+            title=clean_title,
+            author="KAHLE-Vinci",
+        )
+
+        story: list[Any] = [
+            Paragraph(_markdown_inline_to_reportlab(clean_title), styles["KahleTitle"]),
+            Paragraph(f"Erstellt mit KAHLE-Vinci | Stand: {_generated_at_label()}", styles["KahleSubtitle"]),
+        ]
+
+        first_content_heading_seen = False
+        for stripped in _markdown_lines(content):
+            if not stripped:
+                story.append(Spacer(1, 4))
+                continue
+            if stripped.startswith("#"):
+                heading = stripped.lstrip("#").strip()
+                if not first_content_heading_seen and heading.lower() == clean_title.lower():
+                    first_content_heading_seen = True
+                    continue
+                first_content_heading_seen = True
+                level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 2)
+                story.append(Paragraph(_markdown_inline_to_reportlab(heading), styles[f"KahleHeading{level}"]))
+                continue
+            if stripped.startswith(("- ", "* ")):
+                story.append(Paragraph(f"&bull; {_markdown_inline_to_reportlab(stripped[2:].strip())}", styles["KahleBullet"]))
+                continue
+            story.append(Paragraph(_markdown_inline_to_reportlab(stripped), styles["KahleBody"]))
+
+        def draw_page(canvas: Any, _doc: Any) -> None:
+            canvas.saveState()
+            width, height = A4
+            canvas.setStrokeColor(colors.HexColor(f"#{brand_blue}"))
+            canvas.setLineWidth(0.6)
+            canvas.line(18 * mm, height - 17 * mm, width - 18 * mm, height - 17 * mm)
+            if _file_exists(KAHLE_LOGO_PRIMARY):
+                try:
+                    canvas.drawImage(
+                        str(KAHLE_LOGO_PRIMARY),
+                        width - 50 * mm,
+                        height - 16 * mm,
+                        width=32 * mm,
+                        height=11 * mm,
+                        preserveAspectRatio=True,
+                        mask="auto",
+                    )
+                except Exception:
+                    pass
+            canvas.setFillColor(colors.HexColor(f"#{brand_muted}"))
+            canvas.setFont("Helvetica", 7)
+            canvas.drawString(18 * mm, 10 * mm, "KAHLE-Vinci")
+            canvas.drawRightString(width - 18 * mm, 10 * mm, f"Seite {canvas.getPageNumber()}")
+            canvas.restoreState()
+
+        doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
+        rendered = out.getvalue()
+        return rendered
+    except Exception:
+        return None
+
+
+def _apply_pdf_template(rendered_pdf: bytes) -> Optional[bytes]:
+    """
+    Use the configured PDF as a page background and place generated content on top.
+    This preserves the deposited KAHLE PDF layout while keeping text generation deterministic.
+    """
+    if PdfReader is None or PdfWriter is None:
+        return None
+    if not rendered_pdf or not _file_exists(KAHLE_PDF_TEMPLATE):
+        return None
+
+    try:
+        template_reader = PdfReader(str(KAHLE_PDF_TEMPLATE))
+        content_reader = PdfReader(io.BytesIO(rendered_pdf))
+        if not template_reader.pages or not content_reader.pages:
+            return None
+
+        writer = PdfWriter()
+        last_template_index = len(template_reader.pages) - 1
+        for index, content_page in enumerate(content_reader.pages):
+            template_page = template_reader.pages[min(index, last_template_index)]
+            page = copy.copy(template_page)
+            page.merge_page(content_page)
+            writer.add_page(page)
+
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
 def _text_to_pdf_bytes(content: str, title: str = "Dokument") -> bytes:
     """
     Create a small text-only PDF with stdlib primitives.
     This is intentionally simple and dependable for downloadable briefs.
     """
+    branded = _text_to_reportlab_pdf_bytes(content, title)
+    if branded:
+        return branded
+
     title = (title or "Dokument").strip() or "Dokument"
     lines = _wrap_pdf_lines(_markdown_to_plain_lines(content, title), width=88)
     pages: list[list[str]] = []
@@ -641,6 +1071,279 @@ def _text_to_pdf_bytes(content: str, title: str = "Dokument") -> bytes:
         ).encode("ascii")
     )
     return bytes(out)
+
+
+def _clear_pptx_slides(prs: Any) -> None:
+    try:
+        slide_id_list = prs.slides._sldIdLst  # noqa: SLF001 - python-pptx has no public clear API.
+        for slide_id in list(slide_id_list):
+            r_id = slide_id.rId
+            prs.part.drop_rel(r_id)
+            slide_id_list.remove(slide_id)
+    except Exception:
+        pass
+
+
+def _remove_pptx_slides_after(prs: Any, keep_count: int) -> None:
+    try:
+        slide_id_list = prs.slides._sldIdLst  # noqa: SLF001 - python-pptx has no public remove API.
+        for slide_id in list(slide_id_list)[max(keep_count, 0) :]:
+            prs.part.drop_rel(slide_id.rId)
+            slide_id_list.remove(slide_id)
+    except Exception:
+        pass
+
+
+def _pick_pptx_layout(prs: Any, preferred_names: tuple[str, ...] = ()) -> Any:
+    for preferred in preferred_names:
+        for layout in prs.slide_layouts:
+            if preferred.lower() in (getattr(layout, "name", "") or "").lower():
+                return layout
+    for layout in prs.slide_layouts:
+        try:
+            if len(layout.placeholders) >= 1:
+                return layout
+        except Exception:
+            continue
+    return prs.slide_layouts[0]
+
+
+MAX_PPTX_SLIDES = 5
+MAX_PPTX_BULLETS_PER_SLIDE = 4
+MAX_PPTX_BULLET_CHARS = 115
+MAX_PPTX_TITLE_CHARS = 58
+
+
+def _shorten_pptx_text(text: str, max_chars: int = MAX_PPTX_BULLET_CHARS) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    compact = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", compact)
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 1].rstrip(" ,.;:-") + "..."
+
+
+def _fit_pptx_bullets(bullets: list[str]) -> list[str]:
+    fitted = [_shorten_pptx_text(str(b), MAX_PPTX_BULLET_CHARS) for b in bullets if str(b).strip()]
+    return fitted[:MAX_PPTX_BULLETS_PER_SLIDE]
+
+
+def _markdown_to_slide_specs(content: str, title: str = "Praesentation") -> list[dict[str, Any]]:
+    clean_title = (title or "Praesentation").strip() or "Praesentation"
+    specs: list[dict[str, Any]] = [
+        {
+            "title": _shorten_pptx_text(clean_title, MAX_PPTX_TITLE_CHARS),
+            "bullets": [f"Erstellt mit KAHLE-Vinci | Stand: {_generated_at_label()}"],
+        }
+    ]
+    current: Optional[dict[str, Any]] = None
+
+    for stripped in _markdown_lines(content):
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            heading = _shorten_pptx_text(stripped.lstrip("#").strip(), MAX_PPTX_TITLE_CHARS)
+            if heading.lower() == clean_title.lower():
+                continue
+            current = {"title": heading, "bullets": []}
+            specs.append(current)
+            continue
+        if current is None:
+            current = {"title": "Kernaussagen", "bullets": []}
+            specs.append(current)
+        if stripped.startswith(("- ", "* ")):
+            current["bullets"].append(stripped[2:].strip())
+        else:
+            current["bullets"].append(stripped)
+
+    expanded: list[dict[str, Any]] = []
+    for spec in specs:
+        bullets = [str(b).strip() for b in spec.get("bullets", []) if str(b).strip()]
+        if len(bullets) <= MAX_PPTX_BULLETS_PER_SLIDE:
+            expanded.append({"title": spec["title"], "bullets": _fit_pptx_bullets(bullets)})
+            continue
+        for idx in range(0, len(bullets), MAX_PPTX_BULLETS_PER_SLIDE):
+            suffix = "" if idx == 0 else f" ({idx // MAX_PPTX_BULLETS_PER_SLIDE + 1})"
+            expanded.append(
+                {
+                    "title": _shorten_pptx_text(f"{spec['title']}{suffix}", MAX_PPTX_TITLE_CHARS),
+                    "bullets": _fit_pptx_bullets(bullets[idx : idx + MAX_PPTX_BULLETS_PER_SLIDE]),
+                }
+            )
+    return expanded[:MAX_PPTX_SLIDES]
+
+
+def _set_shape_text(shape: Any, text: str, font_size: int = 20, bold: bool = False) -> None:
+    try:
+        from pptx.dml.color import RGBColor as PptxRGBColor  # type: ignore
+
+        brand_blue = _brand_value("colors", "blue", "0069B3")
+        text_frame = shape.text_frame
+        text_frame.clear()
+        paragraph = text_frame.paragraphs[0]
+        run = paragraph.add_run()
+        run.text = text or ""
+        run.font.size = Pt(font_size)
+        run.font.bold = bool(bold)
+        if bold:
+            run.font.color.rgb = PptxRGBColor(
+                int(brand_blue[0:2], 16), int(brand_blue[2:4], 16), int(brand_blue[4:6], 16)
+            )
+    except Exception:
+        try:
+            shape.text = text or ""
+        except Exception:
+            pass
+
+
+def _shape_key(shape: Any) -> int:
+    try:
+        return int(shape.shape_id)
+    except Exception:
+        return id(shape)
+
+
+def _shape_area(shape: Any) -> int:
+    try:
+        return int(shape.width) * int(shape.height)
+    except Exception:
+        return 0
+
+
+def _clear_shape_text(shape: Any) -> None:
+    try:
+        shape.text_frame.clear()
+    except Exception:
+        try:
+            shape.text = ""
+        except Exception:
+            pass
+
+
+def _prepare_template_slide_text_shapes(slide: Any) -> tuple[Any, Any]:
+    text_shapes = [shape for shape in slide.shapes if getattr(shape, "has_text_frame", False)]
+
+    title_shape = None
+    try:
+        if slide.shapes.title is not None and getattr(slide.shapes.title, "has_text_frame", False):
+            title_shape = slide.shapes.title
+    except Exception:
+        title_shape = None
+
+    if title_shape is None and text_shapes:
+        title_shape = sorted(
+            text_shapes,
+            key=lambda shape: (getattr(shape, "top", 0), -_shape_area(shape)),
+        )[0]
+
+    title_key = _shape_key(title_shape) if title_shape is not None else -1
+    body_candidates = [shape for shape in text_shapes if _shape_key(shape) != title_key]
+    body_shape = max(body_candidates, key=_shape_area) if body_candidates else None
+
+    keep = {_shape_key(shape) for shape in (title_shape, body_shape) if shape is not None}
+    for shape in text_shapes:
+        if _shape_key(shape) not in keep:
+            _clear_shape_text(shape)
+
+    return title_shape, body_shape
+
+
+PPTX_PLACEHOLDER_TEXTS = (
+    "Click to edit Master title style",
+    "Click to edit Master subtitle style",
+    "Click to edit Master text styles",
+    "Mastertextformat bearbeiten",
+    "Zweite Ebene",
+    "Dritte Ebene",
+    "Vierte Ebene",
+    "Fuenfte Ebene",
+    "Fünfte Ebene",
+)
+
+
+def _sanitize_pptx_template_artifacts(data: bytes) -> bytes:
+    """
+    Some PowerPoint templates contain visible sample text in slide masters.
+    Generated slides inherit that text unless it is removed from the package.
+    """
+    try:
+        src = io.BytesIO(data)
+        out = io.BytesIO()
+        with zipfile.ZipFile(src, "r") as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                payload = zin.read(item.filename)
+                if item.filename.startswith(("ppt/slideMasters/", "ppt/slideLayouts/")) and item.filename.endswith(".xml"):
+                    for placeholder in PPTX_PLACEHOLDER_TEXTS:
+                        payload = payload.replace(
+                            f"<a:t>{html.escape(placeholder)}</a:t>".encode("utf-8"),
+                            b"<a:t></a:t>",
+                        )
+                        payload = payload.replace(
+                            f"<a:t>{placeholder}</a:t>".encode("utf-8"),
+                            b"<a:t></a:t>",
+                        )
+                zout.writestr(item, payload)
+        return out.getvalue()
+    except Exception:
+        return data
+
+
+def _markdown_to_pptx_bytes(content: str, title: str = "Praesentation") -> Optional[bytes]:
+    if Presentation is None or Inches is None or Pt is None:
+        return None
+
+    try:
+        if _file_exists(KAHLE_PPTX_TEMPLATE):
+            prs = Presentation(str(KAHLE_PPTX_TEMPLATE))
+            _PPTX_TEMPLATE_USED.set(True)
+        else:
+            prs = Presentation()
+
+        prs.core_properties.author = "KAHLE-Vinci"
+        prs.core_properties.title = (title or "Praesentation").strip() or "Praesentation"
+
+        specs = _markdown_to_slide_specs(content, title)
+        for index, spec in enumerate(specs):
+            if index < len(prs.slides):
+                slide = prs.slides[index]
+            else:
+                layout = _pick_pptx_layout(prs, ("title", "titel") if index == 0 else ("content", "inhalt", "title"))
+                slide = prs.slides.add_slide(layout)
+
+            title_shape, body_shape = _prepare_template_slide_text_shapes(slide)
+            if title_shape is not None:
+                _set_shape_text(title_shape, spec["title"], font_size=26 if index == 0 else 22, bold=True)
+            else:
+                title_shape = slide.shapes.add_textbox(Inches(0.6), Inches(0.45), Inches(8.4), Inches(0.7))
+                _set_shape_text(title_shape, spec["title"], font_size=26 if index == 0 else 22, bold=True)
+
+            if body_shape is None:
+                body_shape = slide.shapes.add_textbox(Inches(0.8), Inches(1.45), Inches(8.2), Inches(4.6))
+
+            text_frame = body_shape.text_frame
+            text_frame.clear()
+            bullets = spec.get("bullets", []) or [" "]
+            for bullet_index, bullet in enumerate(bullets):
+                paragraph = text_frame.paragraphs[0] if bullet_index == 0 else text_frame.add_paragraph()
+                paragraph.text = str(bullet)
+                paragraph.level = 0
+                for run in paragraph.runs:
+                    run.font.size = Pt(18 if index == 0 else 15)
+
+            if index > 0:
+                try:
+                    footer = slide.shapes.add_textbox(Inches(0.6), Inches(6.85), Inches(8.5), Inches(0.25))
+                    footer.text = "KAHLE-Vinci"
+                    footer.text_frame.paragraphs[0].runs[0].font.size = Pt(8)
+                except Exception:
+                    pass
+
+        _remove_pptx_slides_after(prs, len(specs))
+
+        out = io.BytesIO()
+        prs.save(out)
+        return _sanitize_pptx_template_artifacts(out.getvalue())
+    except Exception:
+        return None
 
 
 def _sign_download(rel: str, exp: int) -> str:
@@ -757,7 +1460,9 @@ class TextApplyOpsSaveRequest(BaseModel):
 
 class PdfRemovePagesSaveRequest(BaseModel):
     file_path: NonEmptyStr = Field(..., description="Exact PDF filename in uploads")
-    remove_pages: list[int] = Field(..., description="1-based page numbers to remove, e.g. [1,2]")
+    remove_pages: Optional[list[int]] = Field(None, description="1-based page numbers to remove, e.g. [1,2]")
+    pages_to_remove: Optional[list[int]] = Field(None, description="Alias for remove_pages.")
+    remove_last_page: bool = Field(False, description="If true, remove the final page of the PDF.")
 
 
 class PdfMergeSaveRequest(BaseModel):
@@ -825,6 +1530,19 @@ class PdfCreateSaveRequest(BaseModel):
     title: str = Field("Dokument", description="Document title")
 
 
+class PptxCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field(..., description="Output filename ending in .pptx")
+    content: str = Field(
+        ...,
+        description=(
+            "Markdown/text content to render into a PowerPoint deck. "
+            "Use this when the user asks to create a presentation or PPTX from generated content. "
+            "Never leave this empty."
+        ),
+    )
+    title: str = Field("Praesentation", description="Presentation title")
+
+
 class CleanupOldFilesRequest(BaseModel):
     days: int = Field(15, ge=1, le=3650, description="Delete files older than this many days")
     dry_run: bool = Field(False, description="If true, list files only, do not delete")
@@ -864,6 +1582,19 @@ def health():
         "require_exact_file_path": REQUIRE_EXACT_FILE_PATH,
         "disallow_wildcards": DISALLOW_WILDCARDS,
         "recent_upload_disambiguation_seconds": RECENT_UPLOAD_DISAMBIGUATION_SECONDS,
+        "assets_root": str(KAHLE_ASSETS_ROOT),
+        "templates": {
+            "docx": _file_exists(KAHLE_DOCX_TEMPLATE),
+            "pdf": _file_exists(KAHLE_PDF_TEMPLATE),
+            "pptx": _file_exists(KAHLE_PPTX_TEMPLATE),
+            "logo": _file_exists(KAHLE_LOGO_PRIMARY),
+        },
+        "renderers": {
+            "python_docx": Document is not None,
+            "python_pptx": Presentation is not None,
+            "reportlab": SimpleDocTemplate is not None,
+            "pypdf": PdfReader is not None and PdfWriter is not None,
+        },
     }
 
 
@@ -1151,7 +1882,7 @@ def files_save_b64(payload: SaveB64Request, x_api_key: Optional[str] = Header(de
     return saved
 
 
-@app.post("/text/create_save", operation_id="text_create_save")
+@app.post("/text/create_save", operation_id="text_create_save", include_in_schema=False)
 def text_create_save(payload: TextCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
     """
     Create a downloadable Markdown/TXT/CSV file from model-generated text.
@@ -1173,7 +1904,7 @@ def text_create_save(payload: TextCreateSaveRequest, x_api_key: Optional[str] = 
     return saved
 
 
-@app.post("/docx/create_save", operation_id="docx_create_save")
+@app.post("/docx/create_save", operation_id="docx_create_save", include_in_schema=False)
 def docx_create_save(payload: DocxCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
     """
     Create a simple downloadable DOCX from model-generated Markdown/text.
@@ -1185,6 +1916,7 @@ def docx_create_save(payload: DocxCreateSaveRequest, x_api_key: Optional[str] = 
     if not out_name.lower().endswith(".docx"):
         out_name = f"{out_name}.docx"
 
+    _DOCX_TEMPLATE_USED.set(False)
     data = _markdown_to_docx_bytes(payload.content, payload.title)
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
@@ -1192,10 +1924,11 @@ def docx_create_save(payload: DocxCreateSaveRequest, x_api_key: Optional[str] = 
     saved = _save_bytes(out_name, data)
     saved["content_type"] = DOCX_MIME
     saved["conversion"] = "markdown_to_docx"
+    saved["template_used"] = bool(_DOCX_TEMPLATE_USED.get())
     return saved
 
 
-@app.post("/pdf/create_save", operation_id="pdf_create_save")
+@app.post("/pdf/create_save", operation_id="pdf_create_save", include_in_schema=False)
 def pdf_create_save(payload: PdfCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
     """
     Create a simple downloadable PDF from model-generated Markdown/text.
@@ -1207,6 +1940,7 @@ def pdf_create_save(payload: PdfCreateSaveRequest, x_api_key: Optional[str] = He
     if not out_name.lower().endswith(".pdf"):
         out_name = f"{out_name}.pdf"
 
+    _PDF_TEMPLATE_USED.set(False)
     data = _text_to_pdf_bytes(payload.content, payload.title)
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
@@ -1214,6 +1948,33 @@ def pdf_create_save(payload: PdfCreateSaveRequest, x_api_key: Optional[str] = He
     saved = _save_bytes(out_name, data)
     saved["content_type"] = PDF_MIME
     saved["conversion"] = "markdown_to_pdf"
+    saved["template_used"] = bool(_PDF_TEMPLATE_USED.get())
+    return saved
+
+
+@app.post("/pptx/create_save", operation_id="pptx_create_save", include_in_schema=False)
+def pptx_create_save(payload: PptxCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    """
+    Create a downloadable PPTX deck from model-generated Markdown/text.
+    Uses the KAHLE PowerPoint template when available.
+    """
+    _require_api_key(x_api_key)
+
+    out_name = _sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".pptx"):
+        out_name = f"{out_name}.pptx"
+
+    _PPTX_TEMPLATE_USED.set(False)
+    data = _markdown_to_pptx_bytes(payload.content, payload.title)
+    if not data:
+        raise HTTPException(status_code=500, detail="pptx_renderer_unavailable")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
+
+    saved = _save_bytes(out_name, data)
+    saved["content_type"] = PPTX_MIME
+    saved["conversion"] = "markdown_to_pptx"
+    saved["template_used"] = bool(_PPTX_TEMPLATE_USED.get())
     return saved
 
 
@@ -1429,24 +2190,32 @@ def docx_to_pdf_save(payload: DocxToPdfSaveRequest, x_api_key: Optional[str] = H
     path = _resolve_path(payload.file_path, allowed_exts=(".docx",), require_exact=True)
     data = _read_file(path)
 
-    files = {"file": (path.name, data, DOCX_MIME)}
     out_name = payload.output_name or f"{Path(path.name).stem}.pdf"
     if not out_name.lower().endswith(".pdf"):
         out_name = f"{out_name}.pdf"
 
+    title = Path(path.name).stem or "Konvertiert"
+    files = [("files", (path.name, data, DOCX_MIME))]
     r = requests.post(
-        f"{DOC_WORKER_URL}/docx/to_pdf",
+        f"{DOC_WORKER_URL}/bundle/to_md",
         headers=_worker_headers(),
         files=files,
-        data={"filename": out_name},
+        data={"title": title, "mode": "raw"},
         timeout=300,
     )
     _raise_for_worker_response(r)
 
-    saved = _save_bytes(out_name, r.content)
+    markdown = r.content.decode("utf-8", errors="replace")
+    _PDF_TEMPLATE_USED.set(False)
+    out = _text_to_pdf_bytes(markdown, title)
+    if len(out) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
+
+    saved = _save_bytes(out_name, out)
     saved["content_type"] = PDF_MIME
     saved["source_file"] = str(path.name)
-    saved["conversion"] = "docx_to_pdf"
+    saved["conversion"] = "docx_to_pdf_branded"
+    saved["template_used"] = bool(_PDF_TEMPLATE_USED.get())
     return saved
 
 
@@ -1521,26 +2290,44 @@ def file_to_docx_save(payload: FileToDocxSaveRequest, x_api_key: Optional[str] =
         out_name = f"{out_name}.docx"
 
     markdown = r.content.decode("utf-8", errors="replace")
+    _DOCX_TEMPLATE_USED.set(False)
     out = _markdown_to_docx_bytes(markdown, title)
     saved = _save_bytes(out_name, out)
     saved["content_type"] = DOCX_MIME
     saved["source_file"] = str(path.name)
     saved["conversion"] = "file_to_docx"
+    saved["template_used"] = bool(_DOCX_TEMPLATE_USED.get())
     return saved
 
 
 # -----------------------------
 # PDF: remove_pages_save + merge_save (new)
 # -----------------------------
+def _infer_last_pdf_page(pdf_bytes: bytes) -> int:
+    if PdfReader is None:
+        raise HTTPException(status_code=500, detail="pdf_page_count_unavailable")
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        count = len(reader.pages)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"pdf_page_count_failed: {exc}")
+    if count < 1:
+        raise HTTPException(status_code=400, detail="pdf_has_no_pages")
+    return count
+
+
 @app.post("/pdf/remove_pages_save", operation_id="pdf_remove_pages_save")
 def pdf_remove_pages_save(payload: PdfRemovePagesSaveRequest, x_api_key: Optional[str] = Header(default=None)):
     _require_api_key(x_api_key)
 
     path = _resolve_path(payload.file_path, allowed_exts=(".pdf",), require_exact=True)
     data = _read_file(path)
+    remove_pages = payload.remove_pages or payload.pages_to_remove or []
+    if not remove_pages or payload.remove_last_page:
+        remove_pages = [_infer_last_pdf_page(data)]
 
     files = {"file": (path.name, data, PDF_MIME)}
-    form = {"remove_pages_json": json.dumps(payload.remove_pages)}
+    form = {"remove_pages_json": json.dumps(remove_pages)}
 
     r = requests.post(
         f"{DOC_WORKER_URL}/pdf/remove_pages",
@@ -1555,7 +2342,7 @@ def pdf_remove_pages_save(payload: PdfRemovePagesSaveRequest, x_api_key: Optiona
     saved = _save_bytes(out_name, r.content)
     saved["content_type"] = PDF_MIME
     saved["source_file"] = str(path.name)
-    saved["removed_pages"] = payload.remove_pages
+    saved["removed_pages"] = remove_pages
     return saved
 
 

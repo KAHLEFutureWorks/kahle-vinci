@@ -78,9 +78,10 @@ services:
        - generated research/text -> markdown/txt/csv download: text_create_save
        - generated research/text -> Word/DOCX download: docx_create_save
        - generated research/text -> PDF download: pdf_create_save
+       - generated research/text -> PowerPoint/PPTX download: pptx_create_save
        - Creating a new file from research/result/answer/history never requires an uploaded filename.
-       - If one user request combines research/web/RAG AND a downloadable PDF/DOCX/MD output, prefer kahle_workflow_execute once and set output_format to "pdf", "docx", or "md". Do not split this into separate search and file tools.
-       - For docx_create_save/pdf_create_save/text_create_save, parameters MUST include filename and content. Never call these tools with {}.
+       - If one user request combines research/web/RAG AND a downloadable PDF/DOCX/PPTX/MD output, prefer kahle_workflow_execute once and set output_format to "pdf", "docx", "pptx", or "md". Do not split this into separate search and file tools.
+       - For docx_create_save/pdf_create_save/pptx_create_save/text_create_save, parameters MUST include filename and content. Never call these tools with {}.
        - If the user asks to create a file "from the result", "from this", or "from the previous answer", set content to the full relevant ASSISTANT message from History.
        - If no relevant generated content exists in History, return {"tool_calls":[]} and ask what content should be put into the file.
        - DOCX -> PDF: docx_to_pdf_save
@@ -108,6 +109,8 @@ services:
       - open-webui:/app/backend/data
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/kb-sync-state:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/middleware.py:/app/backend/open_webui/utils/middleware.py:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/misc.py:/app/backend/open_webui/utils/misc.py:ro"
     depends_on:
       document-worker:
         condition: service_healthy
@@ -139,10 +142,17 @@ services:
       OWUI_LOG_CLEANUP_STALE_HOURS: "36"
       FILE_LINK_SECRET: ${FILE_LINK_SECRET:?FILE_LINK_SECRET is required}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8091}
+      KAHLE_ASSETS_ROOT: /assets
+      KAHLE_DOCX_TEMPLATE: /assets/templates/docx/KAHLE-DOCX-VORLAGE.docx
+      KAHLE_PDF_TEMPLATE: /assets/templates/pdf/KAHLE-PDF-VORLAGE.pdf
+      KAHLE_PPTX_TEMPLATE: /assets/templates/pptx/KAHLE-PPTX-Vorlage.pptx
+      KAHLE_BRAND_CONFIG: /assets/brand/colors/kahle-brand.json
+      KAHLE_LOGO_PRIMARY: /assets/brand/logos/Logo_Kahle_Gruppe_positiv.png
     ports:
       - "127.0.0.1:8091:8091"
     volumes:
       - open-webui:/app/backend/data
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/assets:/assets:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/retention-reports:/retention-reports:ro"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=5).getcode()==200 else 1)"]

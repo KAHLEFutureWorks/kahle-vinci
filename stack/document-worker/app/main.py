@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,6 +46,7 @@ if not log.handlers:
 
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "30"))
 MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
+USE_MARKITDOWN = os.getenv("USE_MARKITDOWN", "true").lower() == "true"
 
 
 # ----------------------------
@@ -96,6 +98,217 @@ def _decode_text(b: bytes) -> str:
         return b.decode("latin-1", errors="replace")
 
 
+_MOJIBAKE_MARKERS = ("Ã", "Â", "â€", "â€“", "â€”", "â€¢", "ðŸ")
+
+
+def _mojibake_score(text: str) -> int:
+    return sum((text or "").count(marker) for marker in _MOJIBAKE_MARKERS)
+
+
+def _repair_mojibake(text: str) -> str:
+    """
+    Fix common UTF-8 text that was decoded as Windows-1252, e.g. "fÃ¼r" -> "für".
+    PDF extractors can emit this when source PDFs carry malformed font encodings.
+    """
+    if not text or _mojibake_score(text) == 0:
+        return text or ""
+
+    best = text
+    best_score = _mojibake_score(text)
+    for encoding in ("cp1252", "latin-1"):
+        try:
+            candidate = text.encode(encoding).decode("utf-8")
+        except Exception:
+            continue
+        score = _mojibake_score(candidate)
+        if score < best_score:
+            best = candidate
+            best_score = score
+
+    return best
+
+
+def _fix_letter_spaced_words(text: str) -> str:
+    letters = r"A-Za-zÄÖÜäöüß"
+
+    def join_letter_spaced(match: re.Match[str]) -> str:
+        return re.sub(r"\s+", "", match.group(0))
+
+    # "A r b e i t s a n w e i s u n g" -> "Arbeitsanweisung"
+    text = re.sub(rf"(?<![\w])(?:[{letters}][ \t]+){{3,}}[{letters}](?![\w])", join_letter_spaced, text)
+
+    # "E -Mails", "CRM -Manager" -> "E-Mails", "CRM-Manager"
+    text = re.sub(rf"([{letters}0-9])[ \t]+-[ \t]*([{letters}0-9])", r"\1-\2", text)
+
+    # "e uch", "f ür", "K AHLE" -> "euch", "für", "KAHLE".
+    # The left side must be an isolated single-letter fragment; never join
+    # normal word pairs such as "für euch".
+    text = re.sub(r"(?<!\S)([^\W\d_])[ \t]+([^\W\d_]{2,})\b", r"\1\2", text)
+
+    def join_short_left(match: re.Match[str]) -> str:
+        left, right = match.group(1), match.group(2)
+        if right[:1].islower() and len(left) <= 5:
+            return left + right
+        return f"{left} {right}"
+
+    # "Auf  gaben" -> "Aufgaben", but keep "After  Sales".
+    text = re.sub(rf"\b([{letters}]{{2,5}})[ \t]{{2,}}([{letters}]{{2,}})\b", join_short_left, text)
+
+    def join_short_suffix(match: re.Match[str]) -> str:
+        left, right = match.group(1), match.group(2)
+        if right in {"t", "gt", "d", "st", "et", "en", "er"}:
+            return left + right
+        return f"{left} {right}"
+
+    # "Le gt", "Denk t", "wend et" -> "Legt", "Denkt", "wendet".
+    text = re.sub(rf"\b([{letters}]{{2,12}})[ \t]+([a-zäöüß]{{1,2}})\b", join_short_suffix, text)
+    return text
+
+
+def _normalize_extracted_text(text: str, *, paragraphize: bool = False) -> str:
+    text = _repair_mojibake(text or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _fix_letter_spaced_words(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" +([,.;:!?])", r"\1", text)
+    text = re.sub(r"(?m)^(\d+)\.(?=\S)", r"\1. ", text)
+    text = re.sub(r"(?m)^[•]\s*", "- ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if not paragraphize:
+        return text
+    return _paragraphize_extracted_text(text)
+
+
+def _is_markdown_structural_line(line: str) -> bool:
+    if not line:
+        return True
+    if line.startswith("#"):
+        return True
+    if _is_markdown_list_line(line):
+        return True
+    if re.match(r"^\|.*\|$", line):
+        return True
+    if len(line) <= 90 and line.endswith(":"):
+        return True
+    return False
+
+
+def _is_markdown_list_line(line: str) -> bool:
+    return bool(re.match(r"^([-*+]|\d+[.)])\s+", line or ""))
+
+
+def _line_ends_sentence(line: str) -> bool:
+    return bool(re.search(r"[.!?;:)\"”]$", (line or "").strip()))
+
+
+def _paragraphize_extracted_text(text: str) -> str:
+    """
+    PDF text extraction often returns visual line wraps instead of paragraphs.
+    This keeps lists/headings intact and folds consecutive prose lines into paragraphs.
+    """
+    out: List[str] = []
+    buffer: List[str] = []
+    list_item: Optional[str] = None
+    list_item_had_blank = False
+
+    def flush() -> None:
+        if not buffer:
+            return
+        out.append(" ".join(buffer).strip())
+        buffer.clear()
+
+    def flush_list_item() -> None:
+        nonlocal list_item, list_item_had_blank
+        if list_item:
+            out.append(re.sub(r"\s+", " ", list_item).strip())
+            list_item = None
+        list_item_had_blank = False
+
+    for raw in (text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            if list_item:
+                list_item_had_blank = True
+                continue
+            if buffer and not _line_ends_sentence(buffer[-1]):
+                continue
+            flush()
+            if out and out[-1] != "":
+                out.append("")
+            continue
+
+        if _is_markdown_list_line(line):
+            flush()
+            flush_list_item()
+            list_item = line
+            list_item_had_blank = False
+            continue
+
+        if list_item:
+            if _is_markdown_structural_line(line):
+                flush_list_item()
+                out.append(line)
+            elif list_item_had_blank and _line_ends_sentence(list_item):
+                flush_list_item()
+                buffer.append(line)
+            else:
+                list_item = f"{list_item} {line}"
+                list_item_had_blank = False
+            continue
+
+        if buffer and not _line_ends_sentence(buffer[-1]) and not (
+            line.startswith("#") or _is_markdown_list_line(line) or re.match(r"^\|.*\|$", line)
+        ):
+            buffer.append(line)
+            continue
+
+        if _is_markdown_structural_line(line):
+            flush()
+            out.append(line)
+            continue
+
+        buffer.append(line)
+
+    flush_list_item()
+    flush()
+    cleaned = "\n".join(out)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _extract_text_markitdown(filename: str, content: bytes) -> Optional[str]:
+    if not USE_MARKITDOWN:
+        return None
+
+    ext = _guess_ext(filename)
+    if ext not in ("pdf", "docx", "xlsx", "xlsm"):
+        return None
+
+    try:
+        from markitdown import MarkItDown  # type: ignore
+    except Exception:
+        return None
+
+    suffix = f".{ext}" if ext else ""
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(content)
+            tmp_name = tmp.name
+        result = MarkItDown().convert(tmp_name)
+        converted = getattr(result, "text_content", "") or ""
+        converted = converted.strip()
+        return converted or None
+    except Exception:
+        return None
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except Exception:
+                pass
+
+
 def _extract_text_docx(docx_bytes: bytes) -> str:
     # Extract plain text from DOCX using python-docx
     try:
@@ -121,7 +334,7 @@ def _extract_text_docx(docx_bytes: bytes) -> str:
             if any(row_cells):
                 parts.append(" | ".join(row_cells))
 
-    return "\n".join(parts).strip()
+    return _normalize_extracted_text("\n".join(parts).strip(), paragraphize=False)
 
 
 def _extract_text_pdf(pdf_bytes: bytes) -> str:
@@ -138,7 +351,8 @@ def _extract_text_pdf(pdf_bytes: bytes) -> str:
         except Exception:
             txt = ""
         if txt.strip():
-            out.append(f"## Seite {i+1}\n{txt.strip()}")
+            page_text = _normalize_extracted_text(txt, paragraphize=True)
+            out.append(f"## Seite {i+1}\n{page_text}")
     return "\n\n".join(out).strip()
 
 
@@ -171,7 +385,7 @@ def _extract_text_xlsx(xlsx_bytes: bytes, max_rows: int = 200, max_cols: int = 5
             out.append("\t".join(vals))
         out.append("")  # blank line between sheets
 
-    return "\n".join(out).strip()
+    return _normalize_extracted_text("\n".join(out).strip(), paragraphize=False)
 
 
 def _guess_ext(filename: str) -> str:
@@ -184,8 +398,12 @@ def _guess_ext(filename: str) -> str:
 def _extract_text_by_ext(filename: str, content: bytes) -> Tuple[str, str]:
     ext = _guess_ext(filename)
 
+    markitdown_text = _extract_text_markitdown(filename, content)
+    if markitdown_text is not None:
+        return ext or "unknown", _normalize_extracted_text(markitdown_text, paragraphize=(ext == "pdf"))
+
     if ext in ("txt", "md", "csv"):
-        return ext, _decode_text(content).strip()
+        return ext, _normalize_extracted_text(_decode_text(content).strip(), paragraphize=False)
 
     if ext == "docx":
         return ext, _extract_text_docx(content)

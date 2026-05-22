@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 
 try:
     import requests
@@ -32,12 +33,74 @@ def _collapse_ws(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
 
+def _coerce_message_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if text and text[0] in "[{":
+            try:
+                return _coerce_message_text(json.loads(text))
+            except Exception:
+                return text
+        return text
+    if isinstance(value, dict):
+        if isinstance(value.get("content"), str):
+            return value["content"].strip()
+        if isinstance(value.get("text"), str):
+            return value["text"].strip()
+        if isinstance(value.get("content"), list):
+            return _coerce_message_text(value.get("content"))
+        return ""
+    if isinstance(value, list):
+        return "\n".join(filter(None, (_coerce_message_text(item) for item in value))).strip()
+    return str(value).strip()
+
+
+def _latest_user_message(chat_id: str | None) -> str:
+    chat_id = (chat_id or "").strip()
+    if not chat_id:
+        return ""
+    db_path = os.getenv("OWUI_DB_PATH", "/app/backend/data/webui.db")
+    if not db_path or not os.path.exists(db_path):
+        return ""
+    try:
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            """
+            select content
+            from chat_message
+            where chat_id = ? and role = 'user'
+            order by coalesce(created_at, 0) desc, coalesce(updated_at, 0) desc
+            limit 1
+            """,
+            (chat_id,),
+        ).fetchone()
+    except Exception:
+        return ""
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    return _coerce_message_text(row["content"] if row else "")
+
+
 def _clean_user_query(query: str) -> str:
     q = str(query or "").strip()
     q = re.sub(r"Attached files in this message.*", " ", q, flags=re.IGNORECASE | re.DOTALL)
     q = re.sub(r"https?://\S+", " ", q)
+    q = re.sub(r'"([^"]+)"', r" \1 ", q)
     q = STOP_PHRASES_RE.sub(" ", q)
     q = re.sub(r"\b(zu|zum|zur|ueber|über|ueber den|ueber die|ueber das|über den|über die|über das)\b", " ", q, flags=re.IGNORECASE)
+    q = re.sub(
+        r"\b(daraus|liste|ueberschrift|überschrift|ganz(e|en)?|worddatei|word-datei|pdf-datei|"
+        r"sortiere|sortieren|mitarbeiter|erklaerung|erklärung)\b",
+        " ",
+        q,
+        flags=re.IGNORECASE,
+    )
     q = re.sub(r"[?!.:,;]+", " ", q)
     return _collapse_ws(q)
 
@@ -55,6 +118,10 @@ def build_search_query(query: str) -> str:
         cleaned = "Claude AI Anthropic Modelle Funktionen Preise Enterprise Vergleich"
     elif re.search(r"\bcupra\b", lower) and re.search(r"\btindaya\b", lower):
         cleaned = "CUPRA Tindaya Konzeptfahrzeug offizielle Informationen technische Daten Design Marktstart"
+    elif re.search(r"\bbarilla\b", lower) and re.search(r"\bpesto\b", lower):
+        cleaned = "Barilla Pesto Sorten Deutschland aktuell 2026"
+    elif re.search(r"\bspaghetti\b", lower) and re.search(r"\b(hergestellt|herstellung|herstell|produzier|fertigung|gemacht)\w*", lower):
+        cleaned = "Spaghetti Herstellung Hartweizen Pasta Produktion Schritte"
     elif re.search(r"\bki\b", lower) and re.search(r"\b(news|nachrichten)\b", original_lower):
         cleaned = "aktuelle KI News OpenAI Anthropic Google Meta Microsoft EU AI Act"
     elif re.search(r"\bki\b", lower) and re.search(r"\brichtlin", lower):
@@ -247,6 +314,7 @@ class Tools:
         lang: str = "de-DE",
         maxResults: int = 5,
         userName: str = "",
+        __chat_id__: str = None,
         __user__: dict = None,
         **kwargs,
     ) -> str:
@@ -261,6 +329,8 @@ class Tools:
         if requests is None:
             return f"{FINAL_PREFIX}Python package requests is not available{FINAL_SUFFIX}"
 
+        if not str(query or "").strip():
+            query = _latest_user_message(__chat_id__)
         if not str(query or "").strip():
             return "Bitte nenne ein konkretes Suchthema."
 

@@ -208,13 +208,14 @@ def _collection_report(collection: str) -> dict[str, Any]:
 
 
 class Tools:
-    async def kb_status(self, collection: str = "") -> str:
+    async def kb_status(self, collection: str = "", collection_name: str = "") -> str:
         """
         Erstellt einen Admin-Statusbericht fuer eine oder alle KAHLE Knowledgebase-Collections.
 
         :param collection: Optional kahleallgemein, kahlekontext oder kahlerichtlinien. Leer = alle Collections.
         """
         try:
+            collection = collection or collection_name
             selected = [collection.strip()] if collection.strip() else _collections()
             reports = [_collection_report(name) for name in selected]
             summary = {
@@ -240,7 +241,52 @@ class Tools:
         except Exception as exc:
             return _json({"ok": False, "error": str(exc)})
 
-    async def kb_file_status(self, collection: str, filename_contains: str) -> str:
+    async def kb_list_files(self, collection: str = "", collection_name: str = "") -> str:
+        """
+        Listet die aktuell erkannten Dateien einer oder aller KAHLE Knowledgebase-Collections.
+
+        :param collection: Optional kahleallgemein, kahlekontext oder kahlerichtlinien. Leer = alle Collections.
+        """
+        try:
+            collection = collection or collection_name
+            selected = [collection.strip()] if collection.strip() else _collections()
+            reports = [_collection_report(name) for name in selected]
+            collections = []
+            for report in reports:
+                collections.append(
+                    {
+                        "collection": report["collection"],
+                        "count": len(report["files"]),
+                        "filesystem_files": report["filesystem_files"],
+                        "qdrant_docs": report["qdrant_docs"],
+                        "state_files": report["state_files"],
+                        "last_reconcile_at": report["last_reconcile_at"],
+                        "issue_counts": {key: len(value) for key, value in report["issues"].items()},
+                        "files": report["files"],
+                    }
+                )
+            return _json(
+                {
+                    "ok": True,
+                    "collection": selected[0] if len(selected) == 1 else "",
+                    "count": sum(item["count"] for item in collections),
+                    "collections": collections,
+                    "files": collections[0]["files"] if len(collections) == 1 else [],
+                }
+            )
+        except Exception as exc:
+            return _json({"ok": False, "error": str(exc)})
+
+    async def kb_file_status(
+        self,
+        collection: str = "",
+        filename_contains: str = "",
+        collection_name: str = "",
+        file_name_contains: str = "",
+        filename: str = "",
+        file_name: str = "",
+        source_path: str = "",
+    ) -> str:
         """
         Prueft eine Datei oder einen Dateinamen-Ausschnitt in einer Knowledgebase.
 
@@ -248,6 +294,8 @@ class Tools:
         :param filename_contains: Teil des Dateinamens oder Pfads.
         """
         try:
+            collection = collection or collection_name
+            filename_contains = filename_contains or file_name_contains or filename or file_name or source_path
             needle = str(filename_contains or "").strip().lower()
             if not needle:
                 raise ValueError("filename_contains darf nicht leer sein")
@@ -266,12 +314,13 @@ class Tools:
         except Exception as exc:
             return _json({"ok": False, "error": str(exc)})
 
-    async def kb_reindex_hint(self, collection: str = "") -> str:
+    async def kb_reindex_hint(self, collection: str = "", collection_name: str = "") -> str:
         """
         Gibt sichere Hinweise, wie eine Knowledgebase neu indiziert werden kann. Fuehrt keinen Reindex aus.
 
         :param collection: Optional Collection-Name.
         """
+        collection = collection or collection_name
         selected = collection.strip() or "alle Collections"
         return _json(
             {

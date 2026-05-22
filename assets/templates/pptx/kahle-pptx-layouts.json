@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "default_template": "/assets/templates/pptx/KAHLE-PPTX-Vorlage.pptx",
+  "image_categories": {
+    "fuehrungsleitlinien": "/assets/presentation-images/fuehrungsleitlinien",
+    "unternehmensinhalte": "/assets/presentation-images/unternehmensinhalte",
+    "autohaus": "/assets/presentation-images/autohaus",
+    "neutral": "/assets/presentation-images/neutral"
+  },
+  "slide_types": [
+    {
+      "name": "cover",
+      "purpose": "Titel, Anlass, Datum"
+    },
+    {
+      "name": "section",
+      "purpose": "Neuer Abschnitt mit starker Kernbotschaft"
+    },
+    {
+      "name": "content",
+      "purpose": "Kernaussage mit 3-5 Stichpunkten"
+    },
+    {
+      "name": "comparison",
+      "purpose": "Gegenueberstellung, Bewertung, Gap-Analyse"
+    },
+    {
+      "name": "next_steps",
+      "purpose": "Konkrete naechste Schritte oder Handlungsempfehlung"
+    }
+  ]
+}
