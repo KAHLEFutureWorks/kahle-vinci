@@ -6,21 +6,30 @@ body.kahle-branding-ready {
   --kahle-brand-blue: #0071bc;
 }
 
-body.kahle-branding-ready #app {
+body.kahle-branding-ready::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.84)),
     var(--kahle-chat-background);
   background-position: center center;
   background-repeat: no-repeat;
   background-size: min(92vw, 1760px) auto;
-  background-attachment: fixed;
 }
 
-.dark body.kahle-branding-ready #app,
-body.kahle-branding-ready.dark #app {
+.dark body.kahle-branding-ready::before,
+body.kahle-branding-ready.dark::before {
   background-image:
     linear-gradient(rgba(18, 18, 18, 0.86), rgba(18, 18, 18, 0.86)),
     var(--kahle-chat-background);
+}
+
+body.kahle-branding-ready > * {
+  position: relative;
+  z-index: 1;
 }
 
 body.kahle-branding-ready img[src$="/static/favicon.png"],

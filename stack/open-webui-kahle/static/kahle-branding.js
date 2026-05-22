@@ -27,6 +27,8 @@
 
   let isPrivileged = false;
   let authLoaded = false;
+  let accessLoadInFlight = false;
+  let lastAccessLoadAt = 0;
 
   const jsonFetch = async (url) => {
     const response = await fetch(url, {
@@ -40,6 +42,11 @@
   };
 
   const loadAccess = async () => {
+    if (accessLoadInFlight) {
+      return;
+    }
+    accessLoadInFlight = true;
+    lastAccessLoadAt = Date.now();
     try {
       const user = await jsonFetch("/api/v1/auths/");
       if (user?.role === "admin") {
@@ -52,9 +59,16 @@
     } catch {
       isPrivileged = false;
     } finally {
+      accessLoadInFlight = false;
       authLoaded = true;
       document.body.classList.toggle("kahle-hide-advanced-settings", !isPrivileged);
       applyBranding();
+    }
+  };
+
+  const refreshAccessSoon = () => {
+    if (Date.now() - lastAccessLoadAt > 2500) {
+      void loadAccess();
     }
   };
 
@@ -111,6 +125,7 @@
     replaceLogoImages();
     applyBackgroundFallback();
     hideMatchingLabels();
+    refreshAccessSoon();
   };
 
   const observer = new MutationObserver(() => {
@@ -121,6 +136,9 @@
     applyBranding();
     observer.observe(document.documentElement, { childList: true, subtree: true });
     loadAccess();
+    window.addEventListener("focus", loadAccess);
+    window.addEventListener("popstate", loadAccess);
+    window.setInterval(refreshAccessSoon, 5000);
   };
 
   if (document.readyState === "loading") {
