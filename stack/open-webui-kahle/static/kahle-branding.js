@@ -24,13 +24,6 @@
     "system-prompt",
     "system prompt"
   ]);
-  const CHAT_MARKERS = [
-    "wie kann ich ihnen heute helfen",
-    "how can i help",
-    "vorgeschlagen",
-    "suggested"
-  ];
-
   let isPrivileged = false;
   let authLoaded = false;
   let accessLoadInFlight = false;
@@ -182,95 +175,15 @@
     });
   };
 
-  const ensureBackgroundLayer = () => {
-    let layer = document.getElementById("kahle-chat-background-layer");
-    if (!layer) {
-      layer = document.createElement("div");
-      layer.id = "kahle-chat-background-layer";
-      layer.setAttribute("aria-hidden", "true");
-      document.body.prepend(layer);
-    }
+  const applyBackgroundFallback = () => {
     document.documentElement.style.setProperty("--kahle-chat-background", `url("${BACKGROUND_URL}")`);
     document.body.classList.add("kahle-branding-ready");
-  };
-
-  const findSidebarRight = () => {
-    const candidates = Array.from(document.querySelectorAll("aside, nav, [class*='sidebar'], div")).filter((element) => {
-      const rect = element.getBoundingClientRect();
-      const text = normalizedTextOf(element);
-      return (
-        rect.left <= 2 &&
-        rect.width >= 48 &&
-        rect.width <= 360 &&
-        rect.height >= window.innerHeight * 0.45 &&
-        (text.includes("neuer chat") || text.includes("new chat") || text.includes("modelle") || text.includes("chats"))
-      );
+    document.body.classList.remove("kahle-chat-background-active");
+    document.getElementById("kahle-chat-background-layer")?.remove();
+    document.querySelectorAll("[data-kahle-chat-transparent], [data-kahle-app-foreground]").forEach((element) => {
+      element.removeAttribute("data-kahle-chat-transparent");
+      element.removeAttribute("data-kahle-app-foreground");
     });
-    const sidebar = candidates.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0];
-    return Math.max(0, Math.round(sidebar?.getBoundingClientRect?.().right || 0));
-  };
-
-  const findChatAnchor = () => {
-    const textarea = Array.from(document.querySelectorAll("textarea")).find((element) => {
-      const value = normalizeLabel(element.getAttribute("placeholder") || element.getAttribute("aria-label") || "");
-      return CHAT_MARKERS.some((marker) => value.includes(marker));
-    });
-    if (textarea) {
-      return textarea;
-    }
-
-    return Array.from(document.querySelectorAll("main, div, section")).find((element) => {
-      const rect = element.getBoundingClientRect();
-      const text = normalizedTextOf(element);
-      return (
-        rect.width >= window.innerWidth * 0.4 &&
-        rect.height >= window.innerHeight * 0.35 &&
-        CHAT_MARKERS.some((marker) => text.includes(marker))
-      );
-    });
-  };
-
-  const findAppRoot = () =>
-    Array.from(document.body.children)
-      .filter((element) => element.id !== "kahle-chat-background-layer")
-      .sort((a, b) => {
-        const aRect = a.getBoundingClientRect();
-        const bRect = b.getBoundingClientRect();
-        return bRect.width * bRect.height - aRect.width * aRect.height;
-      })[0];
-
-  const markChatBackgroundSurface = () => {
-    const sidebarRight = findSidebarRight();
-    document.body.style.setProperty("--kahle-chat-background-left", `${sidebarRight}px`);
-    const appRoot = findAppRoot();
-    setAttributeIfChanged(appRoot, "data-kahle-app-foreground", "true");
-
-    const anchor = findChatAnchor();
-    if (!anchor) {
-      document.body.classList.remove("kahle-chat-background-active");
-      return;
-    }
-
-    document.body.classList.add("kahle-chat-background-active");
-    setAttributeIfChanged(appRoot, "data-kahle-chat-transparent", "true");
-
-    let current = anchor;
-    while (current?.parentElement && current !== document.body) {
-      const rect = current.getBoundingClientRect();
-      if (
-        rect.right > sidebarRight + 200 &&
-        rect.width >= window.innerWidth * 0.35 &&
-        rect.height >= window.innerHeight * 0.35
-      ) {
-        setAttributeIfChanged(current, "data-kahle-chat-transparent", "true");
-      }
-      current = current.parentElement;
-    }
-  };
-
-  const applyBackgroundFallback = () => {
-    ensureBackgroundLayer();
-    markChatBackgroundSurface();
   };
 
   const applyBranding = () => {
@@ -290,7 +203,6 @@
     observer.observe(document.documentElement, { childList: true, subtree: true });
     loadAccess();
     window.addEventListener("focus", loadAccess);
-    window.addEventListener("resize", applyBranding);
     window.addEventListener("popstate", loadAccess);
     window.setInterval(refreshAccessSoon, 5000);
   };

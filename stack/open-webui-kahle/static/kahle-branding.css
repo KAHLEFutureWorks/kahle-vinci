@@ -4,40 +4,35 @@
 
 body.kahle-branding-ready {
   --kahle-brand-blue: #0071bc;
-  --kahle-chat-background-left: 0px;
+}
+
+body.kahle-branding-ready #chat-pane {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.84)),
+    var(--kahle-chat-background) !important;
+  background-position: center center !important;
+  background-repeat: no-repeat !important;
+  background-size: min(92vw, 1760px) auto !important;
+}
+
+.dark body.kahle-branding-ready #chat-pane,
+body.kahle-branding-ready.dark #chat-pane {
+  background-image:
+    linear-gradient(rgba(18, 18, 18, 0.86), rgba(18, 18, 18, 0.86)),
+    var(--kahle-chat-background) !important;
 }
 
 #kahle-chat-background-layer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: var(--kahle-chat-background-left);
-  pointer-events: none;
-  z-index: 0;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.84)),
-    var(--kahle-chat-background);
-  background-position: center center;
-  background-repeat: no-repeat;
-  background-size: min(92vw, 1760px) auto;
+  display: none !important;
 }
 
-.dark #kahle-chat-background-layer,
-body.kahle-branding-ready.dark #kahle-chat-background-layer {
-  background-image:
-    linear-gradient(rgba(18, 18, 18, 0.86), rgba(18, 18, 18, 0.86)),
-    var(--kahle-chat-background);
+body.kahle-branding-ready .modal [class*="bg-white/95"] {
+  background-color: rgb(255 255 255) !important;
 }
 
-body.kahle-branding-ready [data-kahle-chat-transparent="true"] {
-  background: transparent !important;
-  background-color: transparent !important;
-}
-
-body.kahle-branding-ready [data-kahle-app-foreground="true"] {
-  position: relative;
-  z-index: 1;
+.dark body.kahle-branding-ready .modal [class*="dark:bg-gray-900/95"],
+body.kahle-branding-ready.dark .modal [class*="dark:bg-gray-900/95"] {
+  background-color: rgb(17 24 39) !important;
 }
 
 body.kahle-branding-ready img[src$="/static/favicon.png"],

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 
-SCRIPT_TAG = '\t\t<script src="/static/kahle/kahle-branding.js" defer crossorigin="use-credentials"></script>'
-CUSTOM_CSS_LINK = '\t\t<link rel="stylesheet" href="/static/kahle/kahle-branding.css" crossorigin="use-credentials" />'
+ASSET_VERSION = "20260522-chatpane2"
+SCRIPT_TAG = f'\t\t<script src="/static/kahle/kahle-branding.js?v={ASSET_VERSION}" defer crossorigin="use-credentials"></script>'
+CUSTOM_CSS_LINK = f'\t\t<link rel="stylesheet" href="/static/kahle/kahle-branding.css?v={ASSET_VERSION}" crossorigin="use-credentials" />'
 
 ENV_SUFFIX_BLOCK = """WEBUI_NAME = os.environ.get('WEBUI_NAME', 'Open WebUI')
 if WEBUI_NAME != 'Open WebUI':
@@ -16,6 +18,16 @@ ENV_NO_SUFFIX_BLOCK = """WEBUI_NAME = os.environ.get('WEBUI_NAME', 'Open WebUI')
 
 def patch_index(index_path: Path) -> None:
     text = index_path.read_text(encoding="utf-8")
+    text = re.sub(
+        r'\t\t<script src="/static/kahle/kahle-branding\.js(?:\?v=[^"]*)?" defer crossorigin="use-credentials"></script>',
+        SCRIPT_TAG,
+        text,
+    )
+    text = re.sub(
+        r'\t\t<link rel="stylesheet" href="/static/kahle/kahle-branding\.css(?:\?v=[^"]*)?" crossorigin="use-credentials" />',
+        CUSTOM_CSS_LINK,
+        text,
+    )
 
     if "/static/kahle/kahle-branding.css" not in text:
         marker = '\t\t<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />'
