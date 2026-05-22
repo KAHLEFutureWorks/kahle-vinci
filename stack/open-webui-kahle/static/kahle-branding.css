@@ -1,0 +1,33 @@
+:root {
+  --kahle-chat-background: url("/static/kahle/chat-background.jpg");
+}
+
+body.kahle-branding-ready {
+  --kahle-brand-blue: #0071bc;
+}
+
+body.kahle-branding-ready #app {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.84)),
+    var(--kahle-chat-background);
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: min(92vw, 1760px) auto;
+  background-attachment: fixed;
+}
+
+.dark body.kahle-branding-ready #app,
+body.kahle-branding-ready.dark #app {
+  background-image:
+    linear-gradient(rgba(18, 18, 18, 0.86), rgba(18, 18, 18, 0.86)),
+    var(--kahle-chat-background);
+}
+
+body.kahle-branding-ready img[src$="/static/favicon.png"],
+body.kahle-branding-ready img[src$="/static/logo.png"] {
+  content: url("/static/kahle/logo.png");
+}
+
+body.kahle-hide-advanced-settings [data-kahle-hidden="true"] {
+  display: none !important;
+}

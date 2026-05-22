@@ -170,7 +170,24 @@ def check_open_webui_upload_contract(services: dict[str, Any]) -> list[str]:
     if not isinstance(service, dict):
         return ["open-webui: service must be present"]
 
+    if service.get("image") != "kahle-open-webui:v0.9.2-kahle.1":
+        failures.append("open-webui: must use the local KAHLE-branded image tag")
+
+    build = service.get("build") or {}
+    if not isinstance(build, dict):
+        failures.append("open-webui: must define a build block for the KAHLE image layer")
+    else:
+        if str(build.get("context") or "").replace("\\", "/") != "..":
+            failures.append("open-webui: KAHLE image build context must be repository root")
+        if str(build.get("dockerfile") or "").replace("\\", "/") != "stack/open-webui-kahle/Dockerfile":
+            failures.append("open-webui: KAHLE image Dockerfile path is incorrect")
+        args = build.get("args") or {}
+        if not isinstance(args, dict) or args.get("OPEN_WEBUI_BASE_IMAGE") != "ghcr.io/open-webui/open-webui:v0.9.2":
+            failures.append("open-webui: KAHLE image must pin the OpenWebUI v0.9.2 base image")
+
     environment = dict(iter_environment(service.get("environment")))
+    if environment.get("WEBUI_NAME") != "KAHLE-Vinci":
+        failures.append("open-webui: WEBUI_NAME must be KAHLE-Vinci")
     if environment.get("BYPASS_EMBEDDING_AND_RETRIEVAL") != "True":
         failures.append(
             "open-webui: BYPASS_EMBEDDING_AND_RETRIEVAL must be True so chat uploads do not hit IONOS embeddings"
