@@ -31,7 +31,7 @@ def test_dockerfile_copies_brand_assets():
 
 def test_patch_script_versions_brand_assets():
     text = (BRANDING_ROOT / "patch_openwebui.py").read_text(encoding="utf-8")
-    assert 'ASSET_VERSION = "20260522-chatpane2"' in text
+    assert 'ASSET_VERSION = "20260523-cover1"' in text
     assert "/static/kahle/kahle-branding.js?v={ASSET_VERSION}" in text
     assert "/static/kahle/kahle-branding.css?v={ASSET_VERSION}" in text
 
@@ -60,6 +60,8 @@ def test_branding_css_contains_background_contract():
     text = (BRANDING_ROOT / "static" / "kahle-branding.css").read_text(encoding="utf-8")
     assert '--kahle-chat-background: url("/static/kahle/chat-background.jpg")' in text
     assert "body.kahle-branding-ready #chat-pane" in text
+    assert "background-size: cover" in text
+    assert "radial-gradient(circle at center" in text
     assert "body.kahle-branding-ready > *" not in text
     assert "data-kahle-chat-transparent" not in text
     assert "data-kahle-app-foreground" not in text
@@ -102,8 +104,8 @@ if WEBUI_NAME != 'Open WebUI':
         env_text = env.read_text(encoding="utf-8")
         assert index_text.count("/static/kahle/kahle-branding.js") == 1
         assert index_text.count("/static/kahle/kahle-branding.css") == 1
-        assert "kahle-branding.js?v=20260522-chatpane2" in index_text
-        assert "kahle-branding.css?v=20260522-chatpane2" in index_text
+        assert "kahle-branding.js?v=20260523-cover1" in index_text
+        assert "kahle-branding.css?v=20260523-cover1" in index_text
         assert "WEBUI_NAME += ' (Open WebUI)'" not in env_text
         assert env_text.count("WEBUI_NAME = os.environ.get('WEBUI_NAME', 'Open WebUI')") == 1
 

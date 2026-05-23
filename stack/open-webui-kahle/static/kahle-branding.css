@@ -7,18 +7,21 @@ body.kahle-branding-ready {
 }
 
 body.kahle-branding-ready #chat-pane {
+  background-color: rgb(255 255 255) !important;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.84)),
+    linear-gradient(rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.78)),
     var(--kahle-chat-background) !important;
   background-position: center center !important;
   background-repeat: no-repeat !important;
-  background-size: min(92vw, 1760px) auto !important;
+  background-size: cover !important;
 }
 
 .dark body.kahle-branding-ready #chat-pane,
 body.kahle-branding-ready.dark #chat-pane {
+  background-color: rgb(18 18 18) !important;
   background-image:
-    linear-gradient(rgba(18, 18, 18, 0.86), rgba(18, 18, 18, 0.86)),
+    linear-gradient(rgba(18, 18, 18, 0.76), rgba(18, 18, 18, 0.76)),
+    radial-gradient(circle at center, rgba(18, 18, 18, 0.08) 0%, rgba(18, 18, 18, 0.32) 72%, rgba(18, 18, 18, 0.56) 100%),
     var(--kahle-chat-background) !important;
 }
 

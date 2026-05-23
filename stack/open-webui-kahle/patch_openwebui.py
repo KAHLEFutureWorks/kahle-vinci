@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 
-ASSET_VERSION = "20260522-chatpane2"
+ASSET_VERSION = "20260523-cover1"
 SCRIPT_TAG = f'\t\t<script src="/static/kahle/kahle-branding.js?v={ASSET_VERSION}" defer crossorigin="use-credentials"></script>'
 CUSTOM_CSS_LINK = f'\t\t<link rel="stylesheet" href="/static/kahle/kahle-branding.css?v={ASSET_VERSION}" crossorigin="use-credentials" />'
 
