@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sqlite3
 import tempfile
@@ -106,6 +107,40 @@ def test_download_replacement_updates_output_text_as_well_as_content():
         assert "[TOOL_CALLS]" not in output_text
     finally:
         module._create_file = original_create
+
+
+def test_generic_pseudo_toolcall_error_updates_output_text_as_well_as_content():
+    module = load_module()
+    raw_toolcall = '[TOOL_CALLS]time_and_calculation{"action":"get_current_date_and_time","timezone":"Europe/Berlin"}'
+    body = {
+        "messages": [
+            {"role": "user", "content": "Hey bitte recherchiere einmal zum Volkswagen Passat"},
+            {
+                "role": "assistant",
+                "content": raw_toolcall,
+                "originalContent": raw_toolcall,
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": raw_toolcall}],
+                    }
+                ],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+
+    assert message["content"] == (
+        "Tool-Fehler: Das Modell hat einen sichtbaren Pseudo-Toolcall erzeugt. "
+        "Bitte stelle die Anfrage in einem neuen Chat erneut."
+    )
+    assert message["output"][0]["content"][0]["text"] == message["content"]
+    assert message["originalContent"] == message["content"]
+    assert "[TOOL_CALLS]" not in message["content"]
+    assert "[TOOL_CALLS]" not in message["output"][0]["content"][0]["text"]
+    assert "[TOOL_CALLS]" not in message["originalContent"]
 
 
 def test_pseudo_call_with_prefix_still_uses_previous_assistant_result():
@@ -672,6 +707,58 @@ def test_invalid_download_token_is_recreated_from_previous_assistant_result():
         module._create_file = original_create
 
 
+def test_file_saved_source_payload_overrides_mutated_model_download_token():
+    module = load_module()
+    good_url = "http://localhost:8091/files/download?token=good_2026_token"
+    bad_url = "http://localhost:8091/files/download?token=bad_2066_token"
+    body = {
+        "messages": [
+            {"role": "user", "content": "Bitte wandle die PDF in Markdown um."},
+            {
+                "role": "assistant",
+                "content": (
+                    f"Download-Link: [Datei herunterladen]({bad_url})\n"
+                    "Datei: DE_2.5_KI__KAHLE_Stand_03.2026.md\n"
+                    "SHA256: wrong\n"
+                    "Groesse: 24664 Bytes"
+                ),
+                "sources": [
+                    {
+                        "source": {"name": "server:doc-worker/file_to_md_save"},
+                        "document": [
+                            '{"output_kind":"file_saved",'
+                            f'"download_url":"{good_url}",'
+                            '"filename":"DE_2.5_KI__KAHLE_Stand_03.2026.md",'
+                            '"sha256":"real-sha",'
+                            '"size_bytes":24664}'
+                        ],
+                        "tool_result": True,
+                    }
+                ],
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": f"Download-Link: [Datei herunterladen]({bad_url})"}],
+                    },
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": f"Debug details {bad_url}"}],
+                    }
+                ],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+
+    assert good_url in message["content"]
+    assert bad_url not in message["content"]
+    assert "real-sha" in message["content"]
+    assert message["output"][0]["content"][0]["text"] == message["content"]
+    assert message["output"][1]["content"][0]["text"] == message["content"]
+
+
 def test_bare_json_file_tool_call_is_replaced_with_download_metadata():
     module = load_module()
     original_call = module._call_file_proxy_tool
@@ -734,6 +821,280 @@ def test_safe_webcaller_pseudo_call_without_file_request_returns_formatted_text(
 
         assert "# Einfuehrung in die KI" in result["messages"][-1]["content"]
         assert "KI Grundlagen Zusammenfassung" in result["messages"][-1]["content"]
+    finally:
+        module._run_websearch = original_websearch
+
+
+def test_successful_safe_webcaller_source_overrides_rag_template_pseudo_call():
+    module = load_module()
+    raw_toolcall = (
+        "[TOOL_CALLS]rag_template>Ich habe keine Moeglichkeit, im Internet zu recherchieren. "
+        "Ich kann Ihnen jedoch helfen, eine Praesentation zum Volkswagen Passat zu erstellen."
+    )
+    safe_result = {
+        "ok": True,
+        "decision": "proceed",
+        "blocked": False,
+        "searchQuery": "Volkswagen Passat 2026",
+        "summary": "Volkswagen Passat 2026 Recherche Ergebnis mit Variant, Motoren, Ausstattung und Kofferraum.",
+        "sources": [
+            {
+                "title": "Volkswagen Passat Test",
+                "url": "https://example.test/passat",
+                "snippet": "Passat Variant mit aktuellen Ausstattungsdetails.",
+            }
+        ],
+    }
+    body = {
+        "messages": [
+            {"role": "user", "content": "Hey bitte recherchiere einmal zum Volkswagen Passat"},
+            {
+                "role": "assistant",
+                "content": raw_toolcall,
+                "originalContent": raw_toolcall,
+                "sources": [
+                    {
+                        "source": {"name": "safe_webcaller/safe_websearch"},
+                        "document": [json.dumps(safe_result)],
+                        "tool_result": True,
+                    }
+                ],
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": raw_toolcall}],
+                    }
+                ],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+
+    assert "Volkswagen Passat 2026 Recherche Ergebnis" in message["content"]
+    assert "Volkswagen Passat Test" in message["content"]
+    assert "[TOOL_CALLS]" not in message["content"]
+    assert message["output"][0]["content"][0]["text"] == message["content"]
+    assert message["originalContent"] == message["content"]
+
+
+def test_successful_safe_webcaller_source_recovers_existing_pseudo_toolcall_error():
+    module = load_module()
+    raw_toolcall = (
+        "[TOOL_CALLS]rag_template>Ich habe keine Moeglichkeit, im Internet zu recherchieren."
+    )
+    safe_result = {
+        "ok": True,
+        "decision": "proceed",
+        "blocked": False,
+        "summary": "Volkswagen Passat Recherche aus bereits vorhandenem Toolresultat.",
+        "sources": [],
+    }
+    body = {
+        "messages": [
+            {"role": "user", "content": "Hey bitte recherchiere einmal zum Volkswagen Passat"},
+            {
+                "role": "assistant",
+                "content": (
+                    "Tool-Fehler: Das Modell hat einen sichtbaren Pseudo-Toolcall erzeugt. "
+                    "Bitte stelle die Anfrage in einem neuen Chat erneut."
+                ),
+                "originalContent": raw_toolcall,
+                "sources": [
+                    {
+                        "source": {"name": "safe_webcaller/safe_websearch"},
+                        "document": [json.dumps(safe_result)],
+                        "tool_result": True,
+                    }
+                ],
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": raw_toolcall}],
+                    }
+                ],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+
+    assert "Volkswagen Passat Recherche aus bereits vorhandenem Toolresultat" in message["content"]
+    assert "Tool-Fehler" not in message["content"]
+    assert "[TOOL_CALLS]" not in json.dumps(message, ensure_ascii=False)
+
+
+def test_visible_json_toolcall_with_safe_web_source_is_recovered():
+    module = load_module()
+    visible = (
+        '{\n  "tool": "safe_webcaller",\n  "parameters": {\n'
+        '    "query": "Elektroauto Foerderung 2026 Deutschland aktuelle News",\n'
+        '    "lang": "de-DE",\n    "maxResults": 5\n  }\n}'
+    )
+    safe_result = {
+        "ok": True,
+        "decision": "proceed",
+        "blocked": False,
+        "searchQuery": "Elektroauto Foerderung 2026",
+        "summary": "Elektroauto-Foerderung 2026: Hoechstfoerderung 6000 Euro fuer Familien mit niedrigem Einkommen.",
+        "sources": [
+            {
+                "title": "Foerderung 2026",
+                "url": "https://example.test/ev",
+                "snippet": "Details zur Elektroauto-Foerderung 2026.",
+            }
+        ],
+    }
+    body = {
+        "messages": [
+            {"role": "user", "content": "Recherchiere aktuelle Neuigkeiten zur Elektroauto-Foerderung 2026"},
+            {
+                "role": "assistant",
+                "content": visible,
+                "originalContent": visible,
+                "sources": [
+                    {
+                        "source": {"name": "safe_webcaller/safe_websearch"},
+                        "document": [json.dumps(safe_result)],
+                        "tool_result": True,
+                    }
+                ],
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": visible}]},
+                ],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+
+    assert "Hoechstfoerderung 6000 Euro" in message["content"]
+    assert '"tool": "safe_webcaller"' not in message["content"]
+    assert '"parameters"' not in message["content"]
+    assert message["output"][0]["content"][0]["text"] == message["content"]
+
+
+def test_search_in_progress_meta_answer_is_synthesized_by_llm():
+    module = load_module()
+    original = module._synthesize_web_answer
+    try:
+        module._synthesize_web_answer = lambda request_text, result, user_name="": (
+            "## E-Auto-Foerderung 2026\n\n"
+            "Ab Mai 2026 gibt es eine sozial gestaffelte Foerderung mit Kinderbonus.\n\n"
+            "Quellen:\n- ADAC"
+        )
+        safe_result = {
+            "ok": True,
+            "decision": "proceed",
+            "blocked": False,
+            "summary": "E-Auto-Foerderung 2026 sozial gestaffelt, Antraege voraussichtlich ab Mai 2026.",
+            "sources": [{"title": "ADAC", "url": "https://example.test/adac", "snippet": "Details"}],
+        }
+        body = {
+            "messages": [
+                {"role": "user", "content": "Recherchiere aktuelle Neuigkeiten zur Elektroauto-Foerderung 2026"},
+                {
+                    "role": "assistant",
+                    "content": "Websuche wird durchgefuehrt, um aktuelle Neuigkeiten zur Elektroauto-Foerderung 2026 zu ermitteln.",
+                    "sources": [
+                        {
+                            "source": {"name": "safe_webcaller/safe_websearch"},
+                            "document": [json.dumps(safe_result)],
+                            "tool_result": True,
+                        }
+                    ],
+                },
+            ]
+        }
+        result = module.Filter().outlet(body)
+        content = result["messages"][-1]["content"]
+        assert "sozial gestaffelte Foerderung mit Kinderbonus" in content
+        assert "Websuche wird durchgefuehrt" not in content
+    finally:
+        module._synthesize_web_answer = original
+
+
+def test_web_answer_falls_back_to_deterministic_format_without_llm():
+    module = load_module()
+    original = module._synthesize_web_answer
+    try:
+        module._synthesize_web_answer = lambda request_text, result, user_name="": ""
+        safe_result = {
+            "ok": True,
+            "decision": "proceed",
+            "blocked": False,
+            "summary": "Deterministischer Fallback-Inhalt zur Foerderung.",
+            "sources": [{"title": "Quelle", "url": "https://example.test/q", "snippet": "x"}],
+        }
+        body = {
+            "messages": [
+                {"role": "user", "content": "Recherchiere zur Foerderung"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "sources": [
+                        {
+                            "source": {"name": "safe_webcaller/safe_websearch"},
+                            "document": [json.dumps(safe_result)],
+                            "tool_result": True,
+                        }
+                    ],
+                },
+            ]
+        }
+        result = module.Filter().outlet(body)
+        content = result["messages"][-1]["content"]
+        assert "Deterministischer Fallback-Inhalt" in content
+        assert "Kurzueberblick" in content
+    finally:
+        module._synthesize_web_answer = original
+
+
+def test_failed_research_answer_runs_safe_websearch_fallback():
+    module = load_module()
+    original_websearch = module._run_websearch
+    try:
+        captured = {}
+
+        def fake_websearch(query, user_name=""):
+            captured["query"] = query
+            return {
+                "ok": True,
+                "summary": "Passat aus Websuche: aktuelle Informationen zu Motoren, Ausstattung und Variant.",
+                "sources": [],
+            }
+
+        module._run_websearch = fake_websearch
+        raw_answer = (
+            "Ich kann leider keine externen Recherchen durchfuehren. "
+            "Aber ich kann dir helfen, wenn du spezifische Fragen zum Volkswagen Passat hast."
+        )
+        body = {
+            "messages": [
+                {"role": "user", "content": "Hey bitte recherchiere einmal zum Volkswagen Passat"},
+                {
+                    "role": "assistant",
+                    "content": raw_answer,
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": raw_answer}],
+                        }
+                    ],
+                },
+            ]
+        }
+
+        result = module.Filter().outlet(body)
+        message = result["messages"][-1]
+
+        assert "Volkswagen Passat" in captured["query"]
+        assert "Passat aus Websuche" in message["content"]
+        assert "keine externen Recherchen" not in message["content"]
+        assert message["output"][0]["content"][0]["text"] == message["content"]
     finally:
         module._run_websearch = original_websearch
 
@@ -870,9 +1231,44 @@ def test_reasoning_leak_for_research_request_is_replaced_with_formatted_text():
         module._run_websearch = original_websearch
 
 
+def test_blocked_safe_webcaller_source_overrides_model_answer():
+    module = load_module()
+    notice = "Ich kann die Websuche nicht ausfuehren, weil sensible Daten/Identifier erkannt wurden."
+    body = {
+        "messages": [
+            {"role": "user", "content": "Bitte suche Details zum EU AI Act"},
+            {
+                "role": "assistant",
+                "content": "Hier sind trotzdem Details aus dem vorherigen Kontext.",
+                "sources": [
+                    {
+                        "source": {"name": "safe_webcaller/safe_websearch"},
+                        "document": [module.FINAL_NOTICE_PREFIX + notice + module.FINAL_NOTICE_SUFFIX],
+                        "metadata": [{"source": "safe_webcaller/safe_websearch"}],
+                        "tool_result": True,
+                    }
+                ],
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Hier sind trotzdem Details."}],
+                    }
+                ],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+
+    assert message["content"] == notice
+    assert message["output"][0]["content"][0]["text"] == notice
+
+
 if __name__ == "__main__":
     test_visible_workflow_pseudo_call_is_replaced_with_download_metadata()
     test_download_replacement_updates_output_text_as_well_as_content()
+    test_generic_pseudo_toolcall_error_updates_output_text_as_well_as_content()
     test_pseudo_call_with_prefix_still_uses_previous_assistant_result()
     test_pseudo_call_without_previous_result_uses_embedded_content()
     test_file_request_without_toolcall_creates_requested_docx_from_answer()
@@ -887,7 +1283,12 @@ if __name__ == "__main__":
     test_workflow_pseudo_call_with_empty_embedded_content_runs_research_instead_of_blank_file()
     test_bare_json_file_tool_call_is_replaced_with_download_metadata()
     test_safe_webcaller_pseudo_call_without_file_request_returns_formatted_text()
+    test_successful_safe_webcaller_source_overrides_rag_template_pseudo_call()
+    test_successful_safe_webcaller_source_recovers_existing_pseudo_toolcall_error()
+    test_failed_research_answer_runs_safe_websearch_fallback()
     test_kb_list_files_pseudo_call_is_replaced_with_file_inventory()
     test_kb_list_files_pseudo_call_accepts_collection_name_alias()
     test_reasoning_leak_for_research_request_is_replaced_with_formatted_text()
+    test_blocked_safe_webcaller_source_overrides_model_answer()
+    test_file_saved_source_payload_overrides_mutated_model_download_token()
     print("kahle toolcall guard tests passed")

@@ -131,7 +131,6 @@ from open_webui.env import (
     GLOBAL_LOG_LEVEL,
     ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION,
     CHAT_RESPONSE_STREAM_DELTA_CHUNK_SIZE,
-    CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES,
     BYPASS_MODEL_ACCESS_CONTROL,
     ENABLE_REALTIME_CHAT_SAVE,
     ENABLE_QUERIES_CACHE,
@@ -141,8 +140,15 @@ from open_webui.env import (
     FORWARD_SESSION_INFO_HEADER_MESSAGE_ID,
     ENABLE_RESPONSES_API_STATEFUL,
 )
+import open_webui.env as open_webui_env
 from open_webui.utils.headers import include_user_info_headers
 from open_webui.constants import TASKS
+
+CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES = getattr(
+    open_webui_env,
+    "CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES",
+    getattr(open_webui_env, "CHAT_RESPONSE_MAX_TOOL_CALL_ITERATIONS", 5),
+)
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -220,11 +226,28 @@ DEFAULT_REASONING_TAGS = [
 ]
 DEFAULT_SOLUTION_TAGS = [('<|begin_of_solution|>', '<|end_of_solution|>')]
 DEFAULT_CODE_INTERPRETER_TAGS = [('<code_interpreter>', '</code_interpreter>')]
+FINAL_NOTICE_PREFIX = '<<<FINAL_NOTICE>>>\n'
+FINAL_NOTICE_SUFFIX = '\n<<<END_FINAL_NOTICE>>>'
 
 
 def output_id(prefix: str) -> str:
     """Generate OR-style ID: prefix + 24-char hex UUID."""
     return f'{prefix}_{uuid4().hex[:24]}'
+
+
+def _extract_final_notice(tool_result: Any) -> str:
+    if not isinstance(tool_result, str):
+        return ''
+    text = tool_result.strip()
+    if not text.startswith(FINAL_NOTICE_PREFIX.strip()):
+        return ''
+    start = len(FINAL_NOTICE_PREFIX.strip())
+    if text.startswith(FINAL_NOTICE_PREFIX):
+        start = len(FINAL_NOTICE_PREFIX)
+    end = text.find(FINAL_NOTICE_SUFFIX.strip(), start)
+    if end == -1:
+        end = len(text)
+    return text[start:end].strip()
 
 
 def _ascii_fold(text: str) -> str:
@@ -244,9 +267,105 @@ def _contains_token(folded: str, token: str) -> bool:
     return token in folded
 
 
+def _looks_like_raw_email_text(text: str) -> bool:
+    folded = _ascii_fold(text)
+    if not folded:
+        return False
+
+    folded = re.sub(
+        r'^\s*(beantworte|beantworten|antworte auf|antwort auf|formuliere eine antwort auf)\s+(die\s+)?mail\s*:?\s*',
+        '',
+        folded,
+    ).strip()
+
+    lines = [line.strip() for line in folded.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+
+    has_mail_header = any(
+        token in folded
+        for token in (
+            '\nvon:',
+            '\ngesendet:',
+            '\nan:',
+            '\nbetreff:',
+            '-----urspruengliche nachricht-----',
+            '-----weitergeleitete nachricht-----',
+        )
+    )
+    starts_with_salutation = re.match(
+        r'^(hallo|moin|servus|guten tag|sehr geehrte|sehr geehrter|liebe|lieber)\b',
+        lines[0],
+    ) is not None
+    has_signoff = any(
+        token in folded
+        for token in (
+            'mit freundlichen gruessen',
+            'viele gruesse',
+            'beste gruesse',
+            'freundliche gruesse',
+        )
+    )
+    has_mail_body_signals = any(
+        token in folded
+        for token in (
+            'ich benoetige',
+            'ich brauche',
+            'ich habe',
+            'bitte',
+            'koennten sie',
+            'kannst du',
+            'anbei',
+            'siehe anhang',
+        )
+    )
+    has_system_or_file_terms = any(
+        token in folded
+        for token in (
+            'csv',
+            'catch',
+            'gudat',
+            'dokumenten-id',
+            'datei',
+            'auftrag',
+            'termin',
+            'center',
+        )
+    )
+
+    return has_mail_header or (
+        starts_with_salutation
+        and len(folded) > 180
+        and (has_signoff or (has_mail_body_signals and has_system_or_file_terms))
+    )
+
+
+def _has_explicit_internal_lookup_intent(folded: str) -> bool:
+    return any(
+        token in folded
+        for token in (
+            'suche im internen wissen',
+            'suche in der knowledgebase',
+            'pruefe im internen wissen',
+            'pruefe unsere wissensdatenbank',
+            'was sagt unsere richtlinie',
+            'was steht in der richtlinie',
+            'was sagt der prozess',
+            'wie ist bei kahle geregelt',
+            'welche oeffnungszeiten',
+            'welche marken',
+            'wie lautet die standort',
+            'wer ist ansprechpartner',
+        )
+    )
+
+
 def _looks_like_internal_rag_request(text: str) -> bool:
     folded = _ascii_fold(text)
     if not folded:
+        return False
+
+    if _looks_like_raw_email_text(text) and not _has_explicit_internal_lookup_intent(folded):
         return False
 
     external_only = (
@@ -738,12 +857,16 @@ def serialize_output(output: list) -> str:
 
 
 def _strip_pseudo_toolcall_stream_text(text: str) -> str:
-    marker = '[TOOL_CALLS]'
     value = str(text or '')
-    marker_index = value.find(marker)
-    if marker_index < 0:
-        return value
-    return value[:marker_index].rstrip()
+    marker_index = value.find('[TOOL_CALLS]')
+    if marker_index >= 0:
+        value = value[:marker_index].rstrip()
+    # Mistral sometimes streams a JSON tool call as the visible answer, e.g.
+    # {"tool": "safe_webcaller", "parameters": {...}}. Hide it while streaming;
+    # the outlet guard replaces it with the synthesised answer afterwards.
+    if re.match(r'\s*\{\s*"(?:tool|tool_calls|name|function)"\s*:', value, re.IGNORECASE):
+        return ''
+    return value
 
 
 def _stream_safe_output(output: list) -> list:
@@ -5205,6 +5328,7 @@ async def streaming_chat_response_handler(response, ctx):
                     tools = metadata.get('tools', {})
 
                     results = []
+                    final_notice = ''
 
                     for tool_call in response_tool_calls:
                         tool_call_id = tool_call.get('id', '')
@@ -5291,6 +5415,10 @@ async def streaming_chat_response_handler(response, ctx):
                             metadata,
                             user,
                         )
+                        tool_final_notice = _extract_final_notice(tool_result)
+                        if tool_final_notice:
+                            final_notice = tool_final_notice
+                            tool_result = tool_final_notice
 
                         await terminal_event_handler(
                             tool_function_name,
@@ -5379,6 +5507,21 @@ async def streaming_chat_response_handler(response, ctx):
                             'content': [{'type': 'output_text', 'text': ''}],
                         }
                     )
+
+                    if final_notice:
+                        output[-1]['status'] = 'completed'
+                        output[-1]['content'] = [{'type': 'output_text', 'text': final_notice}]
+                        await event_emitter(
+                            {
+                                'type': 'chat:completion',
+                                'data': {
+                                    'content': serialize_output(output),
+                                    'output': output,
+                                },
+                            }
+                        )
+                        tool_calls.clear()
+                        break
 
                     # Emit citation sources to the frontend for display
                     if citations_enabled:

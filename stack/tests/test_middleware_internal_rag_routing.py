@@ -14,13 +14,44 @@ MIDDLEWARE = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "middlewar
 
 def load_rag_routing_helpers():
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
-    wanted = {"_ascii_fold", "_contains_token", "_looks_like_internal_rag_request"}
+    wanted = {
+        "_ascii_fold",
+        "_contains_token",
+        "_looks_like_raw_email_text",
+        "_has_explicit_internal_lookup_intent",
+        "_looks_like_internal_rag_request",
+    }
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
     namespace = {"re": re, "unicodedata": unicodedata}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_looks_like_internal_rag_request"]
+
+
+def load_function_from_middleware(name: str):
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+    module = ast.Module(body=nodes, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {"re": re}
+    exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
+    return namespace[name]
+
+
+def test_stream_strip_hides_json_toolcall():
+    strip = load_function_from_middleware("_strip_pseudo_toolcall_stream_text")
+    assert strip('{\n  "tool": "safe_webcaller",\n  "parameters": {"query": "x"}\n}') == ""
+    assert strip('{"tool_calls": [{"name": "safe_websearch"}]}') == ""
+    assert strip('  {"name": "rag_chat", "parameters": {}}') == ""
+
+
+def test_stream_strip_keeps_normal_answer_and_legacy_marker():
+    strip = load_function_from_middleware("_strip_pseudo_toolcall_stream_text")
+    assert strip("Zusammenfassung: Die Foerderung betraegt 6000 Euro.") == "Zusammenfassung: Die Foerderung betraegt 6000 Euro."
+    assert strip("Hier ist die Antwort.[TOOL_CALLS]safe_websearch{}") == "Hier ist die Antwort."
+    # A normal JSON snippet that is not a tool call must be preserved.
+    assert strip('{"foerderung": 6000}') == '{"foerderung": 6000}'
 
 
 def test_internal_rag_routing_detects_recovery_gutschein():
@@ -33,6 +64,53 @@ def test_internal_rag_routing_does_not_treat_internet_as_intern():
     looks_internal = load_rag_routing_helpers()
 
     assert looks_internal("Bitte recherchiere wie Spaghetti hergestellt werden im Internet") is False
+
+
+def test_internal_rag_routing_does_not_auto_route_raw_mail_drafts():
+    looks_internal = load_rag_routing_helpers()
+
+    raw_mail = """Hallo Herr Langhorst,
+
+ich habe die beiden weiteren DA-Center soweit vorbereitet mit den Daten, die ich habe.
+Ich benoetige letztlich noch jeweils die Dokumenten-ID fuer die CSV-Datei.
+
+Fuer Walsrode finde ich aber keinen einzigen Termin in CATCH.
+
+Viele Gruesse
+Jan"""
+
+    assert looks_internal(raw_mail) is False
+
+
+def test_internal_rag_routing_does_not_auto_route_raw_mail_without_signoff():
+    looks_internal = load_rag_routing_helpers()
+
+    raw_mail = """Hallo Herr Langhorst,
+ich habe die beiden weiteren DA-Center soweit vorbereitet mit den Daten, die ich habe.
+Ich benoetige letztlich noch jeweils die Dokumenten-ID fuer die CSV-Datei,
+die fuer das jeweilige Center abgerufen werden soll aus dem GUDAT-System.
+Fuer Walsrode finde ich aber keinen einzigen Termin in CATCH.
+Das liegt vermutlich daran, dass die abgerufene Quelldatei gudat_4357.csv 12 Spalte hat."""
+
+    assert looks_internal(raw_mail) is False
+
+
+def test_internal_rag_routing_does_not_auto_route_answer_mail_command_with_raw_mail():
+    looks_internal = load_rag_routing_helpers()
+
+    raw_mail = """Beantworte die Mail:
+Hallo Herr Langhorst,
+ich habe die beiden weiteren DA-Center soweit vorbereitet mit den Daten, die ich habe.
+Ich benoetige letztlich noch jeweils die Dokumenten-ID fuer die CSV-Datei.
+Fuer Walsrode finde ich aber keinen einzigen Termin in CATCH."""
+
+    assert looks_internal(raw_mail) is False
+
+
+def test_internal_rag_routing_still_detects_explicit_internal_policy_questions():
+    looks_internal = load_rag_routing_helpers()
+
+    assert looks_internal("Was sagt unsere interne Richtlinie zur Nutzung von Kundendaten in Mails?") is True
 
 
 def load_fallback_tool_helpers():
@@ -83,7 +161,7 @@ def load_stream_safe_output():
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"copy": copy}
+    namespace = {"copy": copy, "re": re}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_stream_safe_output"]
 
@@ -111,6 +189,10 @@ def test_stream_safe_output_hides_visible_pseudo_toolcall_text():
 if __name__ == "__main__":
     test_internal_rag_routing_detects_recovery_gutschein()
     test_internal_rag_routing_does_not_treat_internet_as_intern()
+    test_internal_rag_routing_does_not_auto_route_raw_mail_drafts()
+    test_internal_rag_routing_does_not_auto_route_raw_mail_without_signoff()
+    test_internal_rag_routing_does_not_auto_route_answer_mail_command_with_raw_mail()
+    test_internal_rag_routing_still_detects_explicit_internal_policy_questions()
     test_previous_result_word_request_routes_to_workflow_before_streaming()
     test_stream_safe_output_hides_visible_pseudo_toolcall_text()
     print("middleware internal rag routing tests passed")
