@@ -3747,11 +3747,11 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             if isinstance(s, dict)
         ):
             form_data['messages'] = add_or_update_system_message(
-                'WICHTIG: Die Websuche wurde bereits ausgefuehrt; die Rechercheergebnisse stehen oben im Kontext. '
+                'WICHTIG: Die Websuche wurde bereits ausgefuehrt; die Rechercheergebnisse inklusive der Quell-URLs stehen oben im Kontext. '
+                'Du hast alle noetigen Informationen — frage NICHT nach Quellen und behaupte NICHT, dir lägen keine Informationen vor. '
                 'Beantworte die Frage des Nutzers JETZT direkt und ausschliesslich auf Basis dieser Ergebnisse, auf Deutsch, '
-                'klar strukturiert mit kurzer Zusammenfassung. Nenne am Ende unter "Quellen" die wichtigsten Quellen als '
-                'klickbare Markdown-Links im Format [Titel](URL); verwende dafuer ausschliesslich die echten URLs aus dem obigen Kontext '
-                'und erfinde keine URLs. '
+                'klar strukturiert mit kurzer Zusammenfassung. Liste am Ende die wichtigsten genutzten Quellen als '
+                'Markdown-Links im Format [Titel](URL) aus dem Kontext. '
                 'Rufe KEIN Tool mehr auf und gib KEINE JSON- oder Tool-Aufruf-Syntax wie {"tool": ...} oder [TOOL_CALLS] aus.',
                 form_data['messages'],
                 append=True,
