@@ -3750,8 +3750,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 'WICHTIG: Die Websuche wurde bereits ausgefuehrt; die Rechercheergebnisse inklusive der Quell-URLs stehen oben im Kontext. '
                 'Du hast alle noetigen Informationen — frage NICHT nach Quellen und behaupte NICHT, dir lägen keine Informationen vor. '
                 'Beantworte die Frage des Nutzers JETZT direkt und ausschliesslich auf Basis dieser Ergebnisse, auf Deutsch, '
-                'klar strukturiert mit kurzer Zusammenfassung. Liste am Ende die wichtigsten genutzten Quellen als '
-                'Markdown-Links im Format [Titel](URL) aus dem Kontext. '
+                'klar strukturiert mit kurzer Zusammenfassung. Beende deine Antwort mit einem Abschnitt "Quellen" und '
+                'schreibe dort jede genutzte Quelle als vollstaendigen anklickbaren Markdown-Link [Titel](URL) AUS — '
+                'kopiere die echten Titel und URLs direkt aus dem obigen Kontext in deine Antwort. '
+                'Verweise NICHT nur darauf, dass die Quellen im Kontext stehen, sondern gib die Links tatsaechlich aus. '
                 'Rufe KEIN Tool mehr auf und gib KEINE JSON- oder Tool-Aufruf-Syntax wie {"tool": ...} oder [TOOL_CALLS] aus.',
                 form_data['messages'],
                 append=True,
