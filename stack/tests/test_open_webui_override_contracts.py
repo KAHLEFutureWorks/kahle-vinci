@@ -45,6 +45,9 @@ def test_middleware_keeps_kahle_file_tool_routing_contract():
     assert "await _evict_stale_local_tool_cache(request, tool_ids)" in src
     assert "await _remember_loaded_local_tool_contents(request, tool_ids)" in src
     assert "from open_webui.models.tools import Tools as ToolModels" in src
+    assert "FINAL_NOTICE_PREFIX" in src
+    assert "def _extract_final_notice(" in src
+    assert "tool_calls.clear()" in src
 
 
 def test_middleware_honors_upload_embedding_bypass_contract():

@@ -196,6 +196,10 @@ def check_safe_websearch_research_context_quality(workflows: list[dict[str, Any]
     for term in required_terms:
         if term not in code:
             failures.append(f"Hybrid-Safe Websearcher/Build Rich Research Context: missing {term}")
+    quality_terms = ("buildSupplementalQueries", "searchSearxng", "bestRelevantExcerpt", "searchVariants")
+    for term in quality_terms:
+        if term not in code:
+            failures.append(f"Hybrid-Safe Websearcher/Build Rich Research Context: missing {term}")
     if "this.helpers.httpRequest" not in code:
         failures.append(
             "Hybrid-Safe Websearcher/Build Rich Research Context: "
@@ -210,6 +214,11 @@ def check_safe_websearch_research_context_quality(workflows: list[dict[str, Any]
         failures.append(
             "Hybrid-Safe Websearcher/Build Rich Research Context: "
             "must not use global fetch because n8n Code node task runners do not expose it"
+        )
+    if "URLSearchParams" in code:
+        failures.append(
+            "Hybrid-Safe Websearcher/Build Rich Research Context: "
+            "must not use URLSearchParams because n8n Code node task runners do not expose it"
         )
 
     connections = workflow.get("connections") or {}
@@ -230,6 +239,15 @@ def check_safe_websearch_research_context_quality(workflows: list[dict[str, Any]
     ]
     if "Pick Summary1" not in context_targets:
         failures.append("Hybrid-Safe Websearcher: Build Rich Research Context must feed Pick Summary1")
+
+    clamp_node = next((node for node in nodes if node.get("name") == "Clamp & Config"), None)
+    if not clamp_node:
+        failures.append("Hybrid-Safe Websearcher: missing Clamp & Config node")
+    else:
+        clamp_code = str((clamp_node.get("parameters") or {}).get("jsCode") or "")
+        for term in ("supplementalSearchesMax", "searchResultsPerQuery", "fetchPageLimit"):
+            if term not in clamp_code:
+                failures.append(f"Hybrid-Safe Websearcher/Clamp & Config: missing {term}")
 
     return failures
 
@@ -284,6 +302,36 @@ def check_safe_websearch_policy_specific_comparison(workflows: list[dict[str, An
     return failures
 
 
+def check_safe_websearch_secret_false_positive_policy(workflows: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    workflow = next((wf for wf in workflows if wf.get("name") == "Hybrid-Safe Websearcher"), None)
+    if not workflow:
+        return ["Hybrid-Safe Websearcher: workflow missing"]
+
+    nodes = workflow.get("nodes") or []
+    policy = next((node for node in nodes if node.get("name") == "Policy Decision"), None)
+    if not policy:
+        return ["Hybrid-Safe Websearcher: missing Policy Decision node"]
+
+    code = str((policy.get("parameters") or {}).get("jsCode") or "")
+    required_terms = (
+        "knownSecretFalsePositiveSanitized",
+        "effectiveHasSecrets",
+        "hochrisiko[-\\s]?ki[-\\s]?systeme?",
+    )
+    for term in required_terms:
+        if term not in code:
+            failures.append(
+                "Hybrid-Safe Websearcher/Policy Decision: "
+                f"missing false-positive handling for AI Act high-risk terms ({term})"
+            )
+    if "const sensitiveHighRiskDetected = effectiveHasSecrets" not in code:
+        failures.append(
+            "Hybrid-Safe Websearcher/Policy Decision: sensitive high-risk decision must use effectiveHasSecrets"
+        )
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Static checks for n8n workflow exports")
     parser.add_argument("--workflow-file", default="n8n/all-workflows.json")
@@ -315,6 +363,7 @@ def main() -> int:
     failures.extend(check_safe_websearch_research_context_quality(workflows))
     failures.extend(check_safe_websearch_output_gate_pii_shape(workflows))
     failures.extend(check_safe_websearch_policy_specific_comparison(workflows))
+    failures.extend(check_safe_websearch_secret_false_positive_policy(workflows))
 
     if failures:
         print("n8n workflow static check failed:")

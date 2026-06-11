@@ -1,13 +1,15 @@
 """
 title: RAG_Chat KAHLE (Qdrant)
 author: local
-version: 0.3.0
+version: 0.3.2
 description: Durchsucht die internen KAHLE Knowledgebases direkt in Qdrant und gibt zitierbaren Kontext zurück.
 """
 
 from pydantic import BaseModel, Field
 import os
+import re
 import requests
+import unicodedata
 
 
 def _env(*names, default=""):
@@ -16,6 +18,90 @@ def _env(*names, default=""):
         if value:
             return value
     return default
+
+
+def _ascii_fold(text):
+    return (
+        unicodedata.normalize("NFKC", text or "")
+        .lower()
+        .replace("\u00e4", "ae")
+        .replace("\u00f6", "oe")
+        .replace("\u00fc", "ue")
+        .replace("\u00df", "ss")
+    )
+
+
+def _is_raw_mail_query(query):
+    folded = _ascii_fold(str(query or ""))
+    if not folded:
+        return False
+
+    folded = re.sub(
+        r"^\s*(beantworte|beantworten|antworte auf|antwort auf|formuliere eine antwort auf)\s+(die\s+)?mail\s*:?\s*",
+        "",
+        folded,
+    ).strip()
+
+    lines = [line.strip() for line in folded.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+
+    has_mail_header = any(
+        token in folded
+        for token in (
+            "\nvon:",
+            "\ngesendet:",
+            "\nan:",
+            "\nbetreff:",
+            "-----urspruengliche nachricht-----",
+            "-----weitergeleitete nachricht-----",
+        )
+    )
+    starts_with_salutation = re.match(
+        r"^(hallo|moin|servus|guten tag|sehr geehrte|sehr geehrter|liebe|lieber)\b",
+        lines[0],
+    ) is not None
+    has_signoff = any(
+        token in folded
+        for token in (
+            "mit freundlichen gruessen",
+            "viele gruesse",
+            "beste gruesse",
+            "freundliche gruesse",
+        )
+    )
+    has_mail_body_signals = any(
+        token in folded
+        for token in (
+            "ich benoetige",
+            "ich brauche",
+            "ich habe",
+            "bitte",
+            "koennten sie",
+            "kannst du",
+            "anbei",
+            "siehe anhang",
+        )
+    )
+    has_system_or_file_terms = any(
+        token in folded
+        for token in (
+            "csv",
+            "catch",
+            "gudat",
+            "dokumenten-id",
+            "datei",
+            "auftrag",
+            "termin",
+            "center",
+        )
+    )
+
+    return has_mail_header or (
+        starts_with_salutation
+        and len(folded) > 180
+        and (has_signoff or (has_mail_body_signals and has_system_or_file_terms))
+    )
 
 
 def _post_json(url, payload, headers=None, timeout=60):
@@ -146,6 +232,16 @@ class Tools:
                 "FOUND: false\n"
                 "ERROR: Der Toolcall enthielt keinen query-Parameter und es konnte keine letzte User-Nachricht gelesen werden.\n"
                 "INSTRUCTION: Rufe rag_chat erneut auf und setze query auf die letzte Nutzerfrage."
+            )
+        if _is_raw_mail_query(query):
+            return (
+                "KAHLE_RAG_RESULT\n"
+                "FOUND: false\n"
+                "ERROR: Der query-Parameter sieht nach einer kompletten E-Mail oder einem Mailverlauf aus.\n"
+                "INSTRUCTION: RAG_Chat nicht mit kompletten Mails aufrufen. "
+                "Extrahiere zuerst eine kompakte interne Sachfrage mit maximal 12 Woertern, "
+                "z. B. 'Standort Walsrode Oeffnungszeiten' oder 'Richtlinie Kundendaten E-Mail'. "
+                "Wenn keine interne Sachfrage benoetigt wird, antworte ohne RAG."
             )
 
         base_url = self.valves.IONOS_OPENAI_BASE_URL or _env(

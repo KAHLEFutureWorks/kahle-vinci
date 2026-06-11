@@ -105,6 +105,100 @@ def test_empty_safe_websearch_query_uses_latest_chat_message():
                 os.environ["OWUI_DB_PATH"] = old
 
 
+def test_blocked_safe_websearch_returns_final_notice_marker():
+    module = load_module()
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = ""
+
+        def json(self):
+            return {
+                "decision": "block_high_risk",
+                "notice": "Ich kann die Websuche nicht ausfuehren.",
+            }
+
+    class FakeRequests:
+        class Timeout(Exception):
+            pass
+
+        @staticmethod
+        def post(*args, **kwargs):
+            return FakeResponse()
+
+    old_requests = module.requests
+    old_url = os.environ.get("N8N_SAFE_WEBSEARCH_WEBHOOK_URL")
+    try:
+        module.requests = FakeRequests
+        os.environ["N8N_SAFE_WEBSEARCH_WEBHOOK_URL"] = "http://n8n/webhook/test"
+        result = module.Tools().safe_websearch("EU AI Act Hochrisiko-KI-Systeme")
+
+        assert result.startswith(module.FINAL_PREFIX)
+        assert result.endswith(module.FINAL_SUFFIX)
+        assert "Ich kann die Websuche nicht ausfuehren." in result
+    finally:
+        module.requests = old_requests
+        if old_url is None:
+            os.environ.pop("N8N_SAFE_WEBSEARCH_WEBHOOK_URL", None)
+        else:
+            os.environ["N8N_SAFE_WEBSEARCH_WEBHOOK_URL"] = old_url
+
+
+def test_safe_websearch_preserves_rich_research_payload():
+    module = load_module()
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = ""
+
+        def json(self):
+            return {
+                "decision": "proceed",
+                "summary": "Kurzer Recherchekontext",
+                "researchContext": "[1] Detailreicher Kontext",
+                "keyFindings": [{"sourceId": 1, "finding": "Konkreter Befund"}],
+                "quality": {"fetchedCount": 1, "searchVariants": ["primary", "facet"]},
+                "sources": [
+                    {
+                        "id": 1,
+                        "title": "Quelle",
+                        "url": "https://example.test/eu-ai-act",
+                        "snippet": "Kurzer Treffer",
+                        "extract": "Langer, query-fokussierter Auszug mit deutlich mehr Details.",
+                    }
+                ],
+            }
+
+    class FakeRequests:
+        class Timeout(Exception):
+            pass
+
+        @staticmethod
+        def post(*args, **kwargs):
+            return FakeResponse()
+
+    old_requests = module.requests
+    old_url = os.environ.get("N8N_SAFE_WEBSEARCH_WEBHOOK_URL")
+    try:
+        module.requests = FakeRequests
+        os.environ["N8N_SAFE_WEBSEARCH_WEBHOOK_URL"] = "http://n8n/webhook/test"
+        result = module.Tools().safe_websearch("EU AI Act Hochrisiko-KI")
+        data = module.json.loads(result)
+
+        assert data["researchContext"] == "[1] Detailreicher Kontext"
+        assert data["keyFindings"][0]["finding"] == "Konkreter Befund"
+        assert data["quality"]["fetchedCount"] == 1
+        assert "query-fokussierter Auszug" in data["sourcesText"]
+    finally:
+        module.requests = old_requests
+        if old_url is None:
+            os.environ.pop("N8N_SAFE_WEBSEARCH_WEBHOOK_URL", None)
+        else:
+            os.environ["N8N_SAFE_WEBSEARCH_WEBHOOK_URL"] = old_url
+
+
 if __name__ == "__main__":
     test_claude_ai_query_is_search_optimized()
     test_current_ai_news_query_gets_2026_context()
@@ -112,4 +206,6 @@ if __name__ == "__main__":
     test_barilla_pesto_query_is_not_polluted_by_output_instructions()
     test_spaghetti_manufacturing_query_is_domain_specific()
     test_empty_safe_websearch_query_uses_latest_chat_message()
+    test_blocked_safe_websearch_returns_final_notice_marker()
+    test_safe_websearch_preserves_rich_research_payload()
     print("safe webcaller tests passed")

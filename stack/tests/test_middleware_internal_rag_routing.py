@@ -54,6 +54,37 @@ def test_stream_strip_keeps_normal_answer_and_legacy_marker():
     assert strip('{"foerderung": 6000}') == '{"foerderung": 6000}'
 
 
+def test_stream_strip_hides_partial_json_toolcall_while_streaming():
+    """The thinking model (Responses API) pretty-prints a JSON tool call as the
+    visible answer; it streams in incrementally. Every partial prefix the stream
+    emits must already be blanked, otherwise the raw '{ "tool" ...' fragment
+    flashes in the UI before the outlet guard replaces it."""
+    strip = load_function_from_middleware("_strip_pseudo_toolcall_stream_text")
+    # Real captured shape from kahle-vinci-thinking (leading newline, multi-line).
+    full = '\n{\n  "tool": "safe_webcaller",\n  "parameters": {"query": "Elektroauto 2026"}\n}'
+    for i in range(1, len(full) + 1):
+        out = strip(full[:i])
+        assert "{" not in out and "tool" not in out and "safe_webcaller" not in out, (
+            f"leaked raw tool-call fragment at prefix length {i}: {out!r}"
+        )
+    assert strip(full) == ""
+
+
+def test_stream_strip_reveals_legit_json_once_first_key_known():
+    """A legit JSON answer whose first key is not a tool-call key must survive,
+    even though its opening brace is briefly held back while streaming."""
+    strip = load_function_from_middleware("_strip_pseudo_toolcall_stream_text")
+    assert strip('{"foerderung": 6000, "jahr": 2026}') == '{"foerderung": 6000, "jahr": 2026}'
+    # While the first key is still incomplete, the partial brace is held back
+    # (returns empty) so nothing flashes; this is acceptable for a JSON answer.
+    assert strip('{"foer') == ""
+    assert strip('{"foer"') == ""
+    # Content that merely starts with '{' but is not a string-keyed object
+    # (e.g. a template) must not be over-suppressed.
+    assert strip('{{kunde.name}}, willkommen!') == '{{kunde.name}}, willkommen!'
+    assert strip('{}') == '{}'
+
+
 def test_internal_rag_routing_detects_recovery_gutschein():
     looks_internal = load_rag_routing_helpers()
 
@@ -184,6 +215,33 @@ def test_stream_safe_output_hides_visible_pseudo_toolcall_text():
 
     assert safe[0]["content"][0]["text"] == "Ich erstelle die Datei."
     assert output[0]["content"][0]["text"].startswith("Ich erstelle die Datei.[TOOL_CALLS]")
+
+
+def test_stream_safe_output_blanks_thinking_model_json_toolcall():
+    """kahle-vinci-thinking (Responses API) emits a reasoning item followed by a
+    message item whose text is a pretty-printed JSON tool call. The stream-safe
+    view (used for both streaming and the final `done` emit) must blank that
+    message text so the raw block never reaches the browser, while leaving the
+    underlying output untouched so the outlet guard can still recover."""
+    stream_safe_output = load_stream_safe_output()
+    output = [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Thought"}]},
+        {
+            "type": "message",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": '\n{\n  "tool": "safe_webcaller",\n  "parameters": {"query": "Elektroauto 2026"}\n}',
+                }
+            ],
+        },
+    ]
+
+    safe = stream_safe_output(output)
+
+    assert safe[1]["content"][0]["text"] == ""
+    # Original output is preserved (deepcopy) so the guard still sees the leak.
+    assert "safe_webcaller" in output[1]["content"][0]["text"]
 
 
 if __name__ == "__main__":

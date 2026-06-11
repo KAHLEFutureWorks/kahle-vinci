@@ -64,6 +64,54 @@ def test_prefer_top_source_keeps_recovery_chunks_and_drops_unrelated_tail():
     ]
 
 
+def test_raw_mail_query_is_rejected_before_embedding():
+    module = load_module()
+    raw_mail = """Hallo Herr Langhorst,
+
+ich habe die beiden weiteren DA-Center soweit vorbereitet mit den Daten, die ich habe.
+Ich benoetige letztlich noch jeweils die Dokumenten-ID fuer die CSV-Datei.
+
+Fuer Walsrode finde ich aber keinen einzigen Termin in CATCH.
+
+Viele Gruesse
+Jan"""
+
+    assert module._is_raw_mail_query(raw_mail) is True
+
+
+def test_raw_mail_without_signoff_is_rejected_before_embedding():
+    module = load_module()
+    raw_mail = """Hallo Herr Langhorst,
+ich habe die beiden weiteren DA-Center soweit vorbereitet mit den Daten, die ich habe.
+Ich benoetige letztlich noch jeweils die Dokumenten-ID fuer die CSV-Datei,
+die fuer das jeweilige Center abgerufen werden soll aus dem GUDAT-System.
+Fuer Walsrode finde ich aber keinen einzigen Termin in CATCH.
+Das liegt vermutlich daran, dass die abgerufene Quelldatei gudat_4357.csv 12 Spalte hat."""
+
+    assert module._is_raw_mail_query(raw_mail) is True
+
+
+def test_answer_mail_command_with_raw_mail_is_rejected_before_embedding():
+    module = load_module()
+    raw_mail = """Beantworte die Mail:
+Hallo Herr Langhorst,
+ich habe die beiden weiteren DA-Center soweit vorbereitet mit den Daten, die ich habe.
+Ich benoetige letztlich noch jeweils die Dokumenten-ID fuer die CSV-Datei.
+Fuer Walsrode finde ich aber keinen einzigen Termin in CATCH."""
+
+    assert module._is_raw_mail_query(raw_mail) is True
+
+
+def test_compact_internal_question_is_not_rejected_as_raw_mail():
+    module = load_module()
+
+    assert module._is_raw_mail_query("Welche Oeffnungszeiten hat der Standort Walsrode?") is False
+
+
 if __name__ == "__main__":
     test_prefer_top_source_keeps_recovery_chunks_and_drops_unrelated_tail()
+    test_raw_mail_query_is_rejected_before_embedding()
+    test_raw_mail_without_signoff_is_rejected_before_embedding()
+    test_answer_mail_command_with_raw_mail_is_rejected_before_embedding()
+    test_compact_internal_question_is_not_rejected_as_raw_mail()
     print("rag chat direct qdrant tests passed")

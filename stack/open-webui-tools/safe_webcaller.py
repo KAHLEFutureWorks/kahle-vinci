@@ -33,6 +33,10 @@ def _collapse_ws(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
 
+def _final_notice(text: str) -> str:
+    return f"{FINAL_PREFIX}{str(text or '').strip()}{FINAL_SUFFIX}"
+
+
 def _coerce_message_text(value) -> str:
     if value is None:
         return ""
@@ -151,7 +155,7 @@ class Tools:
         self.top_links_max = int(os.getenv("KV_TOP_LINKS_MAX") or "4")
         self.hide_raw_sources = os.getenv("KV_HIDE_RAW_SOURCES", "0").strip().lower() in ("1", "true", "yes", "on")
         self.sources_text_snippet_prefix = os.getenv("KV_SOURCES_TEXT_SNIPPET_PREFIX", "1").strip().lower() in ("1", "true", "yes", "on")
-        self.snippet_max_len = int(os.getenv("KV_SNIPPET_MAX_LEN") or "280")
+        self.snippet_max_len = int(os.getenv("KV_SNIPPET_MAX_LEN") or "520")
         self.user_mode = (os.getenv("KV_USER_MODE") or "plain").strip().lower()
         self.user_hash_salt = (os.getenv("KV_USER_HASH_SALT") or "").strip()
 
@@ -256,12 +260,12 @@ class Tools:
             source_id = source.get("id")
             title = (source.get("title") or source.get("name") or "").replace('"', "'").strip()
             url = (source.get("url") or "").strip()
-            snippet = self._clean_snippet(source.get("snippet") or "")
+            snippet = self._clean_snippet(source.get("extract") or source.get("snippet") or "")
             if source_id is None or not url:
                 continue
             lines.append(f'<source id="{source_id}" name="{title}">{url}</source>')
             if self.sources_text_snippet_prefix and snippet:
-                lines.append(f"Snippet: {snippet}")
+                lines.append(f"Auszug: {snippet}")
             lines.append("")
             count += 1
             if count >= limit:
@@ -306,6 +310,9 @@ class Tools:
             "searchQuery": data.get("searchQuery") or data.get("search_query") or data.get("query") or "",
             "summary": self._clean_summary(data.get("summary") or ""),
             "sources": sources,
+            "researchContext": data.get("researchContext") if isinstance(data.get("researchContext"), str) else "",
+            "keyFindings": data.get("keyFindings") if isinstance(data.get("keyFindings"), list) else [],
+            "quality": data.get("quality") if isinstance(data.get("quality"), dict) else {},
         }
 
     def safe_websearch(
@@ -380,10 +387,10 @@ class Tools:
             notice = self._unquote_json_string(normalized.get("notice") or "").strip()
 
             if self.strict_notice_only and decision in {"block_high_risk", "needs_clarification"}:
-                return notice or "Bitte praezisiere deine Anfrage."
+                return _final_notice(notice or "Bitte praezisiere deine Anfrage.")
 
             if self.notice_on_blocked and blocked:
-                return notice or "Ausgabe wurde aus Sicherheitsgruenden blockiert."
+                return _final_notice(notice or "Ausgabe wurde aus Sicherheitsgruenden blockiert.")
 
             output = {"ok": True, **normalized}
             output["requestedQuery"] = query
