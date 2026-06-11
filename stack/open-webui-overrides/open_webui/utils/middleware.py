@@ -861,11 +861,30 @@ def _strip_pseudo_toolcall_stream_text(text: str) -> str:
     marker_index = value.find('[TOOL_CALLS]')
     if marker_index >= 0:
         value = value[:marker_index].rstrip()
-    # Mistral sometimes streams a JSON tool call as the visible answer, e.g.
-    # {"tool": "safe_webcaller", "parameters": {...}}. Hide it while streaming;
-    # the outlet guard replaces it with the synthesised answer afterwards.
-    if re.match(r'\s*\{\s*"(?:tool|tool_calls|name|function)"\s*:', value, re.IGNORECASE):
-        return ''
+    # Some models (notably kahle-vinci-thinking on the Responses API) stream a
+    # JSON tool call as the visible answer instead of using native function
+    # calling, e.g. {"tool": "safe_webcaller", "parameters": {...}}. It arrives
+    # incrementally and is often pretty-printed, so an anchored full match only
+    # fires once `"tool":` has streamed in — by then the raw `{ "tool" ...`
+    # prefix has already flashed in the UI. Decide as soon as the object opens:
+    #   * first key is a tool-call key  -> hide it (the outlet guard answers)
+    #   * first key is something else    -> keep it (legit JSON answer)
+    #   * first key not complete yet     -> hold the partial back (no flash)
+    stripped = value.lstrip()
+    if stripped.startswith('{'):
+        match = re.match(r'\{\s*"((?:[^"\\]|\\.)*)"\s*:', stripped)
+        if match:
+            if match.group(1).lower() in {'tool', 'tool_calls', 'name', 'function'}:
+                return ''
+            return value
+        # First key not complete yet. Hold the partial back only while it still
+        # looks like a JSON object opening a string key (the shape every leaked
+        # tool call has: '{', optional ws, a possibly-unterminated quoted key) —
+        # so '{', '{"', '{"too', '{"tool"' are suppressed. Anything else that
+        # merely starts with '{' (e.g. a '{{template}}') is kept.
+        if re.match(r'\{\s*("(?:[^"\\]|\\.)*"?)?\s*$', stripped):
+            return ''
+        return value
     return value
 
 
@@ -3717,6 +3736,27 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     if sources and prompt:
         form_data['messages'] = apply_source_context_to_messages(request, form_data['messages'], sources, prompt)
 
+        # When a web-search tool already produced results, Mistral tends to print
+        # a {"tool": "safe_webcaller", ...} JSON as its visible answer (or nothing)
+        # instead of synthesising — its tool-routing system prompt outweighs the
+        # injected context. Append a high-salience directive so the model answers
+        # directly and streams the answer (no outlet-guard round trip needed).
+        if any(
+            'safe_web' in str((s.get('source') or {}).get('name') or '')
+            for s in sources
+            if isinstance(s, dict)
+        ):
+            form_data['messages'] = add_or_update_system_message(
+                'WICHTIG: Die Websuche wurde bereits ausgefuehrt; die Rechercheergebnisse stehen oben im Kontext. '
+                'Beantworte die Frage des Nutzers JETZT direkt und ausschliesslich auf Basis dieser Ergebnisse, auf Deutsch, '
+                'klar strukturiert mit kurzer Zusammenfassung. Nenne am Ende unter "Quellen" die wichtigsten Quellen als '
+                'klickbare Markdown-Links im Format [Titel](URL); verwende dafuer ausschliesslich die echten URLs aus dem obigen Kontext '
+                'und erfinde keine URLs. '
+                'Rufe KEIN Tool mehr auf und gib KEINE JSON- oder Tool-Aufruf-Syntax wie {"tool": ...} oder [TOOL_CALLS] aus.',
+                form_data['messages'],
+                append=True,
+            )
+
     # If there are citations, add them to the data_items
     sources = [
         source
@@ -5854,10 +5894,17 @@ async def streaming_chat_response_handler(response, ctx):
                         item['status'] = 'completed'
 
                 title = await Chats.get_chat_title_by_id(metadata['chat_id'])
+                # The user-facing `done` event must not carry a pseudo tool call
+                # streamed as the visible answer (e.g. {"tool": "safe_webcaller"}
+                # from kahle-vinci-thinking). serialize_output(output) would emit
+                # it raw and it would stay on screen for the several seconds the
+                # outlet guard needs to run web search + synthesis. Emit the
+                # stream-safe view instead; the guard still reads the raw output
+                # from the DB / ctx['assistant_message'] to drive its recovery.
                 data = {
                     'done': True,
-                    'content': serialize_output(output),
-                    'output': output,
+                    'content': serialize_output(display_output()),
+                    'output': display_output(),
                     'title': title,
                     **({'usage': usage} if usage else {}),
                 }
