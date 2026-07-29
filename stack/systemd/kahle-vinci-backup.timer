@@ -1,0 +1,13 @@
+[Unit]
+Description=Run KAHLE-Vinci encrypted backup every night
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Europe/Berlin
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+Unit=kahle-vinci-backup.service
+
+[Install]
+WantedBy=timers.target
+

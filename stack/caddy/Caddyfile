@@ -1,0 +1,47 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$PUBLIC_HOSTNAME} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	handle /files/* {
+		reverse_proxy owui-file-proxy:8091
+	}
+
+	redir /admin/vector /admin/vector/ 308
+
+	handle_path /admin/vector/api/* {
+		reverse_proxy kb-admin-api:8092
+	}
+
+	@vector_static path /admin/vector/assets/* /admin/vector/favicon.svg
+	handle @vector_static {
+		forward_auth kb-admin-api:8092 {
+			uri /session
+		}
+		uri strip_prefix /admin/vector
+		reverse_proxy kb-admin-dashboard:3000
+	}
+
+	handle /admin/vector/* {
+		forward_auth kb-admin-api:8092 {
+			uri /session
+		}
+		reverse_proxy kb-admin-dashboard:3000
+	}
+
+	handle {
+		reverse_proxy open-webui:8080
+	}
+}

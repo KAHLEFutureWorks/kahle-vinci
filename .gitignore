@@ -81,6 +81,16 @@ desktop.ini
 .worktrees/
 worktrees/
 
+# Local rollout, backup, release and comparison artifacts
+/.rollout/
+/.tmp-*/
+/.admin-dashboard-git-metadata/
+/backups/
+/release/
+/*-AKTUALISIERT.py
+/OWUI-File-Proxy-KURZE-DOWNLOADLINKS.py
+*.tsbuildinfo
+
 # Local manual backup copies
 * - Kopie.*
 * - Copy.*

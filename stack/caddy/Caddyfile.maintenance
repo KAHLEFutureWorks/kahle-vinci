@@ -1,0 +1,51 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$PUBLIC_HOSTNAME} {
+	encode zstd gzip
+
+	header {
+		Cache-Control "no-store"
+		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=86400"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	handle /healthz {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "ok" 200
+	}
+
+	handle {
+		header Content-Type "text/html; charset=utf-8"
+		respond <<HTML
+			<!doctype html>
+			<html lang="de">
+			<head>
+				<meta charset="utf-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1">
+				<title>KAHLE-Vinci</title>
+				<style>
+					:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+					body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #111827; color: #f9fafb; }
+					main { max-width: 42rem; margin: 2rem; padding: 2rem; border: 1px solid #374151; border-radius: 1rem; background: #1f2937; }
+					h1 { margin-top: 0; font-size: 1.75rem; }
+					p { margin-bottom: 0; color: #d1d5db; line-height: 1.6; }
+				</style>
+			</head>
+			<body>
+				<main>
+					<h1>KAHLE-Vinci wird vorbereitet</h1>
+					<p>Der geschützte Mitarbeiterzugang ist noch nicht freigeschaltet.</p>
+				</main>
+			</body>
+			</html>
+			HTML 503
+	}
+}

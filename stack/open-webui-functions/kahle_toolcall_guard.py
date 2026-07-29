@@ -1,7 +1,7 @@
 """
 title: KAHLE Toolcall Guard
 author: local
-version: 0.1.0
+version: 0.2.0
 description: Repariert sichtbare Pseudo-Toolcalls und sichtbares Reasoning als letzte Sicherheitsschicht.
 """
 
@@ -50,9 +50,21 @@ JSON_SAFE_WEB_RE = re.compile(
     re.IGNORECASE,
 )
 KB_DIAGNOSTICS_TOOLS = {"kb_status", "kb_list_files", "kb_file_status", "kb_reindex_hint"}
+INTERNAL_PRODUCT_ID_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]\d+[A-Za-z]?(?![A-Za-z0-9])")
+INTERNAL_DETAIL_RE = re.compile(r"\b(dimension\w*|framework|ampelfarb\w*|bewertungslogik|format|zielgruppe|produkt-steckbrief|mehr\s+(?:dazu|darueber|hierzu)|wie\s+genau|welche\w*)\b", re.IGNORECASE)
 REASONING_LEAK_RE = re.compile(r"\b(The user asks:|According to policy|We must|We should|Let's do|tool calls?:)\b", re.IGNORECASE)
 RESEARCH_RE = re.compile(r"\b(recherchier\w*|suche|such\w*|websuche|internet|aktuell\w*|news|nachrichten)\b", re.IGNORECASE)
 FAILED_RESEARCH_ANSWER_RE = re.compile(r"(keine\s+(?:externen\s+)?recherchen|keine\s+m[oö]glichkeit.*internet.*recherch|nicht.*internet.*recherch|keinen?\s+zugriff.*internet)", re.IGNORECASE)
+RAG_NO_KNOWLEDGE_RE = re.compile(
+    r"(?:"
+    r"(?:dazu\s+habe\s+ich\s+)?(?:kein|keine)\s+intern\w*\s+"
+    r"(?:wissen|info|infos|information|informationen)"
+    r"|(?:ich\s+habe\s+)?(?:kein|keine)\s+"
+    r"(?:wissen|info|infos|information|informationen)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 TASK_LIST_RE = re.compile(r"\b(aufgaben|tasks)\b.*\b(liste|liste.*auf|anzeigen|zeige|offen|offene|offenen|aktuell)\b|\b(liste|zeige)\b.*\b(aufgaben|tasks)\b", re.IGNORECASE)
 REAL_DOWNLOAD_RE = re.compile(r"https?://[^\s)]+/files/download\?[^)\s]*\btoken=", re.IGNORECASE)
 REAL_DOWNLOAD_TOKEN_RE = re.compile(r"https?://[^\s)]+/files/download\?token=([A-Za-z0-9_-]+)", re.IGNORECASE)
@@ -354,6 +366,116 @@ def _extract_safe_webcaller_source_result(message: dict[str, Any]) -> dict[str, 
     return {}
 
 
+def _extract_successful_rag_source(
+    message: dict[str, Any], metadata: dict[str, Any] | None = None
+) -> str:
+    sources = message.get("sources") if isinstance(message.get("sources"), list) else []
+    metadata_sources = metadata.get("kahle_tool_sources") if isinstance(metadata, dict) else []
+    if isinstance(metadata_sources, list):
+        sources = [*sources, *metadata_sources]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_name = str((source.get("source") or {}).get("name") or "").lower()
+        if "rag_chat" not in source_name:
+            continue
+        documents = source.get("document") if isinstance(source.get("document"), list) else []
+        for document in documents:
+            text = str(document or "").strip()
+            if "KAHLE_RAG_RESULT" not in text:
+                continue
+            if re.search(r"^FOUND:\s*true\s*$", text, re.IGNORECASE | re.MULTILINE):
+                return text
+    return ""
+
+
+def _rag_context_text(rag_text: str) -> str:
+    marker = re.search(
+        r"^KONTEXT\s*\(zitierbar\s+mit\s+\[#\]\):\s*$",
+        str(rag_text or ""),
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if not marker:
+        return ""
+    return str(rag_text or "")[marker.end() :].strip()
+
+
+def _looks_like_failed_rag_answer(content: str) -> bool:
+    text = str(content or "").strip()
+    return not text or bool(RAG_NO_KNOWLEDGE_RE.search(text))
+
+
+def _format_rag_context_for_user(rag_text: str) -> str:
+    context = _rag_context_text(rag_text)
+    if not context:
+        return "Die interne Suche lieferte einen Treffer, der aber nicht lesbar aufbereitet werden konnte."
+    context = re.sub(
+        r"^\[#(?P<number>\d+)\s*\|\s*[^|]+\|\s*(?P<source>[^|]+)\|[^\]]+\]\s*$",
+        lambda match: f"### Quelle [#{match.group('number')}] - {match.group('source').strip()}",
+        context,
+        flags=re.MULTILINE,
+    )
+    return f"## Interne Informationen\n\n{context}".strip()
+
+
+def _synthesize_rag_answer(request_text: str, rag_text: str, user_name: str = "") -> str:
+    if requests is None:
+        return ""
+    key = _env("OPENAI_API_KEY", "IONOS_API_KEY")
+    if not key:
+        return ""
+    context = _rag_context_text(rag_text)
+    if not context:
+        return ""
+    base = _env(
+        "OPENAI_API_BASE_URL",
+        "IONOS_OPENAI_BASE_URL",
+        default="https://openai.inference.de-txl.ionos.com/v1",
+    ).rstrip("/")
+    model = _env("IONOS_CHAT_MODEL_DEFAULT", default="mistralai/Mistral-Small-24B-Instruct")
+    system = (
+        "Du bist KAHLE-Vinci, interner Assistent der Autohaus KAHLE Gruppe. "
+        "Beantworte die Nutzerfrage ausschliesslich aus dem bereitgestellten internen Kontext. "
+        "Jede Tatsachenaussage muss die passende Quellenmarke [#] tragen. "
+        "Erfinde nichts, widersprich dem Kontext nicht und gib keine Tool-Syntax oder technischen Metadaten aus. "
+        "Wenn der Kontext mehrere Punkte enthaelt, antworte kurz strukturiert auf Deutsch."
+    )
+    user = f"Frage: {str(request_text or '').strip()}\n\nInterner Kontext:\n{context}"
+    try:
+        response = requests.post(
+            base + "/chat/completions",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 900,
+                "stream": False,
+            },
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            timeout=60,
+        )
+        if response.status_code >= 400:
+            return ""
+        data = response.json()
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not choices:
+            return ""
+        return str((choices[0].get("message") or {}).get("content") or "").strip()
+    except Exception:
+        return ""
+
+
+def _rag_answer_text(request_text: str, rag_text: str, user_name: str = "") -> str:
+    synthesized = _synthesize_rag_answer(request_text, rag_text, user_name)
+    if synthesized and len(synthesized) >= 40:
+        return synthesized
+    return _format_rag_context_for_user(rag_text)
+
+
+
 def _is_failed_research_answer(content: str) -> bool:
     return bool(FAILED_RESEARCH_ANSWER_RE.search(content or ""))
 
@@ -405,19 +527,64 @@ def _has_download_claim(content: str) -> bool:
 
 def _sync_output_text(message: dict[str, Any]) -> None:
     content = str(message.get("content") or "")
-    output = message.get("output")
-    if not content or not isinstance(output, list):
+    raw_output = message.get("output")
+    if not content or raw_output is None:
         return
-    for item in output:
-        if not isinstance(item, dict) or item.get("type") != "message":
-            continue
-        parts = item.get("content")
-        if not isinstance(parts, list):
-            continue
-        for part in parts:
-            if isinstance(part, dict) and part.get("type") == "output_text":
-                part["text"] = content
 
+    canonical_match = REAL_DOWNLOAD_TOKEN_RE.search(content)
+    canonical_url = canonical_match.group(0) if canonical_match else ""
+
+    def replace_download_url(value: str) -> str:
+        if not canonical_url or "/files/download?token=" not in value:
+            return value
+        return REAL_DOWNLOAD_TOKEN_RE.sub(canonical_url, value)
+
+    output_was_json = isinstance(raw_output, str)
+    output = raw_output
+    if output_was_json:
+        try:
+            output = json.loads(raw_output)
+        except Exception:
+            if "/files/download?token=" in raw_output:
+                message["output"] = replace_download_url(raw_output)
+            return
+
+    changed = False
+
+    def sync_node(node: Any) -> None:
+        nonlocal changed
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                if isinstance(item, str):
+                    replacement = replace_download_url(item)
+                    if replacement != item:
+                        node[index] = replacement
+                        changed = True
+                else:
+                    sync_node(item)
+            return
+        if not isinstance(node, dict):
+            return
+
+        if node.get("type") == "output_text" and isinstance(node.get("text"), str):
+            node["text"] = content
+            changed = True
+        elif node.get("type") == "message" and isinstance(node.get("content"), str):
+            node["content"] = content
+            changed = True
+
+        for key, value in list(node.items()):
+            if isinstance(value, (dict, list)):
+                sync_node(value)
+            elif isinstance(value, str):
+                replacement = replace_download_url(value)
+                if replacement != value:
+                    node[key] = replacement
+                    changed = True
+
+    sync_node(output)
+    if changed and output_was_json:
+        message["output"] = json.dumps(output, ensure_ascii=False)
 
 def _set_message_content(message: dict[str, Any], content: str) -> None:
     message["content"] = content
@@ -608,7 +775,85 @@ def _format_task_list(tasks: list[dict[str, Any]], status_label: str = "offenen"
         created = _task_display_ts(task.get("created_at"))
         if created:
             lines.append(f"   - **Erstellt am:** {created}")
+        description = " ".join(str(task.get("description") or "").split())
+        if description:
+            lines.append(f"   - **Beschreibung:** {description[:1000]}")
     return "\n".join(lines)
+
+
+def _admin_kb_expiry_notice(user: dict | None) -> str:
+    if not isinstance(user, dict) or str(user.get("role") or "").strip().lower() != "admin":
+        return ""
+    user_id = _task_user_id(user)
+    if not user_id:
+        return ""
+    db_path = Path(_env("KAHLE_TASKS_DB_PATH", default="/app/backend/data/kahle_vinci_tasks.db"))
+    if not db_path.exists():
+        return ""
+    con = None
+    try:
+        try:
+            tz = ZoneInfo("Europe/Berlin")
+        except Exception:
+            tz = timezone(timedelta(hours=2))
+        today = datetime.now(tz).date().isoformat()
+        con = sqlite3.connect(db_path, timeout=10)
+        con.row_factory = sqlite3.Row
+        con.execute(
+            """
+            create table if not exists kb_expiry_notice_seen (
+                user_id text not null,
+                notice_date text not null,
+                seen_at integer not null,
+                primary key (user_id, notice_date)
+            )
+            """
+        )
+        seen = con.execute(
+            "select 1 from kb_expiry_notice_seen where user_id = ? and notice_date = ?",
+            (user_id, today),
+        ).fetchone()
+        if seen:
+            return ""
+        rows = con.execute(
+            """
+            select due_date
+            from tasks
+            where user_id = ?
+              and source_chat_id = 'system:kb-expiry'
+              and status in ('open', 'in_progress')
+            order by due_date asc
+            """,
+            (user_id,),
+        ).fetchall()
+        if not rows:
+            return ""
+        expired = sum(
+            1 for row in rows if str(row["due_date"] or "") and str(row["due_date"]) < today
+        )
+        con.execute(
+            "insert or replace into kb_expiry_notice_seen (user_id, notice_date, seen_at) values (?, ?, ?)",
+            (user_id, today, int(time.time())),
+        )
+        con.execute(
+            "delete from kb_expiry_notice_seen where seen_at < ?",
+            (int(time.time()) - 120 * 86400,),
+        )
+        con.commit()
+        count = len(rows)
+        urgency = f", davon {expired} bereits abgelaufen" if expired else ""
+        return (
+            f"> \u26a0\ufe0f **Wissenspflege:** {count} Knowledgebase-Datei(en) m\u00fcssen gepr\u00fcft werden"
+            f'{urgency}. Schreibe "Zeige meine offenen Aufgaben", um die Details zu sehen.'
+        )
+    except Exception:
+        return ""
+    finally:
+        try:
+            if con is not None:
+                con.close()
+        except Exception:
+            pass
 
 
 def _build_search_query(request_text: str, params: dict[str, Any] | None = None) -> str:
@@ -898,6 +1143,53 @@ def _web_answer_text(request_text: str, result: dict[str, Any], user_name: str =
     )
 
 
+def _synthesize_requested_file_content(request_text: str) -> str:
+    if requests is None:
+        return ""
+    key = _env("OPENAI_API_KEY", "IONOS_API_KEY")
+    if not key:
+        return ""
+    base = _env(
+        "OPENAI_API_BASE_URL",
+        "IONOS_OPENAI_BASE_URL",
+        default="https://openai.inference.de-txl.ionos.com/v1",
+    ).rstrip("/")
+    model = _env("IONOS_CHAT_MODEL_DEFAULT", default="mistralai/Mistral-Small-24B-Instruct")
+    system = (
+        "Erstelle den vom Nutzer verlangten Dokumentinhalt auf Deutsch. "
+        "Gib ausschliesslich sauberes Markdown fuer den Dokumentkoerper aus, ohne Codeblock, "
+        "ohne Download-Link, ohne Tool-Syntax und ohne Ankuendigung. "
+        "Befolge angegebene Ueberschriften und Inhalte exakt. Erfinde keine Fakten, "
+        "die nicht aus der Nutzeranfrage hervorgehen."
+    )
+    try:
+        response = requests.post(
+            base + "/chat/completions",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": str(request_text or "").strip()},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 1600,
+                "stream": False,
+            },
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            timeout=60,
+        )
+        if response.status_code >= 400:
+            return ""
+        data = response.json()
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not choices:
+            return ""
+        return str((choices[0].get("message") or {}).get("content") or "").strip()
+    except Exception:
+        return ""
+
+
+
 def _create_file(content: str, output_format: str, filename: str) -> dict[str, Any]:
     if requests is None:
         return {"ok": False, "error": "Python package requests is not available"}
@@ -963,6 +1255,39 @@ def _infer_file_tool_from_request(params: dict[str, Any], request_text: str) -> 
     if output_format == "pdf" and str(params.get("file_path") or "").lower().endswith(".docx"):
         return "docx_to_pdf_save"
     return ""
+
+
+def _extract_visible_workflow_file_call(content: str, request_text: str) -> dict[str, Any]:
+    data = _extract_json_params(content)
+    if not isinstance(data, dict) or not data:
+        return {}
+
+    tool_name = str(data.get("tool") or data.get("name") or data.get("function") or "").strip()
+    if tool_name != "kahle_workflow_execute":
+        return {}
+
+    params = data.get("params") or data.get("parameters") or {}
+    if not isinstance(params, dict):
+        return {}
+
+    output_format = str(params.get("output_format") or "").strip().lower()
+    if output_format not in {"pdf", "docx", "md"}:
+        output_format = _infer_output_format_from_request(request_text)
+    if output_format not in {"pdf", "docx", "md"}:
+        return {}
+
+    source_content = str(params.get("content") or "").strip()
+    requested_filename = Path(str(params.get("filename") or "")).name
+    expected_suffix = f".{output_format}"
+    if not requested_filename.lower().endswith(expected_suffix):
+        requested_filename = _filename_from_request(request_text, output_format)
+
+    return {
+        "content": source_content,
+        "output_format": output_format,
+        "filename": requested_filename,
+    }
+
 
 
 def _extract_visible_file_tool_call(content: str, request_text: str) -> tuple[str, dict[str, Any]] | None:
@@ -1069,6 +1394,68 @@ def _call_kb_diagnostics_tool(tool_name: str, params: dict[str, Any]) -> dict[st
     except Exception as exc:
         return {"ok": False, "error": f"kb_diagnostics_exec_error: {type(exc).__name__}: {exc}"}
 
+
+def _previous_successful_rag_source(messages: list[dict[str, Any]], before_index: int) -> str:
+    for previous in reversed(messages[:before_index]):
+        if not isinstance(previous, dict) or previous.get("role") != "assistant":
+            continue
+        rag_text = _extract_successful_rag_source(previous)
+        if rag_text:
+            return rag_text
+    return ""
+
+
+def _needs_rag_refresh(request_text: str, messages: list[dict[str, Any]], index: int) -> bool:
+    request_text = str(request_text or "").strip()
+    if not request_text:
+        return False
+    if INTERNAL_PRODUCT_ID_RE.search(request_text):
+        return True
+    return bool(
+        _previous_successful_rag_source(messages, index)
+        and (INTERNAL_DETAIL_RE.search(request_text) or request_text.endswith("?"))
+    )
+
+
+def _call_rag_chat_tool(query: str, messages: list[dict[str, Any]]) -> str:
+    db_path = Path(_env("WEBUI_DB_PATH", "OWUI_DB_PATH", default="/app/backend/data/webui.db"))
+    con = None
+    try:
+        con = sqlite3.connect(db_path)
+        row = con.execute("select content from tool where id = ?", ("rag_chat",)).fetchone()
+    except Exception:
+        return ""
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+    if not row or not row[0]:
+        return ""
+
+    namespace: dict[str, Any] = {}
+    try:
+        exec(compile(str(row[0]), "<rag_chat_db>", "exec"), namespace)
+        tools = namespace["Tools"]()
+        raw = _run_async_tool(tools.rag_chat(query=str(query or "").strip(), __messages__=messages))
+        return str(raw or "").strip()
+    except Exception:
+        return ""
+
+
+def _attach_rag_source(message: dict[str, Any], rag_text: str) -> None:
+    sources = message.setdefault("sources", [])
+    if not isinstance(sources, list):
+        sources = []
+        message["sources"] = sources
+    sources.append(
+        {
+            "source": {"name": "rag_chat/rag_chat"},
+            "document": [rag_text],
+            "tool_result": True,
+        }
+    )
 
 def _format_issue_counts(issue_counts: dict[str, Any]) -> str:
     if not isinstance(issue_counts, dict):
@@ -1183,11 +1570,70 @@ class Filter:
                     _set_message_content(message, formatted)
                 continue
 
+            successful_rag_source = _extract_successful_rag_source(message, __metadata__)
+            if successful_rag_source and (
+                _looks_like_failed_rag_answer(content)
+                or _message_contains_pseudo_toolcall(message)
+                or REASONING_LEAK_RE.search(content)
+            ):
+                user_name = ""
+                if isinstance(__user__, dict):
+                    user_name = str(__user__.get("name") or __user__.get("email") or "").strip()
+                _set_message_content(
+                    message,
+                    _rag_answer_text(request_text, successful_rag_source, user_name),
+                )
+                continue
+
+
+            if (
+                index == len(messages) - 1
+                and not successful_rag_source
+                and _needs_rag_refresh(request_text, messages, index)
+            ):
+                rag_text = _call_rag_chat_tool(request_text, messages[:index])
+                if re.search(r"^FOUND:\s*true\s*$", rag_text, re.IGNORECASE | re.MULTILINE):
+                    user_name = ""
+                    if isinstance(__user__, dict):
+                        user_name = str(__user__.get("name") or __user__.get("email") or "").strip()
+                    _set_message_content(message, _rag_answer_text(request_text, rag_text, user_name))
+                    _attach_rag_source(message, rag_text)
+                    continue
+                if rag_text and re.search(r"^FOUND:\s*false\s*$", rag_text, re.IGNORECASE | re.MULTILINE):
+                    _set_message_content(message, "Dazu habe ich kein internes Wissen.")
+                    _attach_rag_source(message, rag_text)
+                    continue
             if index == len(messages) - 1 and TASK_LIST_RE.search(request_text or ""):
                 status = "open" if re.search(r"\boffen|offene|offenen\b", request_text or "", re.IGNORECASE) else ""
                 tasks = _list_tasks_for_user(_task_user_id(__user__), status=status or "open")
                 _set_message_content(message, _format_task_list(tasks, "offenen" if (status or "open") == "open" else ""))
                 continue
+
+            visible_workflow_call = _extract_visible_workflow_file_call(content, request_text)
+            if visible_workflow_call:
+                source_content = str(visible_workflow_call.get("content") or "").strip()
+                if not _is_substantive_file_content(source_content) and _is_previous_result_file_request(request_text):
+                    source_content = _latest_previous_assistant(messages, index)
+                if not _is_substantive_file_content(source_content):
+                    _set_message_content(
+                        message,
+                        "Tool-Fehler: Der sichtbare Datei-Aufruf enthielt keinen verwertbaren Inhalt.",
+                    )
+                    continue
+                result = _create_file(
+                    source_content,
+                    str(visible_workflow_call["output_format"]),
+                    str(visible_workflow_call["filename"]),
+                )
+                if result.get("download_url"):
+                    _set_message_content(message, _download_format(result))
+                else:
+                    _set_message_content(
+                        message,
+                        f"Tool-Fehler: {result.get('error') or 'Datei konnte nicht erstellt werden'}.",
+                    )
+                continue
+
 
             visible_file_call = _extract_visible_file_tool_call(content, request_text)
             if visible_file_call:
@@ -1306,14 +1752,27 @@ class Filter:
                     source_content = previous_answer
                 if not source_content:
                     source_content = _strip_file_creation_promises(content)
-                if _is_substantive_file_content(source_content):
-                    _write_file_response(message, source_content, output_format, request_text)
+                if not _is_substantive_file_content(source_content):
+                    source_content = _synthesize_requested_file_content(request_text)
+                if not _is_substantive_file_content(source_content):
+                    _set_message_content(message, "Tool-Fehler: Der Dokumentinhalt konnte nicht erzeugt werden.")
                     continue
+                _write_file_response(message, source_content, output_format, request_text)
+                continue
 
         for message in messages:
             if message.get("role") != "assistant":
                 continue
             if _has_download_metadata(str(message.get("content") or "")):
                 _sync_output_text(message)
+
+        notice = _admin_kb_expiry_notice(__user__)
+        if notice:
+            for message in reversed(messages):
+                if message.get("role") != "assistant":
+                    continue
+                content = str(message.get("content") or "").rstrip()
+                _set_message_content(message, f"{content}\n\n{notice}".strip())
+                break
 
         return body

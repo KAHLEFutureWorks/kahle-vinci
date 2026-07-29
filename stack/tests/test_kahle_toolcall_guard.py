@@ -65,6 +65,244 @@ def test_visible_workflow_pseudo_call_is_replaced_with_download_metadata():
         module._create_file = original_create
 
 
+def test_visible_json_workflow_call_uses_embedded_content_for_docx():
+    module = load_module()
+    original_create = module._create_file
+    try:
+        captured = {}
+
+        def fake_create(content, output_format, filename):
+            captured["content"] = content
+            captured["output_format"] = output_format
+            captured["filename"] = filename
+            return {
+                "download_url": "http://localhost:8091/files/download?token=test",
+                "filename": filename,
+                "sha256": "abc",
+                "size_bytes": 123,
+            }
+
+        module._create_file = fake_create
+        visible = json.dumps(
+            {
+                "tool": "kahle_workflow_execute",
+                "parameters": {
+                    "content": (
+                        "# KAHLE-Vinci Migrationstest\n\n"
+                        "Der Servermigrationstest wurde erfolgreich durchgefuehrt."
+                    ),
+                    "output_format": "docx",
+                    "filename": "KAHLE_Vinci_Migrationstest.docx",
+                },
+            },
+            ensure_ascii=False,
+        )
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Erstelle eine Word-Datei mit der Ueberschrift KAHLE-Vinci Migrationstest "
+                        "und einem kurzen Absatz zum erfolgreichen Servermigrationstest."
+                    ),
+                },
+                {"role": "assistant", "content": visible},
+            ]
+        }
+
+        result = module.Filter().outlet(body)
+
+        assert "Download-Link: [Datei herunterladen]" in result["messages"][-1]["content"]
+        assert captured["output_format"] == "docx"
+        assert captured["filename"] == "KAHLE_Vinci_Migrationstest.docx"
+        assert "Servermigrationstest wurde erfolgreich" in captured["content"]
+    finally:
+        module._create_file = original_create
+
+
+def test_direct_file_promise_synthesizes_and_creates_docx():
+    module = load_module()
+    original_create = module._create_file
+    original_synthesize = module._synthesize_requested_file_content
+    try:
+        captured = {}
+
+        module._synthesize_requested_file_content = lambda request_text: (
+            "# KAHLE-Vinci Migrationstest\n\n"
+            "Die Servermigration wurde erfolgreich geprueft."
+        )
+
+        def fake_create(content, output_format, filename):
+            captured["content"] = content
+            captured["output_format"] = output_format
+            captured["filename"] = filename
+            return {
+                "download_url": "http://localhost:8091/files/download?token=test",
+                "filename": filename,
+                "sha256": "abc",
+                "size_bytes": 123,
+            }
+
+        module._create_file = fake_create
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Erstelle eine Word-Datei mit der Ueberschrift KAHLE-Vinci Migrationstest "
+                        "und einem kurzen Absatz, dass die Servermigration erfolgreich geprueft wurde."
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Ich werde eine Word-Datei mit dem gewuenschten Inhalt erstellen. "
+                        "Bitte einen Moment Geduld."
+                    ),
+                },
+            ]
+        }
+
+        result = module.Filter().outlet(body)
+
+        assert "Download-Link: [Datei herunterladen]" in result["messages"][-1]["content"]
+        assert captured["output_format"] == "docx"
+        assert "Servermigration wurde erfolgreich" in captured["content"]
+    finally:
+        module._create_file = original_create
+        module._synthesize_requested_file_content = original_synthesize
+
+
+
+def test_successful_rag_source_replaces_false_no_internal_knowledge_answer():
+    module = load_module()
+    original_synthesize = module._synthesize_rag_answer
+    try:
+        module._synthesize_rag_answer = lambda request_text, rag_text, user_name="": (
+            "Der KAHLE-Standort Nienburg fuehrt Volkswagen und Audi Service [#1]."
+        )
+        rag_text = (
+            "KAHLE_RAG_RESULT\n"
+            "FOUND: true\n"
+            "QUERY: KAHLE Standort Nienburg\n"
+            "INSTRUCTION: Nutze ausschliesslich den Kontext.\n"
+            "META: top1_score=0.717 threshold=0.45 model=BAAI/bge-m3\n\n"
+            "KONTEXT (zitierbar mit [#]):\n"
+            "[#1 | kahleallgemein | KB_KAHLE_Nienburg.md | chunk 0 | score 0.717]\n"
+            "Der Standort Nienburg fuehrt Volkswagen und Audi Service."
+        )
+        body = {
+            "messages": [
+                {"role": "user", "content": "Was weisst du ueber unseren Standort Nienburg?"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Ich habe keine Informationen ueber den Standort Nienburg. "
+                        "Bitte waehle einen anderen Standort aus."
+                    ),
+                },
+            ]
+        }
+
+        metadata = {
+            "kahle_tool_sources": [
+                {
+                    "source": {"name": "rag_chat/rag_chat"},
+                    "document": [rag_text],
+                    "tool_result": True,
+                }
+            ]
+        }
+        result = module.Filter().outlet(body, __metadata__=metadata)
+
+        assert "Volkswagen und Audi Service [#1]" in result["messages"][-1]["content"]
+        assert "keine Informationen" not in result["messages"][-1]["content"]
+    finally:
+        module._synthesize_rag_answer = original_synthesize
+
+
+
+
+def test_internal_followup_without_toolcall_is_refreshed_from_rag():
+    module = load_module()
+    original_call = module._call_rag_chat_tool
+    original_synthesize = module._synthesize_rag_answer
+    captured = {}
+    rag_text = (
+        "KAHLE_RAG_RESULT\n"
+        "FOUND: true\n"
+        "QUERY: Was sind die 5 Dimensionen, die im A1a bewertet werden?\n"
+        "META: top1_score=0.801 threshold=0.45 routing=exact_source\n\n"
+        "KONTEXT (zitierbar mit [#]):\n"
+        "[#1 | testkb | A1a_ki_safety_readiness_check.md | chunk 4 | score 0.801]\n"
+        "1. Governance & Verantwortlichkeiten\n"
+        "2. Tool-Landschaft & Freigaben\n"
+        "3. Datenpraktiken & Klassifizierung\n"
+        "4. Prozesse & Human-in-the-Loop\n"
+        "5. Dokumentation & Incident"
+    )
+    try:
+        def fake_call(query, messages):
+            captured["query"] = query
+            captured["messages"] = messages
+            return rag_text
+
+        module._call_rag_chat_tool = fake_call
+        module._synthesize_rag_answer = lambda request_text, source, user_name="": (
+            "Die fünf Dimensionen sind Governance & Verantwortlichkeiten, "
+            "Tool-Landschaft & Freigaben, Datenpraktiken & Klassifizierung, "
+            "Prozesse & Human-in-the-Loop sowie Dokumentation & Incident [#1]."
+        )
+        previous_rag = (
+            "KAHLE_RAG_RESULT\nFOUND: true\n"
+            "KONTEXT (zitierbar mit [#]):\n"
+            "[#1 | testkb | A1a_ki_safety_readiness_check.md | chunk 0 | score 0.700]\n"
+            "A1a ist der KI Safety-Readiness-Check."
+        )
+        body = {
+            "messages": [
+                {"role": "user", "content": "Was weißt du intern über A1a?"},
+                {
+                    "role": "assistant",
+                    "content": "A1a ist der KI Safety-Readiness-Check [#1].",
+                    "sources": [
+                        {
+                            "source": {"name": "rag_chat/rag_chat"},
+                            "document": [previous_rag],
+                            "tool_result": True,
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": "Was sind die 5 Dimensionen, die im A1a bewertet werden?",
+                },
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Governance, Mitarbeitende, Datenmanagement, "
+                        "Technische Infrastruktur und Compliance."
+                    ),
+                },
+            ]
+        }
+
+        result = module.Filter().outlet(body)
+        answer = result["messages"][-1]
+
+        assert captured["query"] == "Was sind die 5 Dimensionen, die im A1a bewertet werden?"
+        assert len(captured["messages"]) == 3
+        assert "Governance & Verantwortlichkeiten" in answer["content"]
+        assert "Technische Infrastruktur" not in answer["content"]
+        assert answer["sources"][-1]["source"]["name"] == "rag_chat/rag_chat"
+        assert answer["sources"][-1]["document"] == [rag_text]
+    finally:
+        module._call_rag_chat_tool = original_call
+        module._synthesize_rag_answer = original_synthesize
+
+
+
+
 def test_download_replacement_updates_output_text_as_well_as_content():
     module = load_module()
     original_create = module._create_file
@@ -759,6 +997,105 @@ def test_file_saved_source_payload_overrides_mutated_model_download_token():
     assert message["output"][1]["content"][0]["text"] == message["content"]
 
 
+def test_file_saved_source_payload_syncs_json_encoded_output():
+    module = load_module()
+    good_url = "http://localhost:8091/files/download?token=good_token"
+    bad_url = "http://localhost:8091/files/download?token=bad_token"
+    encoded_output = json.dumps(
+        [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": f"Download-Link: [Datei herunterladen]({bad_url})",
+                    }
+                ],
+            }
+        ]
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "Erstelle eine Word-Datei."},
+            {
+                "role": "assistant",
+                "content": f"Download-Link: [Datei herunterladen]({bad_url})",
+                "sources": [
+                    {
+                        "source": {"name": "kahle_workflow/kahle_workflow_execute"},
+                        "document": [
+                            json.dumps(
+                                {
+                                    "download_url": good_url,
+                                    "filename": "test.docx",
+                                    "sha256": "real-sha",
+                                    "size_bytes": 123,
+                                }
+                            )
+                        ],
+                        "tool_result": True,
+                    }
+                ],
+                "output": encoded_output,
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+    decoded_output = json.loads(message["output"])
+
+    assert good_url in message["content"]
+    assert bad_url not in message["content"]
+    assert decoded_output[0]["content"][0]["text"] == message["content"]
+    assert bad_url not in message["output"]
+
+def test_file_saved_source_payload_syncs_unknown_stream_delta_field():
+    module = load_module()
+    good_url = "http://localhost:8091/files/download?token=good_migrationstest_token"
+    bad_url = "http://localhost:8091/files/download?token=bad_nigrationstest_token"
+    body = {
+        "messages": [
+            {"role": "user", "content": "Erstelle eine Word-Datei."},
+            {
+                "role": "assistant",
+                "content": f"Download-Link: [Datei herunterladen]({bad_url})",
+                "sources": [
+                    {
+                        "source": {"name": "kahle_workflow/kahle_workflow_execute"},
+                        "document": [
+                            json.dumps(
+                                {
+                                    "download_url": good_url,
+                                    "filename": "migrationstest.docx",
+                                    "sha256": "real-sha",
+                                    "size_bytes": 123,
+                                }
+                            )
+                        ],
+                        "tool_result": True,
+                    }
+                ],
+                "output": json.dumps(
+                    [
+                        {
+                            "type": "response.output_text.delta",
+                            "delta": f"Download-Link: [Datei herunterladen]({bad_url})",
+                        }
+                    ]
+                ),
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    message = result["messages"][-1]
+    decoded_output = json.loads(message["output"])
+
+    assert good_url in message["content"]
+    assert decoded_output[0]["delta"].endswith(f"({good_url})")
+    assert bad_url not in message["output"]
+
 def test_bare_json_file_tool_call_is_replaced_with_download_metadata():
     module = load_module()
     original_call = module._call_file_proxy_tool
@@ -1265,8 +1602,75 @@ def test_blocked_safe_webcaller_source_overrides_model_answer():
     assert message["output"][0]["content"][0]["text"] == notice
 
 
+def test_admin_gets_kb_expiry_notice_once_per_day():
+    module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "tasks.db"
+        con = sqlite3.connect(db_path)
+        con.execute(
+            """
+            create table tasks (
+                id text primary key,
+                user_id text,
+                title text,
+                status text,
+                priority text,
+                due_date text,
+                source_chat_id text
+            )
+            """
+        )
+        con.execute(
+            "insert into tasks values (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "kbexp_test",
+                "admin-1",
+                "Wissensdatei pr\u00fcfen",
+                "open",
+                "urgent",
+                "2026-07-01",
+                "system:kb-expiry",
+            ),
+        )
+        con.commit()
+        con.close()
+        old_path = os.environ.get("KAHLE_TASKS_DB_PATH")
+        os.environ["KAHLE_TASKS_DB_PATH"] = str(db_path)
+        try:
+            first_body = {
+                "messages": [
+                    {"role": "user", "content": "Hallo"},
+                    {"role": "assistant", "content": "Hallo Jan!"},
+                ]
+            }
+            first = module.Filter().outlet(
+                first_body,
+                __user__={"id": "admin-1", "role": "admin"},
+            )
+            assert "Wissenspflege" in first["messages"][-1]["content"]
+
+            second_body = {
+                "messages": [
+                    {"role": "user", "content": "Noch eine Frage"},
+                    {"role": "assistant", "content": "Gerne."},
+                ]
+            }
+            second = module.Filter().outlet(
+                second_body,
+                __user__={"id": "admin-1", "role": "admin"},
+            )
+            assert "Wissenspflege" not in second["messages"][-1]["content"]
+        finally:
+            if old_path is None:
+                os.environ.pop("KAHLE_TASKS_DB_PATH", None)
+            else:
+                os.environ["KAHLE_TASKS_DB_PATH"] = old_path
+
+
 if __name__ == "__main__":
     test_visible_workflow_pseudo_call_is_replaced_with_download_metadata()
+    test_successful_rag_source_replaces_false_no_internal_knowledge_answer()
+    test_internal_followup_without_toolcall_is_refreshed_from_rag()
     test_download_replacement_updates_output_text_as_well_as_content()
     test_generic_pseudo_toolcall_error_updates_output_text_as_well_as_content()
     test_pseudo_call_with_prefix_still_uses_previous_assistant_result()
@@ -1290,5 +1694,6 @@ if __name__ == "__main__":
     test_kb_list_files_pseudo_call_accepts_collection_name_alias()
     test_reasoning_leak_for_research_request_is_replaced_with_formatted_text()
     test_blocked_safe_webcaller_source_overrides_model_answer()
+    test_admin_gets_kb_expiry_notice_once_per_day()
     test_file_saved_source_payload_overrides_mutated_model_download_token()
     print("kahle toolcall guard tests passed")

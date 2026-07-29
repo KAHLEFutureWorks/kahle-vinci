@@ -1,0 +1,39 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$PUBLIC_HOSTNAME} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	@health path /healthz
+	handle @health {
+		header Cache-Control "no-store"
+		respond "ok" 200
+	}
+
+	@bootstrap_client remote_ip {$BOOTSTRAP_ALLOWED_IP}
+	handle @bootstrap_client {
+		handle /files/* {
+			reverse_proxy owui-file-proxy:8091
+		}
+
+		handle {
+			reverse_proxy open-webui:8080
+		}
+	}
+
+	handle {
+		header Cache-Control "no-store"
+		respond "KAHLE-Vinci ist noch nicht freigeschaltet." 503
+	}
+}

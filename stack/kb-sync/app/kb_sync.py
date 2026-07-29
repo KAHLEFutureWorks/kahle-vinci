@@ -8,7 +8,9 @@ import sys
 import threading
 import time
 import uuid
+import re
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,7 @@ class Config:
     debounce_seconds: float
     reconcile_interval_seconds: int
     supported_extensions: tuple[str, ...]
+    control_port: int
 
 
 def env(name: str, default: str = "") -> str:
@@ -72,6 +75,7 @@ def load_config() -> Config:
         debounce_seconds=float(env("KB_SYNC_DEBOUNCE_SECONDS", "2")),
         reconcile_interval_seconds=int(env("KB_SYNC_RECONCILE_INTERVAL_SECONDS", "300")),
         supported_extensions=extensions,
+        control_port=int(env("KB_SYNC_CONTROL_PORT", "8093")),
     )
 
 
@@ -269,12 +273,39 @@ def chunk_text(text: str, max_chars: int = 1800, overlap: int = 220) -> list[str
     return chunks
 
 
+def is_rag_index_enabled(path: Path) -> bool:
+    """Return whether a Markdown document is explicitly enabled for RAG.
+
+    A source document can opt out with ``rag_index: false`` in its YAML
+    frontmatter. This keeps navigation or draft files available in the
+    filesystem without allowing them to outrank curated knowledge articles.
+    """
+    if path.suffix.lower() != ".md":
+        return True
+
+    try:
+        header = path.read_bytes()[:8192].decode("utf-8-sig", errors="replace")
+    except OSError:
+        return False
+
+    if not header.startswith("---"):
+        return True
+
+    frontmatter_end = re.search(r"^---\s*$", header[3:], flags=re.MULTILINE)
+    if not frontmatter_end:
+        return True
+
+    frontmatter = header[3 : 3 + frontmatter_end.start()]
+    return re.search(r"^\s*rag_index\s*:\s*(?:false|no|0)\s*(?:#.*)?$", frontmatter, flags=re.IGNORECASE | re.MULTILINE) is None
+
 def is_supported_file(path: Path, root: Path, extensions: tuple[str, ...]) -> bool:
     if not path.is_file():
         return False
     if path.name.startswith(".") or path.name.startswith("~$"):
         return False
     if path.suffix.lower() not in extensions:
+        return False
+    if not is_rag_index_enabled(path):
         return False
     try:
         path.relative_to(root)
@@ -289,6 +320,15 @@ def iter_collection_files(root: Path, extensions: tuple[str, ...]) -> list[Path]
     return sorted(path for path in root.rglob("*") if is_supported_file(path, root, extensions))
 
 
+def discover_collections(config: Config) -> tuple[str, ...]:
+    discovered = {
+        path.name
+        for path in config.kb_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    } if config.kb_root.exists() else set()
+    return tuple(sorted(set(config.collections) | discovered))
+
+
 class KnowledgebaseSync:
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -298,7 +338,7 @@ class KnowledgebaseSync:
         self.reconcile_lock = threading.Lock()
 
     def reconcile_all(self) -> None:
-        for collection in self.config.collections:
+        for collection in discover_collections(self.config):
             self.reconcile_collection(collection)
 
     def reconcile_collection(self, collection: str) -> None:
@@ -384,6 +424,53 @@ class KnowledgebaseSync:
         print(f"indexed collection={collection} file={rel_path} chunks={len(points)}", flush=True)
 
 
+class ReindexRequestHandler(BaseHTTPRequestHandler):
+    sync_service: KnowledgebaseSync
+
+    def _json_response(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        if self.path != "/health":
+            self._json_response(404, {"ok": False, "error": "not_found"})
+            return
+        self._json_response(200, {"ok": True, "collections": list(discover_collections(self.sync_service.config))})
+
+    def do_POST(self) -> None:
+        if self.path != "/reindex":
+            self._json_response(404, {"ok": False, "error": "not_found"})
+            return
+        try:
+            length = min(int(self.headers.get("Content-Length", "0")), 8192)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            collection = str(payload.get("collection") or "").strip()
+            if collection not in discover_collections(self.sync_service.config):
+                self._json_response(404, {"ok": False, "error": "unknown_collection"})
+                return
+            started = time.monotonic()
+            self.sync_service.reconcile_collection(collection)
+            self._json_response(
+                200,
+                {
+                    "ok": True,
+                    "collection": collection,
+                    "path": str(payload.get("path") or ""),
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                },
+            )
+        except Exception as exc:
+            print(f"reindex_request_failed error={exc}", flush=True)
+            self._json_response(500, {"ok": False, "error": str(exc)})
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+
 class DebouncedHandler(FileSystemEventHandler):
     def __init__(self, sync: KnowledgebaseSync) -> None:
         self.sync = sync
@@ -413,18 +500,23 @@ def main() -> int:
     stop = threading.Event()
     observer = Observer()
     handler = DebouncedHandler(sync)
-    for collection in config.collections:
-        observer.schedule(handler, str(config.kb_root / collection), recursive=True)
+    observer.schedule(handler, str(config.kb_root), recursive=True)
     observer.start()
+
+    ReindexRequestHandler.sync_service = sync
+    control_server = ThreadingHTTPServer(("0.0.0.0", config.control_port), ReindexRequestHandler)
+    control_thread = threading.Thread(target=control_server.serve_forever, daemon=True)
+    control_thread.start()
 
     def shutdown(_signum: int, _frame: Any) -> None:
         stop.set()
+        control_server.shutdown()
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     print(
         "kb_sync_started "
-        f"root={config.kb_root} collections={','.join(config.collections)} model={config.embedding_model}",
+        f"root={config.kb_root} collections={','.join(discover_collections(config))} model={config.embedding_model}",
         flush=True,
     )
 
@@ -434,6 +526,7 @@ def main() -> int:
     finally:
         observer.stop()
         observer.join(timeout=10)
+        control_server.server_close()
         sync.state.save()
     return 0
 

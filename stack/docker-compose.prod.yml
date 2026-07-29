@@ -1,0 +1,115 @@
+services:
+  open-webui:
+    mem_limit: 3500m
+    cpus: 4.0
+    pids_limit: 512
+    environment:
+      WEBUI_URL: ${WEBUI_URL:?WEBUI_URL is required}
+      CORS_ALLOW_ORIGIN: ${WEBUI_URL:?WEBUI_URL is required}
+      ENABLE_SIGNUP: "False"
+      ENABLE_OAUTH_SIGNUP: "True"
+      ENABLE_OAUTH_PERSISTENT_CONFIG: "False"
+      ENABLE_LOGIN_FORM: ${ENABLE_LOGIN_FORM:-False}
+      ENABLE_PASSWORD_AUTH: ${ENABLE_PASSWORD_AUTH:-False}
+      ENABLE_PASSWORD_CHANGE_FORM: "False"
+      DEFAULT_USER_ROLE: ${DEFAULT_USER_ROLE:-pending}
+      OAUTH_AUTO_REDIRECT: "True"
+      ENABLE_OAUTH_ID_TOKEN_COOKIE: "False"
+      ENABLE_OAUTH_TOKEN_EXCHANGE: "False"
+      ENABLE_PROFILE_IMAGE_URL_FORWARDING: "False"
+      WEBUI_SESSION_COOKIE_SECURE: "True"
+      WEBUI_AUTH_COOKIE_SECURE: "True"
+      WEBUI_SESSION_COOKIE_SAME_SITE: "lax"
+      WEBUI_AUTH_COOKIE_SAME_SITE: "lax"
+      OAUTH_MAX_SESSIONS_PER_USER: "5"
+      OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE: "True"
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "False"
+      OAUTH_ALLOWED_DOMAINS: ${OAUTH_ALLOWED_DOMAINS:?OAUTH_ALLOWED_DOMAINS is required}
+      OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL:?OPENID_PROVIDER_URL is required}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:?MICROSOFT_CLIENT_ID is required}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:?MICROSOFT_CLIENT_SECRET is required}
+      MICROSOFT_CLIENT_TENANT_ID: ${MICROSOFT_CLIENT_TENANT_ID:?MICROSOFT_CLIENT_TENANT_ID is required}
+      MICROSOFT_REDIRECT_URI: ${MICROSOFT_REDIRECT_URI:?MICROSOFT_REDIRECT_URI is required}
+      MICROSOFT_OAUTH_SCOPE: ${MICROSOFT_OAUTH_SCOPE:-openid email profile offline_access}
+      OAUTH_SESSION_TOKEN_ENCRYPTION_KEY: ${OAUTH_SESSION_TOKEN_ENCRYPTION_KEY:?OAUTH_SESSION_TOKEN_ENCRYPTION_KEY is required}
+      OAUTH_CLIENT_INFO_ENCRYPTION_KEY: ${OAUTH_CLIENT_INFO_ENCRYPTION_KEY:?OAUTH_CLIENT_INFO_ENCRYPTION_KEY is required}
+
+  owui-file-proxy:
+    mem_limit: 750m
+    cpus: 1.0
+    pids_limit: 256
+    environment:
+      PUBLIC_BASE_URL: ${WEBUI_URL:?WEBUI_URL is required}
+
+  kb-admin-api:
+    mem_limit: 750m
+    cpus: 1.0
+    pids_limit: 192
+
+  kb-admin-dashboard:
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 192
+
+  document-worker:
+    mem_limit: 1500m
+    cpus: 2.0
+    pids_limit: 256
+
+  n8n:
+    mem_limit: 1500m
+    cpus: 2.0
+    pids_limit: 256
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://n8n:5678/
+      N8N_SECURE_COOKIE: "false"
+
+  qdrant:
+    mem_limit: 3g
+    cpus: 3.0
+    pids_limit: 256
+
+  kb-sync:
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
+
+  searxng:
+    mem_limit: 750m
+    cpus: 1.0
+    pids_limit: 256
+
+  caddy:
+    image: caddy:2.11.3-alpine
+    container_name: caddy
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 128
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?PUBLIC_HOSTNAME is required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      open-webui:
+        condition: service_started
+      owui-file-proxy:
+        condition: service_healthy
+      kb-admin-api:
+        condition: service_healthy
+      kb-admin-dashboard:
+        condition: service_started
+    networks:
+      - appnet
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

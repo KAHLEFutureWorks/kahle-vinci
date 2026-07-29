@@ -1,0 +1,127 @@
+[
+    {
+        "id":  "KbExpiryReminder",
+        "name":  "KB-Gültigkeit: Open-WebUI-Admin-Erinnerung",
+        "description":  "Prüft täglich die Gültigkeit der Knowledgebase-Dateien, synchronisiert Aufgaben für Open-WebUI-Admins und bereinigt Collection-Archive nach 30 Tagen.",
+        "active":  false,
+        "nodes":  [
+                      {
+                          "parameters":  {
+                                             "rule":  {
+                                                          "interval":  [
+                                                                           {
+                                                                               "field":  "days",
+                                                                               "daysInterval":  1,
+                                                                               "triggerAtHour":  10,
+                                                                               "triggerAtMinute":  30
+                                                                           }
+                                                                       ]
+                                                      }
+                                         },
+                          "id":  "c05dc801-956d-40ed-9bf4-d940c814eec9",
+                          "name":  "Täglich 10:30",
+                          "type":  "n8n-nodes-base.scheduleTrigger",
+                          "typeVersion":  1.3,
+                          "position":  [
+                                           240,
+                                           300
+                                       ]
+                      },
+                      {
+                          "parameters":  {
+                                             "method":  "POST",
+                                             "url":  "http://owui-file-proxy:8091/maintenance/kb_expiry_sync",
+                                             "sendHeaders":  true,
+                                             "headerParameters":  {
+                                                                      "parameters":  [
+                                                                                         {
+                                                                                             "name":  "Authorization",
+                                                                                             "value":  "Bearer {{$env.OWUI_FILE_PROXY_API_KEY}}"
+                                                                                         }
+                                                                                     ]
+                                                                  },
+                                             "sendBody":  true,
+                                             "specifyBody":  "json",
+                                             "jsonBody":  "{\"dry_run\":false}",
+                                             "options":  {
+                                                             "timeout":  120000
+                                                         }
+                                         },
+                          "id":  "046525f8-576d-4fb8-b005-c039a74cc7ec",
+                          "name":  "Wissenspflege-Aufgaben synchronisieren",
+                          "type":  "n8n-nodes-base.httpRequest",
+                          "typeVersion":  4.3,
+                          "position":  [
+                                           560,
+                                           300
+                                       ],
+                          "notesInFlow":  true,
+                          "notes":  "Der Endpoint ist nur im internen Docker-Netz erreichbar und mit dem vorhandenen OWUI_FILE_PROXY_API_KEY geschützt."
+                      },
+                      {
+                          "parameters":  {
+                                             "method":  "POST",
+                                             "url":  "http://kb-admin-api:8092/maintenance/trash-cleanup?dry_run=false",
+                                             "sendHeaders":  true,
+                                             "headerParameters":  {
+                                                                      "parameters":  [
+                                                                                         {
+                                                                                             "name":  "Authorization",
+                                                                                             "value":  "Bearer {{$env.OWUI_FILE_PROXY_API_KEY}}"
+                                                                                         }
+                                                                                     ]
+                                                                  },
+                                             "options":  {
+                                                             "timeout":  120000
+                                                         }
+                                         },
+                          "id":  "1ae974a8-4f52-4c9e-8a9e-61e3147785d0",
+                          "name":  "Papierkorb nach 30 Tagen bereinigen",
+                          "type":  "n8n-nodes-base.httpRequest",
+                          "typeVersion":  4.3,
+                          "position":  [
+                                           880,
+                                           300
+                                       ],
+                          "notesInFlow":  true,
+                          "notes":  "Entfernt ausschlieÃŸlich Collection-Archive, deren 30-tÃ¤gige Aufbewahrungsfrist abgelaufen ist."
+                      }
+                  ],
+        "connections":  {
+                            "Wissenspflege-Aufgaben synchronisieren":  {
+                                                                           "main":  [
+                                                                                        [
+                                                                                            {
+                                                                                                "node":  "Papierkorb nach 30 Tagen bereinigen",
+                                                                                                "type":  "main",
+                                                                                                "index":  0
+                                                                                            }
+                                                                                        ]
+                                                                                    ]
+                                                                       },
+                            "Täglich 10:30":  {
+                                                  "main":  [
+                                                               [
+                                                                   {
+                                                                       "node":  "Wissenspflege-Aufgaben synchronisieren",
+                                                                       "type":  "main",
+                                                                       "index":  0
+                                                                   }
+                                                               ]
+                                                           ]
+                                              }
+                        },
+        "settings":  {
+                         "executionOrder":  "v1",
+                         "timezone":  "Europe/Berlin"
+                     },
+        "staticData":  null,
+        "meta":  null,
+        "pinData":  {
+
+                    },
+        "tags":  [
+
+                 ]
+    }
+]

@@ -313,8 +313,15 @@ def main() -> int:
                 (pu.scheme, pu.netloc, pu.path, parse.urlencode({"token": tampered_token}), pu.fragment)
             )
             expect(http_status(tampered) == 401, "tampered token rejected")
+        elif "/files/d/" in pu.path:
+            handle = pu.path.rsplit("/", 1)[-1]
+            tampered_handle = ("0" if handle[0] != "0" else "1") + handle[1:]
+            tampered = parse.urlunsplit(
+                (pu.scheme, pu.netloc, pu.path.rsplit("/", 1)[0] + "/" + tampered_handle, "", pu.fragment)
+            )
+            expect(http_status(tampered) == 404, "tampered short capability rejected")
         else:
-            failures.append("signed download check: missing token")
+            failures.append("download check: missing signed token or short capability")
 
         rel = (q.get("rel") or [""])[0]
         sig = (q.get("sig") or [""])[0]

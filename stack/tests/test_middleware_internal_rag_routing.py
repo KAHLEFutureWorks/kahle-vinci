@@ -161,6 +161,8 @@ def load_fallback_tool_helpers():
         "re": re,
         "unicodedata": unicodedata,
         "tools": {"kahle_workflow_execute": object()},
+        "attached_file_names": [],
+        "attached_exact_paths": [],
         "_looks_like_internal_rag_request": lambda text: False,
     }
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
@@ -180,6 +182,31 @@ def test_previous_result_word_request_routes_to_workflow_before_streaming():
             "name": "kahle_workflow_execute",
             "parameters": {
                 "auftrag": "Bitte gib mir das Ergebnis einmal strukturiert als WOrd aus",
+                "output_format": "docx",
+            },
+        }
+    ]
+
+
+def test_direct_word_creation_request_routes_to_workflow_before_streaming():
+    infer_fallback = load_fallback_tool_helpers()
+
+    calls = infer_fallback(
+        {},
+        (
+            "Erstelle eine Word-Datei mit der Ueberschrift KAHLE-Vinci Migrationstest "
+            "und einem kurzen Absatz, dass die Servermigration erfolgreich geprueft wurde."
+        ),
+    )
+
+    assert calls == [
+        {
+            "name": "kahle_workflow_execute",
+            "parameters": {
+                "auftrag": (
+                    "Erstelle eine Word-Datei mit der Ueberschrift KAHLE-Vinci Migrationstest "
+                    "und einem kurzen Absatz, dass die Servermigration erfolgreich geprueft wurde."
+                ),
                 "output_format": "docx",
             },
         }

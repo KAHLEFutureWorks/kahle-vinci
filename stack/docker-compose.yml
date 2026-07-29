@@ -1,6 +1,6 @@
 services:
   open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.9.6
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0}
     container_name: open-webui
     restart: unless-stopped
     ports:
@@ -11,6 +11,7 @@ services:
 
       # IONOS AI Model Hub via OpenAI-compatible API
       ENABLE_PERSISTENT_CONFIG: "False"
+      ENABLE_OLLAMA_API: "False"
       ENABLE_OPENAI_API: "True"
       OPENAI_API_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
       OPENAI_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
@@ -56,6 +57,7 @@ services:
        Return ONLY valid JSON:
        {"tool_calls":[{"name":"<tool>","parameters":{...}}]}
        RULES:
+       - For every follow-up asking for more detail from KAHLE-internal knowledge, call rag_chat again. Make query standalone and carry forward the prior document/product identifier, e.g. "A1a Assessment-Framework 5 Readiness-Dimensionen". Never answer such follow-ups only from chat history.
        - For safe_webcaller/safe_websearch, set query to a concise search-engine query, not to the full conversational user sentence. Include main entity, aspect, region/language, and timeframe when present.
        - For current/news/latest web searches, include 2026 or the explicit date/range from the user. Do not add unrelated years.
        - Do not include chat filler in search queries, e.g. "bitte", "recherchiere", "kannst du".
@@ -140,6 +142,9 @@ services:
       OWUI_DB_PATH: /app/backend/data/webui.db
       OWUI_LOG_CLEANUP_REPORT_PATH: /retention-reports/openwebui_log_cleanup_report.json
       OWUI_LOG_CLEANUP_STALE_HOURS: "36"
+      KB_ROOT: /knowledgebases
+      KAHLE_TASKS_DB_PATH: /app/backend/data/kahle_vinci_tasks.db
+      KB_EXPIRY_DEFAULT_NOTIFY_DAYS: "14"
       FILE_LINK_SECRET: ${FILE_LINK_SECRET:?FILE_LINK_SECRET is required}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8091}
       KAHLE_ASSETS_ROOT: /assets
@@ -152,6 +157,7 @@ services:
       - "127.0.0.1:8091:8091"
     volumes:
       - open-webui:/app/backend/data
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/assets:/assets:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/retention-reports:/retention-reports:ro"
     healthcheck:
@@ -162,6 +168,73 @@ services:
       start_period: 15s
     depends_on:
       document-worker:
+        condition: service_healthy
+    networks:
+      - appnet
+
+  kb-admin-api:
+    build:
+      context: ./kb-admin-api
+      dockerfile: Dockerfile
+    container_name: kb-admin-api
+    restart: unless-stopped
+    user: "${KB_ADMIN_UID:-1000}:${KB_ADMIN_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      KB_ROOT: /knowledgebases
+      KB_STATE_PATH: /state/kb-sync-state.json
+      QDRANT_URL: http://qdrant:6333
+      OPENWEBUI_URL: http://open-webui:8080
+      KB_SYNC_URL: http://kb-sync:8093
+      IONOS_OPENAI_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
+      IONOS_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
+      IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
+      KB_ADMIN_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
+      KB_ADMIN_MAX_UPLOAD_BYTES: "26214400"
+      KB_ADMIN_TRASH_RETENTION_DAYS: "30"
+      KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+    volumes:
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/state:ro"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=5).getcode()==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      open-webui:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      kb-sync:
+        condition: service_started
+    networks:
+      - appnet
+
+  kb-admin-dashboard:
+    build:
+      context: ../admin-dashboard
+      dockerfile: Dockerfile
+    container_name: kb-admin-dashboard
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    expose:
+      - "3000"
+    depends_on:
+      kb-admin-api:
         condition: service_healthy
     networks:
       - appnet
@@ -256,6 +329,9 @@ services:
       KB_SYNC_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
       KB_SYNC_DEBOUNCE_SECONDS: "2"
       KB_SYNC_RECONCILE_INTERVAL_SECONDS: "300"
+      KB_SYNC_CONTROL_PORT: "8093"
+    expose:
+      - "8093"
     volumes:
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/state"

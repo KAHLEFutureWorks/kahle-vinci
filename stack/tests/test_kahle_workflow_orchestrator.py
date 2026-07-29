@@ -138,6 +138,22 @@ def test_output_format_is_inferred_from_word_output_request():
     assert fmt == "docx"
 
 
+def test_model_output_format_cannot_create_file_without_explicit_user_request():
+    module = load_module()
+    pasted_rdp_checklist = (
+        "Das liegt meist an einem der folgenden Punkte. Pruefe sie nacheinander: "
+        "Registrierungseintrag pruefen, Gruppenrichtlinie pruefen und den RDP-Client aktualisieren."
+    )
+
+    assert module.resolve_explicit_download_format(pasted_rdp_checklist, "pdf") == "none"
+
+
+def test_explicit_user_file_format_overrides_incorrect_model_format():
+    module = load_module()
+
+    request = "Fasse die Schritte zusammen und gib mir das Ergebnis als Word-Datei aus."
+    assert module.resolve_explicit_download_format(request, "pdf") == "docx"
+
 def test_suggest_output_filename_decodes_literal_unicode_escapes():
     module = load_module()
 
@@ -310,6 +326,49 @@ def test_workflow_creates_generated_file_payload_for_research_pdf_request():
     finally:
         module.create_downloadable_file = original_create
 
+
+def test_direct_document_request_skips_rag_and_uses_only_requested_content():
+    module = load_module()
+    request = (
+        'Erstelle eine Word-Datei mit der Überschrift „KAHLE-Vinci Migrationstest“ '
+        'und einem kurzen Absatz, dass die Servermigration erfolgreich geprüft wurde.'
+    )
+
+    assert module._looks_like_direct_document_request(request, "docx") is True
+    markdown = module.build_direct_document_markdown(request)
+    assert markdown.startswith("# KAHLE-Vinci Migrationstest")
+    assert "Es wird bestätigt, dass die Servermigration erfolgreich geprüft wurde." in markdown
+
+    original_create = module.create_downloadable_file
+    try:
+        captured = {}
+
+        def fake_create(content, output_format, filename, title=""):
+            captured.update(content=content, output_format=output_format, filename=filename, title=title)
+            return {
+                "output_kind": "file_saved",
+                "filename": filename,
+                "download_url": "http://localhost:8091/files/download?token=direct",
+                "sha256": "abc",
+                "size_bytes": 123,
+            }
+
+        module.create_downloadable_file = fake_create
+        tools = module.Tools()
+        tools._run_internal_rag = lambda query: (_ for _ in ()).throw(
+            AssertionError("direct document creation must not run internal RAG")
+        )
+        raw = asyncio.run(tools.kahle_workflow_execute(request, output_format="docx"))
+        payload = json.loads(raw)
+
+        assert payload["intent"] == "direct_document"
+        assert payload["download_url"].endswith("token=direct")
+        assert captured["output_format"] == "docx"
+        assert captured["title"] == "KAHLE-Vinci Migrationstest"
+        assert "Interne KAHLE-Informationen" not in captured["content"]
+        assert "Servermigration erfolgreich geprüft" in captured["content"]
+    finally:
+        module.create_downloadable_file = original_create
 
 def test_workflow_recovers_empty_auftrag_from_chat_history():
     module = load_module()
@@ -654,6 +713,8 @@ if __name__ == "__main__":
     test_output_format_is_inferred_from_word_output_request()
     test_suggest_output_filename_decodes_literal_unicode_escapes()
     test_same_turn_research_with_daraus_is_not_previous_result_followup()
+    test_model_output_format_cannot_create_file_without_explicit_user_request()
+    test_explicit_user_file_format_overrides_incorrect_model_format()
     test_workflow_web_query_is_optimized_for_cupra_tindaya_pdf_request()
     test_workflow_web_query_is_optimized_for_barilla_pesto_docx_request()
     test_workflow_web_query_is_optimized_for_spaghetti_instructions()

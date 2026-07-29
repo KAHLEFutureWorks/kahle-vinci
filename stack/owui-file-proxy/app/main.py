@@ -25,6 +25,12 @@ from fastapi.responses import Response, JSONResponse, FileResponse, RedirectResp
 from pydantic import BaseModel, Field, constr
 
 try:
+    from .kb_expiry import sync_expiry_tasks
+except ImportError:  # pragma: no cover - direct module execution in local tests
+    from kb_expiry import sync_expiry_tasks
+
+
+try:
     from docx import Document  # type: ignore
     from docx.shared import RGBColor  # type: ignore
 except Exception:  # pragma: no cover - optional runtime dependency
@@ -85,6 +91,11 @@ UPLOAD_ROOT = Path(OWUI_UPLOAD_DIR).resolve()
 # Output subfolder for saved files
 OUTPUT_SUBDIR = os.getenv("OWUI_OUTPUT_SUBDIR", "edited").strip("/")
 OWUI_DB_PATH = Path(os.getenv("OWUI_DB_PATH", "/app/backend/data/webui.db"))
+KAHLE_TASKS_DB_PATH = Path(
+    os.getenv("KAHLE_TASKS_DB_PATH", "/app/backend/data/kahle_vinci_tasks.db")
+)
+KB_ROOT = Path(os.getenv("KB_ROOT", "/knowledgebases")).resolve()
+KB_EXPIRY_DEFAULT_NOTIFY_DAYS = int(os.getenv("KB_EXPIRY_DEFAULT_NOTIFY_DAYS", "14"))
 OWUI_LOG_CLEANUP_REPORT_PATH = Path(
     os.getenv("OWUI_LOG_CLEANUP_REPORT_PATH", "/retention-reports/openwebui_log_cleanup_report.json")
 )
@@ -162,7 +173,7 @@ def _require_api_key(x_api_key: Optional[str] = None, authorization: Optional[st
 @app.middleware("http")
 async def enforce_api_key(request: Request, call_next):
     path = request.url.path
-    if path not in AUTH_EXEMPT_PATHS:
+    if path not in AUTH_EXEMPT_PATHS and not path.startswith("/files/d/"):
         provided = _provided_api_key(
             request.headers.get("x-api-key"),
             request.headers.get("authorization"),
@@ -1385,11 +1396,17 @@ def _decode_download_token(token: str) -> tuple[str, int, str]:
 
 def _build_download_url(rel: str) -> str:
     exp = int(time.time()) + FILE_LINK_TTL_SECONDS
-    sig = "unsigned" if ALLOW_UNSIGNED_DOWNLOADS else _sign_download(rel, exp)
-    token = _encode_download_token(rel, exp, sig)
-    path = f"/files/download?token={token}"
+    download_id = uuid.uuid4().hex
+    manifest = {
+        "rel": _safe_relpath(rel),
+        "exp": exp,
+    }
+    _write_atomic(
+        UPLOAD_ROOT / ".download-links" / f"{download_id}.json",
+        json.dumps(manifest, separators=(",", ":")).encode("utf-8"),
+    )
+    path = f"/files/d/{download_id}"
     return f"{PUBLIC_BASE_URL}{path}" if PUBLIC_BASE_URL else path
-
 
 def _save_bytes(filename: str, data: bytes) -> dict:
     safe_name = _sanitize_filename(filename)
@@ -1561,6 +1578,18 @@ class CleanupOpenWebUIChatsRequest(BaseModel):
     keep_pinned: bool = Field(True, description="If true, never delete pinned chats")
     max_delete: int = Field(5000, ge=1, le=100000, description="Safety limit for deleted chats per run")
     vacuum: bool = Field(True, description="If true, run VACUUM after deletion")
+
+
+
+class KbExpirySyncRequest(BaseModel):
+    dry_run: bool = Field(
+        True,
+        description="If true, scan and report only. False creates or updates admin tasks.",
+    )
+    today: str = Field(
+        "",
+        description="Optional YYYY-MM-DD test date. Leave empty in production.",
+    )
 
 
 # -----------------------------
@@ -1873,6 +1902,32 @@ def maintenance_openwebui_log_cleanup_status(x_api_key: Optional[str] = Header(d
     return _load_log_cleanup_report()
 
 
+@app.post("/maintenance/kb_expiry_sync", include_in_schema=False)
+def maintenance_kb_expiry_sync(
+    payload: KbExpirySyncRequest,
+    x_api_key: Optional[str] = Header(default=None),
+):
+    _require_api_key(x_api_key)
+    reference_date = None
+    if payload.today:
+        try:
+            reference_date = datetime.strptime(payload.today, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="today_must_be_yyyy_mm_dd") from exc
+    try:
+        return sync_expiry_tasks(
+            kb_root=KB_ROOT,
+            tasks_db_path=KAHLE_TASKS_DB_PATH,
+            webui_db_path=OWUI_DB_PATH,
+            today=reference_date,
+            default_notify_days=KB_EXPIRY_DEFAULT_NOTIFY_DAYS,
+            dry_run=payload.dry_run,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"kb_expiry_sync_failed: {exc}") from exc
+
+
+
 @app.post("/files/save_b64", include_in_schema=False)
 def files_save_b64(payload: SaveB64Request, x_api_key: Optional[str] = Header(default=None)):
     _require_api_key(x_api_key)
@@ -2016,6 +2071,42 @@ def files_download(
 
     return FileResponse(path=str(abs_path), filename=abs_path.name, media_type=media_type)
 
+
+@app.get("/files/d/{download_id}", include_in_schema=False)
+def files_download_short(download_id: str):
+    """Resolve a short, unguessable, expiring download capability."""
+    if not re.fullmatch(r"[0-9a-f]{32}", download_id or ""):
+        raise HTTPException(status_code=404, detail="download_not_found")
+
+    manifest_path = UPLOAD_ROOT / ".download-links" / f"{download_id}.json"
+    if not manifest_path.exists() or not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="download_not_found")
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        exp = int(manifest.get("exp"))
+        rel = _safe_relpath(str(manifest.get("rel") or ""))
+    except Exception:
+        raise HTTPException(status_code=404, detail="download_not_found")
+
+    if exp < int(time.time()):
+        try:
+            manifest_path.unlink()
+        except Exception:
+            pass
+        raise HTTPException(status_code=410, detail="link_expired")
+
+    abs_path = (UPLOAD_ROOT / rel).resolve()
+    _ensure_within_upload_root(abs_path)
+    if not abs_path.exists() or not abs_path.is_file():
+        raise HTTPException(status_code=404, detail="file_not_found")
+
+    media_type, _ = mimetypes.guess_type(abs_path.name)
+    return FileResponse(
+        path=str(abs_path),
+        filename=abs_path.name,
+        media_type=media_type or "application/octet-stream",
+    )
 
 # -----------------------------
 # DOCX: replace_one (existing)

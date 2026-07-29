@@ -1,0 +1,10 @@
+services:
+  open-webui:
+    environment:
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "True"
+
+  caddy:
+    environment:
+      BOOTSTRAP_ALLOWED_IP: ${BOOTSTRAP_ALLOWED_IP:?BOOTSTRAP_ALLOWED_IP is required}
+    volumes:
+      - ./caddy/Caddyfile.bootstrap:/etc/caddy/Caddyfile:ro

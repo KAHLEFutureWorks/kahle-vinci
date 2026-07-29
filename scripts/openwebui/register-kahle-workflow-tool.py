@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sqlite3
@@ -42,6 +43,8 @@ Return ONLY valid JSON, with no markdown, no prose and no visible pseudo tool sy
 Hard rules:
 - Never output "[TOOL_CALLS]" or a raw tool name in the chat. If a tool is needed, return the JSON object above only.
 - Use exact tool names from Available Tools. Do not invent aliases.
+- Never create a downloadable file unless the user's current message explicitly requests a file, export or download and names or clearly implies a format.
+- A pasted answer, list, checklist, code block or copied text is not a file request; in that case do not set a file output_format or call a file-creation tool.
 - If no tool is needed or required information is missing, return exactly {"tool_calls":[]}.
 
 Routing:
@@ -53,6 +56,7 @@ Routing:
 - For uploaded file editing/conversion only: use the matching *_save file proxy tool and exact attached filename(s). Never guess upload filenames.
 - For external/current web research without file output: use safe_websearch with a search-engine style query.
 - For KAHLE-internal knowledge without web/file output: use RAG_Chat/rag_chat where available.
+- For every follow-up asking for more detail from internal knowledge, call rag_chat again. Make query standalone and carry forward the prior document/product identifier (for example: "A1a Assessment-Framework 5 Readiness-Dimensionen"). Never answer such follow-ups only from chat history.
 - For listing, updating, completing or deleting personal tasks: always use kahle_tasks tools. Never answer task lists from memory.
 
 Parameter rules:
@@ -316,6 +320,23 @@ KAHLE_TASK_ADMIN_SPECS = [
 
 
 TOOL_DEFINITIONS = {
+    "rag_chat": {
+        "name": "RAG Chat KAHLE",
+        "path": TOOLS_DIR / "rag_chat_direct_qdrant.py",
+        "specs": [
+            {
+                "name": "rag_chat",
+                "description": "Durchsucht alle aktiven KAHLE Knowledgebases in Qdrant und liefert zitierbaren internen Kontext. Bei Folgefragen erneut aufrufen und die vorherige Dokument- oder Produktkennung im query beibehalten.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            }
+        ],
+        "description": "Dynamische RAG-Suche mit semantischem und strukturbezogenem Retrieval über alle aktiven Bases.",
+        "version": "0.5.0",
+    },
     "safe_webcaller": {
         "name": "Safe Webcaller",
         "path": TOOLS_DIR / "safe_webcaller.py",
@@ -358,8 +379,8 @@ FUNCTION_DEFINITIONS = {
         "name": "KAHLE Toolcall Guard",
         "path": FUNCTIONS_DIR / "kahle_toolcall_guard.py",
         "type": "filter",
-        "description": "Outlet-Filter gegen sichtbare Pseudo-Toolcalls bei Datei-Erstellung.",
-        "version": "0.1.0",
+        "description": "Outlet-Filter gegen Pseudo-Toolcalls und unbelegte interne Folgeantworten.",
+        "version": "0.2.0",
         "is_global": 1,
     },
 }
@@ -555,6 +576,22 @@ def ensure_admin_model(con: sqlite3.Connection, now: int) -> None:
 
 
 def update_tools_function_calling_prompt(con: sqlite3.Connection) -> bool:
+    columns = {str(row[1]) for row in con.execute("pragma table_info(config)").fetchall()}
+    if {"key", "value"}.issubset(columns):
+        con.execute(
+            """
+            insert into config (key, value, updated_at)
+            values ('task.tools.prompt_template', ?, ?)
+            on conflict(key) do update set
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (json.dumps(TOOLS_FUNCTION_CALLING_PROMPT, ensure_ascii=False), int(time.time())),
+        )
+        return True
+
+    if not {"id", "data"}.issubset(columns):
+        return False
     row = con.execute("select data from config where id = 1").fetchone()
     if not row:
         return False
@@ -573,8 +610,15 @@ def update_tools_function_calling_prompt(con: sqlite3.Connection) -> bool:
     con.execute("update config set data = ?, updated_at = ? where id = 1", (json.dumps(data, ensure_ascii=False), time.strftime("%Y-%m-%dT%H:%M:%S")))
     return True
 
-
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--only",
+        choices=sorted([*TOOL_DEFINITIONS, *FUNCTION_DEFINITIONS]),
+        help="Nur ein einzelnes Tool bzw. eine einzelne Function aktualisieren.",
+    )
+    args = parser.parse_args()
+
     if not DB_PATH.exists():
         print(f"ERROR: OpenWebUI DB not found: {DB_PATH}", file=sys.stderr)
         return 2
@@ -587,9 +631,16 @@ def main() -> int:
     try:
         has_access_grant = table_exists(con, "access_grant")
         for tool_id, definition in TOOL_DEFINITIONS.items():
-            register_tool(con, tool_id, definition, now)
+            if not args.only or args.only == tool_id:
+                register_tool(con, tool_id, definition, now)
         for function_id, definition in FUNCTION_DEFINITIONS.items():
-            register_function(con, function_id, definition, now)
+            if not args.only or args.only == function_id:
+                register_function(con, function_id, definition, now)
+
+        if args.only:
+            con.commit()
+            print(f"Registered KAHLE component: {args.only}")
+            return 0
 
         prompts = {
             "vinci-2-clone-clone-clone": PROMPTS_DIR / "kahle-vinci-systemprompt.md",

@@ -1,0 +1,11 @@
+[Unit]
+Description=KAHLE-Vinci local system and application healthcheck
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kahle-vinci-healthcheck
+TimeoutStartSec=90s
+UMask=0077
+

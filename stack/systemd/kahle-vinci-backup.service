@@ -1,0 +1,14 @@
+[Unit]
+Description=KAHLE-Vinci encrypted application backup
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kahle-vinci-backup
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+

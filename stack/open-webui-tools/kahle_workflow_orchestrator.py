@@ -162,6 +162,51 @@ def _looks_like_previous_result_request(text: str) -> bool:
     )
 
 
+def _looks_like_direct_document_request(text: str, output_format: str) -> bool:
+    """Detect file requests whose content is supplied by the user, not researched."""
+    if output_format not in {"pdf", "docx", "md"}:
+        return False
+    lower = (text or "").lower()
+    if re.search(r"\b(recherchier\w*|such\w*|find\w*|ermittel\w*|nachschlag\w*)\b", lower):
+        return False
+    asks_to_create = bool(re.search(r"\b(erstell\w*|erzeug\w*|generier\w*|schreib\w*)\b", lower))
+    supplies_content = bool(
+        re.search(r"\b(ueberschrift|überschrift|titel)\b", lower)
+        and re.search(r"\b(absatz|inhalt|text)\b", lower)
+    )
+    return asks_to_create and supplies_content
+
+
+def build_direct_document_markdown(auftrag: str) -> str:
+    """Build a small document strictly from explicit user-provided content."""
+    title = _requested_document_title(auftrag, fallback="KAHLE-Vinci Dokument")
+    text = str(auftrag or "").strip()
+    paragraph = ""
+
+    clause_match = re.search(
+        r"\b(?:einem|einen)\s+(?:kurzen\s+)?absatz\s*,?\s+dass\s+(.+?)(?:[.!?]\s*)?$",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if clause_match:
+        clause = re.sub(r"\s+", " ", clause_match.group(1)).strip(" .")
+        if clause:
+            paragraph = f"Es wird bestätigt, dass {clause}."
+
+    if not paragraph:
+        content_match = re.search(
+            r"\b(?:absatz|inhalt|text)\s*(?:mit\s+dem\s+inhalt|lautet|:|,)?\s*[„\"“](.*?)[”\"“]",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if content_match:
+            paragraph = re.sub(r"\s+", " ", content_match.group(1)).strip()
+
+    if not paragraph:
+        paragraph = "Der angeforderte Dokumentinhalt wurde erstellt."
+
+    return f"# {title}\n\n{paragraph}\n"
+
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: int = 60) -> dict:
     import requests
 
@@ -306,6 +351,22 @@ def infer_download_format(auftrag: str, output_format: str = "auto") -> str:
     if "markdown" in text or ".md" in text:
         return "md"
     return "pdf"
+
+
+def resolve_explicit_download_format(auftrag: str, output_format: str = "auto") -> str:
+    """Allow downloads only when the user text explicitly asks for a file.
+
+    The model-provided ``output_format`` is advisory. It must never turn a
+    pasted list, answer or code block into a downloadable file by itself.
+    """
+    explicit_format = infer_download_format(auftrag, "auto")
+    if explicit_format == "none":
+        return "none"
+
+    requested_format = infer_download_format("", output_format)
+    if requested_format in {"pdf", "docx", "md"} and requested_format != explicit_format:
+        return explicit_format
+    return explicit_format
 
 
 def _decode_literal_unicode_escapes(value: str) -> str:
@@ -817,7 +878,7 @@ class Tools:
                 "hint": "Das Modell hat das Workflow-Tool ohne Parameter aufgerufen. Starte den Toolcall erneut mit der aktuellen Nutzeraufgabe im Feld 'auftrag'.",
             })
 
-        download_format = infer_download_format(auftrag, output_format)
+        download_format = resolve_explicit_download_format(auftrag, output_format)
         if download_format != "none" and _looks_like_previous_result_request(auftrag):
             previous_answer = _latest_chat_message(__chat_id__, "assistant", require_result=True)
             if previous_answer:
@@ -846,6 +907,35 @@ class Tools:
                     }
                 )
 
+        if _looks_like_direct_document_request(auftrag, download_format):
+            direct_title = _requested_document_title(auftrag, fallback="KAHLE-Vinci Dokument")
+            direct_content = build_direct_document_markdown(auftrag)
+            if download_format in {"docx", "pdf"}:
+                direct_content = re.sub(r"^# .+?\n\n", "", direct_content, count=1)
+            out_name = str(filename or "").strip() or suggest_output_filename(auftrag, download_format)
+            file_result = create_downloadable_file(
+                direct_content,
+                download_format,
+                out_name,
+                title=direct_title,
+            )
+            return _json(
+                {
+                    "workflow": "kahle_workflow_execute",
+                    "auftrag": auftrag,
+                    "intent": "direct_document",
+                    "target": "file_output",
+                    "generated_file": file_result,
+                    "download_url": file_result.get("download_url"),
+                    "filename": file_result.get("filename"),
+                    "sha256": file_result.get("sha256"),
+                    "size_bytes": file_result.get("size_bytes"),
+                    "answer_instruction": (
+                        "Wenn generated_file.download_url vorhanden ist: Gib ausschliesslich Download-Link und Metadaten aus. "
+                        "Wenn nicht: Gib generated_file.error kurz aus."
+                    ),
+                }
+            )
         intent = classify_workflow_intent(auftrag, modus)
         target = normalize_target(auftrag, ziel)
         tasks = build_task_plan(intent, target)

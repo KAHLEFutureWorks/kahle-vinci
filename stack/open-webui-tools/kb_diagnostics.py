@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,23 @@ def _kb_root() -> Path:
 def _state_path() -> Path:
     return Path(_env("KB_STATE_PATH", "/kb-sync-state/kb-sync-state.json"))
 
+
+
+def _is_rag_index_enabled(path: Path) -> bool:
+    """Keep diagnostics aligned with kb-sync's Markdown opt-out convention."""
+    if path.suffix.lower() != ".md":
+        return True
+    try:
+        header = path.read_bytes()[:8192].decode("utf-8-sig", errors="replace")
+    except OSError:
+        return False
+    if not header.startswith("---"):
+        return True
+    frontmatter_end = re.search(r"^---\s*$", header[3:], flags=re.MULTILINE)
+    if not frontmatter_end:
+        return True
+    frontmatter = header[3 : 3 + frontmatter_end.start()]
+    return re.search(r"^\s*rag_index\s*:\s*(?:false|no|0)\s*(?:#.*)?$", frontmatter, flags=re.IGNORECASE | re.MULTILINE) is None
 
 def _request_json(method: str, url: str, **kwargs) -> dict[str, Any]:
     response = requests.request(method, url, timeout=30, **kwargs)
@@ -136,6 +154,8 @@ def _fs_files(collection: str) -> dict[str, dict[str, Any]]:
         return result
     extensions = _supported_extensions()
     for path in sorted(root.rglob("*")):
+        if not _is_rag_index_enabled(path):
+            continue
         if not path.is_file() or path.suffix.lower() not in extensions:
             continue
         rel = path.relative_to(root).as_posix()
