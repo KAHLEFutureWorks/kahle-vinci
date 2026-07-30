@@ -43,6 +43,9 @@ services:
 
   kb-admin-api:
     mem_limit: 750m
+    environment:
+      KB_ADMIN_UNLOCK_CODE_HASH: ${KB_ADMIN_UNLOCK_CODE_HASH:?KB_ADMIN_UNLOCK_CODE_HASH is required}
+      KB_ADMIN_UNLOCK_SESSION_SECRET: ${KB_ADMIN_UNLOCK_SESSION_SECRET:?KB_ADMIN_UNLOCK_SESSION_SECRET is required}
     cpus: 1.0
     pids_limit: 192
 

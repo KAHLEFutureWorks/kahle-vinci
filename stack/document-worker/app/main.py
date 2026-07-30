@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 import time
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Request
@@ -26,7 +27,7 @@ from .pdf_ops import pdf_remove_pages
 # App & Logging
 # ----------------------------
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.4.0"
 
 app = FastAPI(title="KAHLE-Vinci Document Worker", version=APP_VERSION)
 
@@ -47,6 +48,11 @@ if not log.handlers:
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "30"))
 MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 USE_MARKITDOWN = os.getenv("USE_MARKITDOWN", "true").lower() == "true"
+PDF_IMAGE_OCR = os.getenv("PDF_IMAGE_OCR", "true").lower() == "true"
+PDF_OCR_LANG = os.getenv("PDF_OCR_LANG", "deu+eng")
+PDF_OCR_MIN_IMAGE_PIXELS = int(os.getenv("PDF_OCR_MIN_IMAGE_PIXELS", "150000"))
+PDF_OCR_MIN_CONFIDENCE = float(os.getenv("PDF_OCR_MIN_CONFIDENCE", "45"))
+PDF_OCR_MAX_CHARS_PER_PAGE = int(os.getenv("PDF_OCR_MAX_CHARS_PER_PAGE", "5000"))
 
 
 # ----------------------------
@@ -276,6 +282,249 @@ def _paragraphize_extracted_text(text: str) -> str:
     return cleaned.strip()
 
 
+_PDF_PAGE_RE = re.compile(r"(?i)\b(?:seite|page)\s+\d+(?:\s+(?:von|of)\s+\d+)?\b")
+_PDF_DATE_RE = re.compile(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b")
+_PDF_HEADING_RE = re.compile(r"^(\d+(?:\.\s*\d+)*)[.)]?\s+(.{2,})$")
+
+
+def _canonical_pdf_margin_line(line: str) -> str:
+    value = re.sub(r"\s+", " ", line or "").strip().casefold()
+    value = re.sub(r"^\d+\s+", "# ", value)
+    value = _PDF_PAGE_RE.sub("seite # von #", value)
+    value = _PDF_DATE_RE.sub("#date", value)
+    return value.strip(" -|")
+
+
+def _detect_repeated_pdf_margin_lines(pages: List[str], edge_lines: int = 6) -> set[str]:
+    if len(pages) < 5:
+        return set()
+    counts: Counter[str] = Counter()
+    for text in pages:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        counts.update({v for line in lines[:edge_lines] + lines[-edge_lines:] if len(v := _canonical_pdf_margin_line(line)) >= 4})
+    threshold = max(5, int(len(pages) * 0.60 + 0.999))
+    return {line for line, count in counts.items() if count >= threshold}
+
+
+def _strip_pdf_margin_lines(text: str, repeated: set[str], edge_lines: int = 8) -> str:
+    lines = text.splitlines()
+    nonempty = [i for i, line in enumerate(lines) if line.strip()]
+    edge = set(nonempty[:edge_lines] + nonempty[-edge_lines:])
+    return "\n".join(line.rstrip() for i, line in enumerate(lines) if not (i in edge and _canonical_pdf_margin_line(line) in repeated)).strip()
+
+
+def _markdown_heading(line: str) -> Optional[str]:
+    value = re.sub(r"\s+", " ", line or "").strip()
+    match = _PDF_HEADING_RE.match(value)
+    if not match or len(match.group(2)) > 140 or match.group(2).endswith((".", ";", ",")):
+        return None
+    number = re.sub(r"\s+", "", match.group(1))
+    return f"### {number} {match.group(2).strip()}"
+
+
+def _looks_like_fixed_width_table(block: str) -> bool:
+    lines = [line.rstrip() for line in block.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+    candidates = [
+        line for line in lines
+        if not re.match(r"^\s*[-*•]\s+", line) and re.search(r"\S[ \t]{3,}\S", line)
+    ]
+    if len(candidates) < 3:
+        return False
+    starts = []
+    for line in candidates:
+        match = re.search(r"\S([ \t]{3,})\S", line)
+        if match:
+            starts.append(match.end(1))
+    return len(starts) >= 3 and max(starts) - min(starts) <= 12
+
+
+def _looks_like_tabular_page(text: str) -> bool:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 5:
+        return False
+    if any(re.search(r"(?i)\bfall\b\s{2,}\bja\b\s{2,}\bnein\b", line) for line in lines):
+        return True
+    gap_buckets: Counter[int] = Counter()
+    candidate_count = 0
+    for line in lines:
+        if re.match(r"^\s*[-*•]\s+", line):
+            continue
+        match = re.search(r"\S([ \t]{3,})\S", line)
+        if not match:
+            continue
+        candidate_count += 1
+        gap_buckets[round(match.end(1) / 4)] += 1
+    return candidate_count >= 5 and bool(gap_buckets) and max(gap_buckets.values()) >= 5
+
+
+def _ocr_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9äöüß]+", " ", (value or "").casefold()).strip()
+
+
+def _redact_ocr_sensitive(value: str) -> str:
+    value = re.sub(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[E-MAIL ENTFERNT]", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?<!\w)(?:\+49|0)\s*(?:\(?\d{2,5}\)?[\s/-]*)\d(?:[\s/-]*\d){5,}(?!\w)", "[TELEFON ENTFERNT]", value)
+    value = re.sub(r"\b(?=[A-HJ-NPR-Z0-9]{17}\b)(?=.*[A-Z])(?=.*\d)[A-HJ-NPR-Z0-9]+\b", "[FAHRGESTELLNUMMER ENTFERNT]", value)
+    value = re.sub(r"\b[A-Z\u00c4\u00d6\u00dc]{1,3}\s*[- ]\s*[A-Z\u00c4\u00d6\u00dc]{1,2}\s*[- ]\s*\d{1,4}\b", "[KENNZEICHEN ENTFERNT]", value)
+    value = re.sub(r"\b\d{8,}\.(?:jpe?g|png|pdf)\b", "[DATEINAME ENTFERNT]", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b\d{9,}\b", "[ID ENTFERNT]", value)
+    value = re.sub(r"^\s*\d{4,8}\s*(?=\()", "[VORGANGSNUMMER ENTFERNT] ", value)
+    return value
+
+
+_OCR_CONTEXT_WORDS = {
+    "abbrechen", "anforderung", "annahme", "auftrag", "auftr\u00e4ge", "ausgeliefert",
+    "bearbeitet", "bestellte", "bestellung", "dialogannahme", "endkunde", "fahrzeug",
+    "fahrzeuge", "intern", "kunde", "kunden", "leasing", "letzte", "monteur", "name",
+    "navigation", "plantafel", "schaden", "service", "sortierung", "speichern", "status",
+    "suche", "teile", "teiledienst", "\u00fcbersicht", "werkstatt", "\u00e4nderung",
+}
+_OCR_MONTH_RE = re.compile(
+    r"(?i)\b(?:jan(?:uar)?|feb(?:ruar)?|m\u00e4rz|maerz|apr(?:il)?|mai|juni?|juli?|aug(?:ust)?|"
+    r"sep(?:tember)?|okt(?:ober)?|nov(?:ember)?|dez(?:ember)?)\b"
+)
+
+
+def _looks_like_dynamic_ocr_line(value: str) -> bool:
+    stripped = value.strip()
+    if re.fullmatch(r"\[[A-Z\u00c4\u00d6\u00dc -]+ ENTFERNT\]", stripped):
+        return True
+    if re.fullmatch(r"(?=.*[A-Z\u00c4\u00d6\u00dc])(?=.*\d)[A-Z\u00c4\u00d6\u00dc0-9-]{5,10}", stripped, flags=re.IGNORECASE):
+        return True
+    if re.match(r"(?i)^(?:b\u00fchne|monteur|kunde|endkunde)\s+[A-Z\u00c4\u00d6\u00dc]", stripped):
+        return True
+    if re.search(r"(?i)\b(?:gmbh|kg|ag)\b", stripped) and len(stripped.split()) <= 4:
+        return True
+    if _OCR_MONTH_RE.search(stripped) and re.search(r"\b20\d{2}\b", stripped):
+        return True
+    words = re.findall(r"[A-Za-z\u00c4\u00d6\u00dc\u00e4\u00f6\u00fc\u00df]+", stripped)
+    if not (2 <= len(words) <= 4) or any(word.casefold() in _OCR_CONTEXT_WORDS for word in words):
+        return False
+    return all(word[:1].isupper() and word[1:].islower() for word in words)
+
+
+def _dedupe_ocr_lines(page_text: str, ocr_lines: List[str], document_seen: Optional[set[str]] = None) -> List[str]:
+    page_key = _ocr_key(page_text)
+    page_tokens = set(page_key.split())
+    kept: List[str] = []
+    seen: set[str] = set()
+    document_seen = document_seen if document_seen is not None else set()
+    for raw in ocr_lines:
+        line = re.sub(r"\s+", " ", _redact_ocr_sensitive(raw)).strip(" |_-—")
+        key = _ocr_key(line)
+        if len(key) < 3 or key in seen or key in document_seen or _looks_like_dynamic_ocr_line(line):
+            continue
+        seen.add(key)
+        if key in page_key:
+            continue
+        tokens = set(key.split())
+        if len(tokens) >= 3 and len(tokens & page_tokens) / len(tokens) >= 0.85:
+            continue
+        if sum(ch.isalpha() for ch in line) < 2:
+            continue
+        kept.append(line)
+        document_seen.add(key)
+    return kept
+
+
+def _focus_annotated_image(image: Any) -> Any:
+    from PIL import ImageChops  # type: ignore
+
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    red, green, blue = rgb.split()
+    red_mask = red.point(lambda value: 255 if value >= 175 else 0)
+    green_mask = green.point(lambda value: 255 if value <= 130 else 0)
+    blue_mask = blue.point(lambda value: 255 if value <= 130 else 0)
+    mask = ImageChops.multiply(ImageChops.multiply(red_mask, green_mask), blue_mask)
+    histogram = mask.histogram()
+    red_count = histogram[255] if len(histogram) > 255 else 0
+    minimum = max(350, int(width * height * 0.0007))
+    bounds = mask.getbbox()
+    if red_count < minimum or not bounds:
+        return image
+    left, top, right, bottom = bounds
+    if right - left < width * 0.12 and bottom - top < height * 0.12:
+        return image
+    padding_x = max(24, int((right - left) * 0.18))
+    padding_y = max(24, int((bottom - top) * 0.18))
+    return image.crop((
+        max(0, left - padding_x),
+        max(0, top - padding_y),
+        min(width, right + padding_x),
+        min(height, bottom + padding_y),
+    ))
+
+def _extract_page_image_ocr(page: Any, page_text: str, document_seen: Optional[set[str]] = None) -> str:
+    if not PDF_IMAGE_OCR:
+        return ""
+    try:
+        import pytesseract  # type: ignore
+        from pytesseract import Output  # type: ignore
+        from PIL import ImageOps  # type: ignore
+    except Exception:
+        return ""
+
+    lines: List[str] = []
+    for image_file in list(page.images)[:6]:
+        try:
+            image = image_file.image
+            width, height = image.size
+            if width * height < PDF_OCR_MIN_IMAGE_PIXELS or min(width, height) < 80:
+                continue
+            image = _focus_annotated_image(image)
+            width, height = image.size
+            image = ImageOps.autocontrast(image.convert("L"))
+            if width < 1400:
+                scale = min(2.5, 1400 / max(width, 1))
+                image = image.resize((int(width * scale), int(height * scale)))
+            try:
+                data = pytesseract.image_to_data(image, lang=PDF_OCR_LANG, config="--psm 11", output_type=Output.DICT)
+            except Exception:
+                data = pytesseract.image_to_data(image, lang="eng", config="--psm 11", output_type=Output.DICT)
+            grouped: Dict[Tuple[int, int, int], List[str]] = {}
+            for index, word in enumerate(data.get("text", [])):
+                word = re.sub(r"\s+", " ", str(word or "")).strip()
+                try:
+                    confidence = float(data["conf"][index])
+                except Exception:
+                    confidence = -1
+                if not word or confidence < PDF_OCR_MIN_CONFIDENCE:
+                    continue
+                key = (int(data["block_num"][index]), int(data["par_num"][index]), int(data["line_num"][index]))
+                grouped.setdefault(key, []).append(word)
+            lines.extend(" ".join(words) for words in grouped.values() if words)
+        except Exception:
+            continue
+
+    unique = _dedupe_ocr_lines(page_text, lines, document_seen)
+    result = "\n".join(f"- {line}" for line in unique)
+    return result[:PDF_OCR_MAX_CHARS_PER_PAGE].rstrip()
+
+
+def _pdf_page_to_markdown(text: str, page_number: int, image_ocr: str = "") -> str:
+    rendered = [f"<!-- Seite {page_number} -->"]
+    if _looks_like_tabular_page(text):
+        rendered.append(f"```text\n{text.strip()}\n```")
+    else:
+        for block in re.split(r"\n\s*\n", text.strip()):
+            if not block.strip():
+                continue
+            if _looks_like_fixed_width_table(block):
+                rendered.append(f"```text\n{block.strip()}\n```")
+                continue
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            if len(lines) == 1 and (heading := _markdown_heading(lines[0])):
+                rendered.append(heading)
+            else:
+                normalized = _normalize_extracted_text("\n".join(lines), paragraphize=True)
+                rendered.append(normalized)
+    if image_ocr:
+        rendered.append("#### Zusätzlicher Bildinhalt (OCR, automatisch erkannt)\n" + image_ocr)
+    return "\n\n".join(rendered).strip()
+
 def _extract_text_markitdown(filename: str, content: bytes) -> Optional[str]:
     if not USE_MARKITDOWN:
         return None
@@ -344,17 +593,25 @@ def _extract_text_pdf(pdf_bytes: bytes) -> str:
         raise HTTPException(status_code=500, detail=f"pypdf not available: {e}")
 
     reader = PdfReader(io.BytesIO(pdf_bytes))
-    out: List[str] = []
-    for i, page in enumerate(reader.pages):
+    raw_pages: List[str] = []
+    for page in reader.pages:
         try:
-            txt = page.extract_text() or ""
+            text = page.extract_text(extraction_mode="layout") or ""
+        except TypeError:
+            text = page.extract_text() or ""
         except Exception:
-            txt = ""
-        if txt.strip():
-            page_text = _normalize_extracted_text(txt, paragraphize=True)
-            out.append(f"## Seite {i+1}\n{page_text}")
-    return "\n\n".join(out).strip()
+            text = ""
+        raw_pages.append(text)
 
+    repeated = _detect_repeated_pdf_margin_lines(raw_pages)
+    rendered_pages: List[str] = []
+    document_ocr_seen: set[str] = set()
+    for index, (page, text) in enumerate(zip(reader.pages, raw_pages), start=1):
+        cleaned = _strip_pdf_margin_lines(text, repeated)
+        image_ocr = _extract_page_image_ocr(page, cleaned, document_ocr_seen)
+        if cleaned.strip() or image_ocr:
+            rendered_pages.append(_pdf_page_to_markdown(cleaned, index, image_ocr))
+    return "\n\n".join(rendered_pages).strip()
 
 def _extract_text_xlsx(xlsx_bytes: bytes, max_rows: int = 200, max_cols: int = 50) -> str:
     try:
@@ -398,6 +655,10 @@ def _guess_ext(filename: str) -> str:
 def _extract_text_by_ext(filename: str, content: bytes) -> Tuple[str, str]:
     ext = _guess_ext(filename)
 
+    # PDFs retain page boundaries for generic margin removal and layout preservation.
+    if ext == "pdf":
+        return ext, _extract_text_pdf(content)
+
     markitdown_text = _extract_text_markitdown(filename, content)
     if markitdown_text is not None:
         return ext or "unknown", _normalize_extracted_text(markitdown_text, paragraphize=(ext == "pdf"))
@@ -407,9 +668,6 @@ def _extract_text_by_ext(filename: str, content: bytes) -> Tuple[str, str]:
 
     if ext == "docx":
         return ext, _extract_text_docx(content)
-
-    if ext == "pdf":
-        return ext, _extract_text_pdf(content)
 
     if ext in ("xlsx", "xlsm"):
         return ext, _extract_text_xlsx(content)

@@ -1667,6 +1667,31 @@ def test_admin_gets_kb_expiry_notice_once_per_day():
                 os.environ["KAHLE_TASKS_DB_PATH"] = old_path
 
 
+def test_short_download_id_is_valid_and_not_saved_as_wrapper_file():
+    module = load_module()
+    url = "http://localhost:8091/files/d/efdbf4b281114461a1573e228e3a2235"
+    manifest = (
+        f"Download-Link: [Datei herunterladen]({url})\n"
+        "Datei: Digitales_Autohaus_Teiledienst.md\n"
+        "SHA256: abc\nGroesse: 3636 Bytes"
+    )
+    assert module._has_download_metadata(manifest)
+    assert module._has_valid_download_metadata(manifest)
+
+    original_create = module._create_file
+    try:
+        module._create_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("wrapper file created"))
+        body = {
+            "messages": [
+                {"role": "user", "content": "Bitte gib mir die PDF als Markdown aus."},
+                {"role": "assistant", "content": manifest},
+            ]
+        }
+        result = module.Filter().outlet(body)
+        assert result["messages"][-1]["content"] == manifest
+    finally:
+        module._create_file = original_create
+
 if __name__ == "__main__":
     test_visible_workflow_pseudo_call_is_replaced_with_download_metadata()
     test_successful_rag_source_replaces_false_no_internal_knowledge_answer()

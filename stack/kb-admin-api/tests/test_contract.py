@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 import os
 import tempfile
@@ -163,6 +165,42 @@ def test_collection_update_and_recoverable_delete():
             assert exc.status_code == 409
             assert exc.detail == "protected_collection"
 
+
+def test_unlock_hash_and_signed_admin_session():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_module(Path(directory))
+        module.DEV_AUTH_BYPASS = False
+        salt = b"fixed-test-salt-123456789"
+        code = "Sicherer-Testcode-2026"
+        digest = hashlib.pbkdf2_hmac("sha256", code.encode(), salt, 600_000)
+        encode = lambda value: base64.urlsafe_b64encode(value).decode().rstrip("=")
+        module.UNLOCK_CODE_HASH = (
+            f"pbkdf2_sha256.600000.{encode(salt)}.{encode(digest)}"
+        )
+        module.UNLOCK_SESSION_SECRET = "test-session-secret-with-sufficient-entropy"
+        module.UNLOCK_ENABLED = True
+        admin = {"id": "admin-1", "email": "admin@kahle.de", "role": "admin"}
+
+        assert module._unlock_code_matches(code) is True
+        assert module._unlock_code_matches("falsch") is False
+        token = module._issue_unlock_token(admin)
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/collections",
+            "headers": [(b"cookie", f"{module.UNLOCK_COOKIE}={token}".encode())],
+            "client": ("127.0.0.1", 12345),
+        }
+        request = module.Request(scope)
+        assert module._has_valid_unlock(request, admin) is True
+        assert module.require_unlocked_admin(request, admin)["id"] == "admin-1"
+        assert module._has_valid_unlock(request, {**admin, "id": "other-admin"}) is False
+
+        tampered_scope = {
+            **scope,
+            "headers": [(b"cookie", f"{module.UNLOCK_COOKIE}={token}x".encode())],
+        }
+        assert module._has_valid_unlock(module.Request(tampered_scope), admin) is False
 
 if __name__ == "__main__":
     test_metadata_and_safe_paths()

@@ -16,6 +16,24 @@ https://vinci.kahle.de/admin/vector/
 Die Admin-API prüft jede Anfrage über die bestehende Open-WebUI-Sitzung und
 akzeptiert ausschließlich Nutzer mit der Rolle `admin`.
 
+Zusätzlich erzwingt die API eine zweite Code-Freigabe. Der Code wird nie im Klartext
+gespeichert, sondern als PBKDF2-SHA256-Hash in der nicht versionierten
+`/opt/kahle-vinci/stack/.env.production` hinterlegt. Die Freigabe gilt standardmäßig
+acht Stunden und wird in einem signierten, `HttpOnly`, `Secure` und `SameSite=Strict`
+Cookie an den jeweiligen Open-WebUI-Admin gebunden.
+
+Konfiguration oder Codewechsel auf dem Server:
+
+```bash
+sudo python3 /opt/kahle-vinci/stack/scripts/configure-kb-admin-unlock.py
+sudo /opt/kahle-vinci/stack/scripts/start-production.sh \
+  /opt/kahle-vinci/stack/.env.production
+```
+
+Nach fünf Fehlversuchen wird die Codeeingabe für 15 Minuten blockiert. Erfolgreiche
+Freigaben, manuelle Sperren und Fehlversuche werden ohne den Code im Audit-Log
+protokolliert.
+
 ## Funktionen des MVP
 
 - Knowledgebases und Dateianzahlen anzeigen

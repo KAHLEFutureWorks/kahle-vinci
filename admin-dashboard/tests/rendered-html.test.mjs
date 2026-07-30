@@ -20,6 +20,10 @@ test("renders the KAHLE Vector management surface", async () => {
   assert.match(dashboard, /availableMoveTargets/);
   assert.match(dashboard, /formatDate\(item\.valid_until\)/);
   assert.match(dashboard, /Speichern & neu indexieren/);
+  assert.match(dashboard, /KAHLE\/VECTOR entsperren/);
+  assert.match(dashboard, /\/unlock\/status/);
+  assert.match(dashboard, /Dashboard entsperren/);
+  assert.match(styles, /\.unlock-backdrop/);
   assert.match(dashboard, /\/admin\/vector\/api/);
   assert.match(styles, /\.vector-app/);
   assert.match(styles, /grid-template-columns/);

@@ -1,7 +1,7 @@
 """
 title: KAHLE Toolcall Guard
 author: local
-version: 0.2.0
+version: 0.2.1
 description: Repariert sichtbare Pseudo-Toolcalls und sichtbares Reasoning als letzte Sicherheitsschicht.
 """
 
@@ -66,8 +66,9 @@ RAG_NO_KNOWLEDGE_RE = re.compile(
 )
 
 TASK_LIST_RE = re.compile(r"\b(aufgaben|tasks)\b.*\b(liste|liste.*auf|anzeigen|zeige|offen|offene|offenen|aktuell)\b|\b(liste|zeige)\b.*\b(aufgaben|tasks)\b", re.IGNORECASE)
-REAL_DOWNLOAD_RE = re.compile(r"https?://[^\s)]+/files/download\?[^)\s]*\btoken=", re.IGNORECASE)
+REAL_DOWNLOAD_RE = re.compile(r"https?://[^\s)]+/(?:files/download\?[^)\s]*\btoken=|files/d/[A-Za-z0-9_-]+)", re.IGNORECASE)
 REAL_DOWNLOAD_TOKEN_RE = re.compile(r"https?://[^\s)]+/files/download\?token=([A-Za-z0-9_-]+)", re.IGNORECASE)
+SHORT_DOWNLOAD_ID_RE = re.compile(r"https?://[^\s)]+/files/d/([A-Za-z0-9_-]+)", re.IGNORECASE)
 FINAL_NOTICE_PREFIX = "<<<FINAL_NOTICE>>>\n"
 FINAL_NOTICE_SUFFIX = "\n<<<END_FINAL_NOTICE>>>"
 
@@ -508,7 +509,11 @@ def _download_token_is_decodable(token: str) -> bool:
 
 
 def _has_valid_download_metadata(content: str) -> bool:
-    tokens = [match.group(1) for match in REAL_DOWNLOAD_TOKEN_RE.finditer(content or "")]
+    text = content or ""
+    short_ids = [match.group(1) for match in SHORT_DOWNLOAD_ID_RE.finditer(text)]
+    tokens = [match.group(1) for match in REAL_DOWNLOAD_TOKEN_RE.finditer(text)]
+    if short_ids:
+        return all(re.fullmatch(r"[A-Za-z0-9_-]{16,128}", download_id) for download_id in short_ids)
     return bool(tokens) and all(_download_token_is_decodable(token) for token in tokens)
 
 

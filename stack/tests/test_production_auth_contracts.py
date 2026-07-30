@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 STACK_DIR = Path(__file__).resolve().parents[1]
+BASE_COMPOSE = (STACK_DIR / "docker-compose.yml").read_text(encoding="utf-8")
 PROD_COMPOSE = (STACK_DIR / "docker-compose.prod.yml").read_text(encoding="utf-8")
 PREPARE_SCRIPT = (STACK_DIR / "scripts" / "prepare-production-env.sh").read_text(
     encoding="utf-8"
@@ -138,6 +139,18 @@ def test_production_start_supports_non_mutating_check_only_mode():
     check_position = START_SCRIPT.index('if [[ "${MODE}" == "--check-only" ]]')
     start_position = START_SCRIPT.index('"${compose[@]}" up -d')
     assert check_position < start_position
+
+def test_vector_dashboard_second_gate_is_required_in_production():
+    assert "KB_ADMIN_UNLOCK_CODE_HASH" in BASE_COMPOSE
+    assert "KB_ADMIN_UNLOCK_SESSION_SECRET" in BASE_COMPOSE
+    assert "KB_ADMIN_UNLOCK_CODE_HASH is required" in PROD_COMPOSE
+    assert "KB_ADMIN_UNLOCK_SESSION_SECRET is required" in PROD_COMPOSE
+    configure_script = (STACK_DIR / "scripts" / "configure-kb-admin-unlock.py").read_text(
+        encoding="utf-8"
+    )
+    assert "getpass.getpass" in configure_script
+    assert "pbkdf2_hmac" in configure_script
+    assert "KB_ADMIN_UNLOCK_SESSION_SECRET" in configure_script
 
 def test_vector_dashboard_static_and_page_routes_require_admin_session():
     assert CADDYFILE.count("forward_auth kb-admin-api:8092") == 2

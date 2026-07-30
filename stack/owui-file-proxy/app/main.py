@@ -17,8 +17,16 @@ import copy
 import requests
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional, Any
+
+try:
+    from .kahle_document_theme import render_docx as _render_kahle_docx, render_pdf as _render_kahle_pdf
+    from .rag_markdown import ensure_rag_frontmatter
+except ImportError:  # pragma: no cover - direct module execution in local tests
+    from kahle_document_theme import render_docx as _render_kahle_docx, render_pdf as _render_kahle_pdf
+    from rag_markdown import ensure_rag_frontmatter
 
 from fastapi import FastAPI, HTTPException, Header, Query, Request
 from fastapi.responses import Response, JSONResponse, FileResponse, RedirectResponse
@@ -130,7 +138,7 @@ OWUI_UUID_PREFIX_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 NonEmptyStr = constr(strip_whitespace=True, min_length=1)
 
 
-app = FastAPI(title="OWUI File Proxy", version="1.5.0")
+app = FastAPI(title="OWUI File Proxy", version="1.7.0")
 
 _REQUEST_API_KEY: ContextVar[str] = ContextVar("request_api_key", default="")
 _DOCX_TEMPLATE_USED: ContextVar[bool] = ContextVar("docx_template_used", default=False)
@@ -592,64 +600,17 @@ def _generated_at_label() -> str:
 def _markdown_to_template_docx_bytes(content: str, title: str = "Dokument") -> Optional[bytes]:
     if Document is None or not _file_exists(KAHLE_DOCX_TEMPLATE):
         return None
-
-    try:
-        document = Document(str(KAHLE_DOCX_TEMPLATE))
-
-        # Use the supplied file as style/theme template, but replace body content.
-        body = document._element.body  # noqa: SLF001 - python-docx has no public clear-body API.
-        section_props = None
-        for child in list(body):
-            if child.tag.endswith("sectPr"):
-                section_props = child
-                continue
-            body.remove(child)
-        if section_props is not None and section_props.getparent() is None:
-            body.append(section_props)
-
-        clean_title = (title or "Dokument").strip() or "Dokument"
-        brand_blue = _brand_value("colors", "blue", "0069B3")
-        brand_ink = _brand_value("colors", "ink", "0F2430")
-        _add_docx_paragraph(document, clean_title, "Title", bold=True, color_hex=brand_blue)
-        _add_docx_paragraph(document, f"Erstellt mit KAHLE-Vinci | Stand: {_generated_at_label()}", "Subtitle")
-        document.add_paragraph()
-
-        first_content_heading_seen = False
-        for stripped in _markdown_lines(content):
-            if not stripped:
-                document.add_paragraph()
-                continue
-            if stripped.startswith("#"):
-                heading = stripped.lstrip("#").strip()
-                if not first_content_heading_seen and heading.lower() == clean_title.lower():
-                    first_content_heading_seen = True
-                    continue
-                first_content_heading_seen = True
-                level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 3)
-                _add_docx_paragraph(
-                    document,
-                    heading,
-                    f"Heading {level}",
-                    bold=True,
-                    color_hex=brand_blue if level == 1 else brand_ink,
-                )
-                continue
-            if stripped.startswith(("- ", "* ")):
-                _add_docx_paragraph(document, stripped[2:].strip(), "List Bullet")
-                continue
-            numbered = re.match(r"^\d+[.)]\s+(.+)$", stripped)
-            if numbered:
-                _add_docx_paragraph(document, stripped, "List Number")
-                continue
-            _add_docx_paragraph(document, stripped)
-
-        out = io.BytesIO()
-        document.save(out)
+    rendered = _render_kahle_docx(
+        content=content,
+        title=(title or "Dokument").strip() or "Dokument",
+        template_path=KAHLE_DOCX_TEMPLATE,
+        logo_path=KAHLE_LOGO_PRIMARY,
+        config_path=KAHLE_BRAND_CONFIG,
+        generated_at=_generated_at_label(),
+    )
+    if rendered:
         _DOCX_TEMPLATE_USED.set(True)
-        return out.getvalue()
-    except Exception:
-        return None
-
+    return rendered
 
 def _markdown_to_docx_bytes(content: str, title: str = "Dokument") -> bytes:
     """
@@ -819,151 +780,13 @@ def _markdown_inline_to_reportlab(text: str) -> str:
 
 
 def _text_to_reportlab_pdf_bytes(content: str, title: str = "Dokument") -> Optional[bytes]:
-    if not all([colors, A4, ParagraphStyle, getSampleStyleSheet, mm, Paragraph, SimpleDocTemplate, Spacer]):
-        return None
-
-    try:
-        clean_title = (title or "Dokument").strip() or "Dokument"
-        brand_ink = _brand_value("colors", "ink", "0F2430")
-        brand_blue = _brand_value("colors", "blue", "005A8F")
-        brand_muted = _brand_value("colors", "muted", "6B7280")
-        font_body = _brand_value("fonts", "body", "Helvetica")
-        font_heading = _brand_value("fonts", "headings", font_body)
-
-        styles = getSampleStyleSheet()
-        styles.add(
-            ParagraphStyle(
-                name="KahleTitle",
-                parent=styles["Title"],
-                fontName="Helvetica-Bold",
-                fontSize=22,
-                leading=26,
-                textColor=colors.HexColor(f"#{brand_blue}"),
-                spaceAfter=8,
-            )
-        )
-        styles.add(
-            ParagraphStyle(
-                name="KahleSubtitle",
-                parent=styles["Normal"],
-                fontName="Helvetica",
-                fontSize=8.5,
-                leading=11,
-                textColor=colors.HexColor(f"#{brand_muted}"),
-                spaceAfter=16,
-            )
-        )
-        styles.add(
-            ParagraphStyle(
-                name="KahleHeading1",
-                parent=styles["Heading1"],
-                fontName="Helvetica-Bold",
-                fontSize=15,
-                leading=19,
-                textColor=colors.HexColor(f"#{brand_blue}"),
-                spaceBefore=12,
-                spaceAfter=6,
-            )
-        )
-        styles.add(
-            ParagraphStyle(
-                name="KahleHeading2",
-                parent=styles["Heading2"],
-                fontName="Helvetica-Bold",
-                fontSize=12.5,
-                leading=16,
-                textColor=colors.HexColor(f"#{brand_ink}"),
-                spaceBefore=10,
-                spaceAfter=4,
-            )
-        )
-        styles.add(
-            ParagraphStyle(
-                name="KahleBody",
-                parent=styles["BodyText"],
-                fontName="Helvetica",
-                fontSize=9.7,
-                leading=13.5,
-                textColor=colors.HexColor(f"#{brand_ink}"),
-                spaceAfter=5,
-            )
-        )
-        styles.add(
-            ParagraphStyle(
-                name="KahleBullet",
-                parent=styles["KahleBody"],
-                leftIndent=12,
-                firstLineIndent=-8,
-            )
-        )
-
-        out = io.BytesIO()
-        doc = SimpleDocTemplate(
-            out,
-            pagesize=A4,
-            rightMargin=18 * mm,
-            leftMargin=18 * mm,
-            topMargin=24 * mm,
-            bottomMargin=18 * mm,
-            title=clean_title,
-            author="KAHLE-Vinci",
-        )
-
-        story: list[Any] = [
-            Paragraph(_markdown_inline_to_reportlab(clean_title), styles["KahleTitle"]),
-            Paragraph(f"Erstellt mit KAHLE-Vinci | Stand: {_generated_at_label()}", styles["KahleSubtitle"]),
-        ]
-
-        first_content_heading_seen = False
-        for stripped in _markdown_lines(content):
-            if not stripped:
-                story.append(Spacer(1, 4))
-                continue
-            if stripped.startswith("#"):
-                heading = stripped.lstrip("#").strip()
-                if not first_content_heading_seen and heading.lower() == clean_title.lower():
-                    first_content_heading_seen = True
-                    continue
-                first_content_heading_seen = True
-                level = min(max(len(stripped) - len(stripped.lstrip("#")), 1), 2)
-                story.append(Paragraph(_markdown_inline_to_reportlab(heading), styles[f"KahleHeading{level}"]))
-                continue
-            if stripped.startswith(("- ", "* ")):
-                story.append(Paragraph(f"&bull; {_markdown_inline_to_reportlab(stripped[2:].strip())}", styles["KahleBullet"]))
-                continue
-            story.append(Paragraph(_markdown_inline_to_reportlab(stripped), styles["KahleBody"]))
-
-        def draw_page(canvas: Any, _doc: Any) -> None:
-            canvas.saveState()
-            width, height = A4
-            canvas.setStrokeColor(colors.HexColor(f"#{brand_blue}"))
-            canvas.setLineWidth(0.6)
-            canvas.line(18 * mm, height - 17 * mm, width - 18 * mm, height - 17 * mm)
-            if _file_exists(KAHLE_LOGO_PRIMARY):
-                try:
-                    canvas.drawImage(
-                        str(KAHLE_LOGO_PRIMARY),
-                        width - 50 * mm,
-                        height - 16 * mm,
-                        width=32 * mm,
-                        height=11 * mm,
-                        preserveAspectRatio=True,
-                        mask="auto",
-                    )
-                except Exception:
-                    pass
-            canvas.setFillColor(colors.HexColor(f"#{brand_muted}"))
-            canvas.setFont("Helvetica", 7)
-            canvas.drawString(18 * mm, 10 * mm, "KAHLE-Vinci")
-            canvas.drawRightString(width - 18 * mm, 10 * mm, f"Seite {canvas.getPageNumber()}")
-            canvas.restoreState()
-
-        doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
-        rendered = out.getvalue()
-        return rendered
-    except Exception:
-        return None
-
+    return _render_kahle_pdf(
+        content=content,
+        title=(title or "Dokument").strip() or "Dokument",
+        logo_path=KAHLE_LOGO_PRIMARY,
+        config_path=KAHLE_BRAND_CONFIG,
+        generated_at=_generated_at_label(),
+    )
 
 def _apply_pdf_template(rendered_pdf: bytes) -> Optional[bytes]:
     """
@@ -1506,7 +1329,7 @@ class DocxToPdfSaveRequest(BaseModel):
 
 class FileToMdSaveRequest(BaseModel):
     file_path: NonEmptyStr = Field(..., description="Exact filename in uploads (docx/pdf/md/txt/xlsx/csv)")
-    title: str = Field("Konvertiert", description="Heading title for markdown conversion")
+    title: str = Field("Konvertiert", description="Document title for Markdown and YAML frontmatter; use a specific source-appropriate title")
     output_name: Optional[NonEmptyStr] = Field(None, description="Optional output filename, defaults to source stem + .md")
 
 
@@ -1526,7 +1349,7 @@ class DocxCreateSaveRequest(BaseModel):
     content: str = Field(
         ...,
         description=(
-            "Markdown/text content to render into a simple DOCX. "
+            "Markdown content for the adaptive KAHLE DOCX layout. Use headings, bullet or numbered lists, pipe tables, and blockquotes for key messages or warnings where appropriate. "
             "When the user asks to create a document from the result, pass the full previous assistant result here. "
             "Never leave this empty."
         ),
@@ -1539,7 +1362,7 @@ class PdfCreateSaveRequest(BaseModel):
     content: str = Field(
         ...,
         description=(
-            "Markdown/text content to render into a simple PDF. "
+            "Markdown content for the adaptive KAHLE PDF layout. Use headings, bullet or numbered lists, pipe tables, and blockquotes for key messages or warnings where appropriate. "
             "When the user asks to create a PDF from the result, pass the full previous assistant result here. "
             "Never leave this empty."
         ),
@@ -1950,7 +1773,15 @@ def text_create_save(payload: TextCreateSaveRequest, x_api_key: Optional[str] = 
     if ext not in {".md", ".txt", ".csv"}:
         raise HTTPException(status_code=400, detail="text_create_save_allows_only_md_txt_csv")
 
-    data = payload.content.encode("utf-8")
+    text_content = payload.content
+    if ext == ".md":
+        text_content = ensure_rag_frontmatter(
+            text_content,
+            title="",
+            document_id=safe_name,
+            today=datetime.now(ZoneInfo("Europe/Berlin")).date(),
+        )
+    data = text_content.encode("utf-8")
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
 
@@ -2343,7 +2174,13 @@ def file_to_md_save(payload: FileToMdSaveRequest, x_api_key: Optional[str] = Hea
     if not out_name.lower().endswith(".md"):
         out_name = f"{out_name}.md"
 
-    saved = _save_bytes(out_name, r.content)
+    markdown = ensure_rag_frontmatter(
+        r.content.decode("utf-8", errors="replace"),
+        title=title,
+        document_id=out_name,
+        today=datetime.now(ZoneInfo("Europe/Berlin")).date(),
+    )
+    saved = _save_bytes(out_name, markdown.encode("utf-8"))
     saved["content_type"] = "text/markdown; charset=utf-8"
     saved["source_file"] = str(path.name)
     saved["conversion"] = "file_to_md"
@@ -2522,10 +2359,17 @@ def bundle_to_md(payload: BundleToMdRequest, x_api_key: Optional[str] = Header(d
     )
     _raise_for_worker_response(r)
 
+    out_name = "masterkontext.md"
+    markdown = ensure_rag_frontmatter(
+        r.content.decode("utf-8", errors="replace"),
+        title=title,
+        document_id=out_name,
+        today=datetime.now(ZoneInfo("Europe/Berlin")).date(),
+    )
     return Response(
-        content=r.content,
+        content=markdown.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=masterkontext.md"},
+        headers={"Content-Disposition": f"attachment; filename={out_name}"},
     )
 
 
@@ -2566,7 +2410,13 @@ def bundle_to_md_save(payload: BundleToMdSaveRequest, x_api_key: Optional[str] =
     safe_title = _sanitize_filename(title)
     out_name = safe_title if safe_title.lower().endswith(".md") else f"{safe_title}.md"
 
-    saved = _save_bytes(out_name, r.content)
+    markdown = ensure_rag_frontmatter(
+        r.content.decode("utf-8", errors="replace"),
+        title=title,
+        document_id=out_name,
+        today=datetime.now(ZoneInfo("Europe/Berlin")).date(),
+    )
+    saved = _save_bytes(out_name, markdown.encode("utf-8"))
     saved["content_type"] = "text/markdown; charset=utf-8"
     saved["source_files"] = [p.name for p in paths]
     return saved

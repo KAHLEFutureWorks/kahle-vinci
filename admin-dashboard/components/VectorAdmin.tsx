@@ -92,6 +92,21 @@ type Version = {
 };
 type Tab = "markdown" | "preview" | "chunks" | "versions";
 
+type UnlockStatus = {
+  enabled: boolean;
+  unlocked: boolean;
+  ttl_seconds: number;
+};
+
+class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 const API_BASE = "/admin/vector/api";
 
 const demoCollections: Collection[] = [
@@ -263,7 +278,10 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || `HTTP ${response.status}`);
+    if (response.status === 423 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("kahle-vector-locked"));
+    }
+    throw new ApiError(response.status, payload.detail || `HTTP ${response.status}`);
   }
   return response.json() as Promise<T>;
 }
@@ -384,6 +402,11 @@ export default function VectorAdmin() {
   const [trashBusyId, setTrashBusyId] = useState("");
   const [purgeTarget, setPurgeTarget] = useState<TrashedCollection | null>(null);
   const [purgeConfirm, setPurgeConfirm] = useState("");
+  const [unlockReady, setUnlockReady] = useState(false);
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [unlockCode, setUnlockCode] = useState("");
+  const [unlockError, setUnlockError] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
 
   const showMessage = useCallback((text: string) => {
     setMessage(text);
@@ -460,17 +483,92 @@ export default function VectorAdmin() {
     }
   }, [isLocal]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => void loadCollections(), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadCollections]);
+  const checkUnlock = useCallback(async () => {
+    if (isLocal) {
+      setUnlockReady(true);
+      setUnlockOpen(false);
+      await loadCollections();
+      return;
+    }
+    try {
+      const status = await api<UnlockStatus>("/unlock/status");
+      setUnlockReady(status.unlocked);
+      setUnlockOpen(!status.unlocked);
+      setUnlockError(status.enabled ? "" : "Die Zusatzsperre ist auf dem Server noch nicht konfiguriert.");
+      if (status.unlocked) await loadCollections();
+      else setLoading(false);
+    } catch (error) {
+      setUnlockReady(false);
+      setUnlockOpen(true);
+      setLoading(false);
+      setUnlockError(error instanceof Error ? error.message : "Sicherheitsstatus konnte nicht geladen werden.");
+    }
+  }, [isLocal, loadCollections]);
 
   useEffect(() => {
+    const onLocked = () => {
+      setUnlockReady(false);
+      setUnlockOpen(true);
+      setUnlockCode("");
+      setUnlockError("Die Sicherheitsfreigabe ist abgelaufen. Bitte Code erneut eingeben.");
+    };
+    window.addEventListener("kahle-vector-locked", onLocked);
+    const timer = window.setTimeout(() => void checkUnlock(), 0);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("kahle-vector-locked", onLocked);
+    };
+  }, [checkUnlock]);
+
+  useEffect(() => {
+    if (!unlockReady) return;
     const timer = window.setTimeout(() => {
       void loadDocuments(activeCollection);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [activeCollection, loadDocuments]);
+  }, [activeCollection, loadDocuments, unlockReady]);
+
+  const submitUnlock = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!unlockCode.trim() || unlocking) return;
+    setUnlocking(true);
+    setUnlockError("");
+    try {
+      await api<{ ok: boolean; unlocked: boolean }>("/unlock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: unlockCode }),
+      });
+      setUnlockCode("");
+      setUnlockOpen(false);
+      setUnlockReady(true);
+      await loadCollections();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 429) {
+        setUnlockError("Zu viele Fehlversuche. Bitte in 15 Minuten erneut versuchen.");
+      } else if (error instanceof ApiError && error.status === 401) {
+        setUnlockError("Der eingegebene Sicherheitscode ist nicht korrekt.");
+      } else {
+        setUnlockError(error instanceof Error ? error.message : "Freigabe fehlgeschlagen.");
+      }
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
+  const lockDashboard = async () => {
+    try {
+      await api<{ ok: boolean }>("/lock", { method: "POST" });
+    } finally {
+      setUnlockReady(false);
+      setUnlockOpen(true);
+      setUnlockCode("");
+      setUnlockError("");
+      setCollections([]);
+      setDocuments([]);
+      setSelected(null);
+    }
+  };
 
   const visibleDocuments = useMemo(() => {
     return documents.filter((item) => {
@@ -833,6 +931,11 @@ export default function VectorAdmin() {
             </button>
           )}
         </form>
+        {unlockReady && !isLocal && (
+          <button className="top-lock" onClick={() => void lockDashboard()} title="Dashboard jetzt sperren">
+            <ShieldCheck size={18} /> Sperren
+          </button>
+        )}
         <input ref={uploadRef} type="file" hidden multiple onChange={upload} accept=".md,.txt,.csv,.pdf,.docx" />
         <button className="primary top-upload" disabled={uploading} onClick={() => uploadRef.current?.click()}>
           <Upload size={19} /> Datei hochladen
@@ -1164,6 +1267,34 @@ export default function VectorAdmin() {
             <label>Technische ID<input value={createId} onChange={(event) => setCreateId(collectionSlug(event.target.value))} placeholder="service-werkstatt" /></label>
             <div><button onClick={() => setCreateOpen(false)}>Abbrechen</button><button className="primary" disabled={creating || createLabel.trim().length < 2 || collectionSlug(createId).length < 2} onClick={createCollection}>{creating ? <LoaderCircle className="spin" size={17} /> : <Plus size={17} />} Knowledge Base anlegen</button></div>
           </div>
+        </div>
+      )}
+
+      {unlockOpen && (
+        <div className="modal-backdrop unlock-backdrop" role="presentation">
+          <form className="modal unlock-modal" onSubmit={submitUnlock} aria-labelledby="unlock-title">
+            <div className="unlock-symbol"><ShieldCheck size={30} /></div>
+            <p className="unlock-eyebrow">Zusätzliche Sicherheitsfreigabe</p>
+            <h2 id="unlock-title">KAHLE/VECTOR entsperren</h2>
+            <p>Du bist als Administrator angemeldet. Gib zusätzlich den Sicherheitscode ein, um die Wissensdatenbank zu verwalten.</p>
+            <label htmlFor="vector-unlock-code">Sicherheitscode</label>
+            <input
+              id="vector-unlock-code"
+              type="password"
+              value={unlockCode}
+              onChange={(event) => setUnlockCode(event.target.value)}
+              autoComplete="current-password"
+              autoFocus
+              disabled={unlocking}
+            />
+            {unlockError && <div className="unlock-error" role="alert">{unlockError}</div>}
+            <div className="unlock-actions">
+              <button className="primary" type="submit" disabled={unlocking || unlockCode.trim().length < 8}>
+                {unlocking ? <LoaderCircle className="spin" size={17} /> : <ShieldCheck size={17} />}
+                Dashboard entsperren
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import tempfile
+import threading
 import time
 import unicodedata
 from datetime import date, datetime, timedelta
@@ -15,12 +18,12 @@ from typing import Any
 
 import requests
 from docx import Document
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 SUPPORTED_EXTENSIONS = {".md", ".txt", ".csv", ".pdf", ".docx"}
 EDITABLE_EXTENSIONS = {".md", ".txt", ".csv"}
 KB_ROOT = Path(os.getenv("KB_ROOT", "/knowledgebases")).resolve()
@@ -49,6 +52,17 @@ DEV_AUTH_BYPASS = os.getenv("KB_ADMIN_DEV_AUTH_BYPASS", "false").lower() == "tru
 MAX_UPLOAD_BYTES = int(os.getenv("KB_ADMIN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 TRASH_RETENTION_DAYS = max(1, int(os.getenv("KB_ADMIN_TRASH_RETENTION_DAYS", "30")))
 MAINTENANCE_API_KEY = os.getenv("KB_ADMIN_MAINTENANCE_API_KEY", "").strip()
+UNLOCK_CODE_HASH = os.getenv("KB_ADMIN_UNLOCK_CODE_HASH", "").strip()
+UNLOCK_SESSION_SECRET = os.getenv("KB_ADMIN_UNLOCK_SESSION_SECRET", "").strip()
+UNLOCK_TTL_SECONDS = max(300, int(os.getenv("KB_ADMIN_UNLOCK_TTL_SECONDS", "28800")))
+UNLOCK_MAX_ATTEMPTS = max(1, int(os.getenv("KB_ADMIN_UNLOCK_MAX_ATTEMPTS", "5")))
+UNLOCK_BLOCK_SECONDS = max(60, int(os.getenv("KB_ADMIN_UNLOCK_BLOCK_SECONDS", "900")))
+UNLOCK_COOKIE = "kahle_vector_unlock"
+UNLOCK_ENABLED = bool(
+    UNLOCK_CODE_HASH.startswith("pbkdf2_sha256.") and len(UNLOCK_SESSION_SECRET) >= 43
+)
+_unlock_failures: dict[str, list[float]] = {}
+_unlock_failures_lock = threading.Lock()
 VERSIONS_ROOT = KB_ROOT / ".versions"
 TRASH_ROOT = KB_ROOT / ".trash"
 AUDIT_ROOT = KB_ROOT / ".admin"
@@ -91,6 +105,10 @@ class DeleteCollectionRequest(BaseModel):
 
 class PurgeCollectionRequest(BaseModel):
     confirm_id: str
+
+
+class UnlockRequest(BaseModel):
+    code: str = Field(..., min_length=8, max_length=256)
 
 
 def _collection_names() -> tuple[str, ...]:
@@ -399,6 +417,99 @@ def require_admin(request: Request) -> dict[str, Any]:
     return user
 
 
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _unlock_code_matches(code: str) -> bool:
+    try:
+        algorithm, iterations_raw, salt_raw, digest_raw = UNLOCK_CODE_HASH.split(".", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_raw)
+        if iterations < 200_000 or iterations > 2_000_000:
+            return False
+        actual = hashlib.pbkdf2_hmac(
+            "sha256", code.encode("utf-8"), _b64url_decode(salt_raw), iterations
+        )
+        return hmac.compare_digest(actual, _b64url_decode(digest_raw))
+    except (TypeError, ValueError):
+        return False
+
+
+def _unlock_subject(admin: dict[str, Any]) -> str:
+    return str(admin.get("id") or admin.get("email") or "admin")
+
+
+def _issue_unlock_token(admin: dict[str, Any]) -> str:
+    payload = {
+        "sub": _unlock_subject(admin),
+        "exp": int(time.time()) + UNLOCK_TTL_SECONDS,
+        "nonce": secrets.token_urlsafe(12),
+    }
+    encoded = _b64url_encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signature = hmac.new(
+        UNLOCK_SESSION_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+    ).digest()
+    return f"{encoded}.{_b64url_encode(signature)}"
+
+
+def _has_valid_unlock(request: Request, admin: dict[str, Any]) -> bool:
+    if DEV_AUTH_BYPASS:
+        return True
+    if not UNLOCK_ENABLED:
+        return False
+    token = request.cookies.get(UNLOCK_COOKIE, "")
+    try:
+        encoded, signature_raw = token.split(".", 1)
+        expected = hmac.new(
+            UNLOCK_SESSION_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+        ).digest()
+        if not hmac.compare_digest(expected, _b64url_decode(signature_raw)):
+            return False
+        payload = json.loads(_b64url_decode(encoded))
+        return (
+            isinstance(payload, dict)
+            and str(payload.get("sub") or "") == _unlock_subject(admin)
+            and int(payload.get("exp") or 0) > int(time.time())
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _failure_key(request: Request, admin: dict[str, Any]) -> str:
+    remote = request.client.host if request.client else "unknown"
+    return f"{_unlock_subject(admin)}|{remote}"
+
+
+def _attempt_state(request: Request, admin: dict[str, Any]) -> tuple[str, list[float]]:
+    key = _failure_key(request, admin)
+    cutoff = time.time() - UNLOCK_BLOCK_SECONDS
+    with _unlock_failures_lock:
+        recent = [stamp for stamp in _unlock_failures.get(key, []) if stamp >= cutoff]
+        if recent:
+            _unlock_failures[key] = recent
+        else:
+            _unlock_failures.pop(key, None)
+    return key, recent
+
+
+def require_unlocked_admin(
+    request: Request, admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    if not DEV_AUTH_BYPASS and not UNLOCK_ENABLED:
+        raise HTTPException(status_code=503, detail="admin_unlock_not_configured")
+    if not _has_valid_unlock(request, admin):
+        raise HTTPException(status_code=423, detail="admin_unlock_required")
+    return admin
+
+
 def _qdrant(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
     try:
         response = requests.request(method, f"{QDRANT_URL}{path}", timeout=45, **kwargs)
@@ -558,8 +669,71 @@ def session(admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     }
 
 
+@app.get("/unlock/status")
+def unlock_status(
+    request: Request, admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    return {
+        "enabled": bool(UNLOCK_ENABLED or DEV_AUTH_BYPASS),
+        "unlocked": _has_valid_unlock(request, admin),
+        "ttl_seconds": UNLOCK_TTL_SECONDS,
+    }
+
+
+@app.post("/unlock")
+def unlock(
+    payload: UnlockRequest,
+    request: Request,
+    response: Response,
+    admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if DEV_AUTH_BYPASS:
+        return {"ok": True, "unlocked": True, "ttl_seconds": UNLOCK_TTL_SECONDS}
+    if not UNLOCK_ENABLED:
+        raise HTTPException(status_code=503, detail="admin_unlock_not_configured")
+    key, recent = _attempt_state(request, admin)
+    if len(recent) >= UNLOCK_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="admin_unlock_temporarily_blocked",
+            headers={"Retry-After": str(UNLOCK_BLOCK_SECONDS)},
+        )
+    if not _unlock_code_matches(payload.code):
+        with _unlock_failures_lock:
+            _unlock_failures.setdefault(key, []).append(time.time())
+        _audit(admin, "admin_unlock_failed", remote=request.client.host if request.client else "unknown")
+        raise HTTPException(status_code=401, detail="admin_unlock_code_invalid")
+    with _unlock_failures_lock:
+        _unlock_failures.pop(key, None)
+    response.set_cookie(
+        key=UNLOCK_COOKIE,
+        value=_issue_unlock_token(admin),
+        max_age=UNLOCK_TTL_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/admin/vector",
+    )
+    _audit(admin, "admin_unlocked", ttl_seconds=UNLOCK_TTL_SECONDS)
+    return {"ok": True, "unlocked": True, "ttl_seconds": UNLOCK_TTL_SECONDS}
+
+
+@app.post("/lock")
+def lock(
+    response: Response, admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    response.delete_cookie(
+        key=UNLOCK_COOKIE,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/admin/vector",
+    )
+    _audit(admin, "admin_locked")
+    return {"ok": True, "unlocked": False}
+
 @app.get("/collections")
-def list_collections(admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def list_collections(admin: dict[str, Any] = Depends(require_unlocked_admin)) -> dict[str, Any]:
     del admin
     state = _load_state()
     items: list[dict[str, Any]] = []
@@ -588,7 +762,7 @@ def list_collections(admin: dict[str, Any] = Depends(require_admin)) -> dict[str
 @app.post("/collections", status_code=201)
 def create_collection(
     payload: CreateCollectionRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     collection = payload.id.strip().lower()
     if collection in _collection_names():
@@ -626,7 +800,7 @@ def create_collection(
 def update_collection(
     collection: str,
     payload: UpdateCollectionRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     collection = _safe_collection(collection)
     root = KB_ROOT / collection
@@ -673,7 +847,7 @@ def update_collection(
 def delete_collection(
     collection: str,
     payload: DeleteCollectionRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     collection = _safe_collection(collection)
     if collection in COLLECTIONS:
@@ -732,7 +906,7 @@ def delete_collection(
 
 @app.get("/trash/collections")
 def list_trashed_collections(
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     del admin
     return {
@@ -744,7 +918,7 @@ def list_trashed_collections(
 @app.post("/trash/collections/{archive_id}/restore")
 def restore_trashed_collection(
     archive_id: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     archive_id = _safe_archive_id(archive_id)
     archive = TRASH_ROOT / "collections" / archive_id
@@ -782,7 +956,7 @@ def restore_trashed_collection(
 def purge_trashed_collection(
     archive_id: str,
     payload: PurgeCollectionRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     archive_id = _safe_archive_id(archive_id)
     archive = TRASH_ROOT / "collections" / archive_id
@@ -810,7 +984,7 @@ def list_documents(
     query: str = "",
     extension: str = "",
     expiry: str = "",
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     del admin
     collection = _safe_collection(collection)
@@ -850,7 +1024,7 @@ def list_documents(
 def get_document(
     collection: str,
     relative_path: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     del admin
     path = _document_path(collection, relative_path)
@@ -870,7 +1044,7 @@ def save_document(
     collection: str,
     relative_path: str,
     payload: SaveDocumentRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     path = _document_path(collection, relative_path)
     if path.suffix.lower() not in EDITABLE_EXTENSIONS:
@@ -892,7 +1066,7 @@ async def upload_document(
     collection: str = Form(...),
     target_path: str = Form(""),
     file: UploadFile = File(...),
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     collection = _safe_collection(collection)
     filename = Path(file.filename or "").name
@@ -927,7 +1101,7 @@ def move_document(
     collection: str,
     relative_path: str,
     payload: MoveDocumentRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     source = _document_path(collection, relative_path)
     target_collection = _safe_collection(payload.target_collection)
@@ -954,7 +1128,7 @@ def move_document(
 def delete_document(
     collection: str,
     relative_path: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     source = _document_path(collection, relative_path)
     version_id = _create_version(source, collection, relative_path, admin, "delete")
@@ -982,7 +1156,7 @@ def delete_document(
 def document_chunks(
     collection: str,
     relative_path: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     del admin
     _document_path(collection, relative_path)
@@ -1015,7 +1189,7 @@ def document_chunks(
 def document_versions(
     collection: str,
     relative_path: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     del admin
     _safe_collection(collection)
@@ -1037,7 +1211,7 @@ def restore_version(
     collection: str,
     relative_path: str,
     payload: RestoreVersionRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     destination = _document_path(collection, relative_path, must_exist=False)
     version_dir = _version_key(collection, relative_path)
@@ -1066,7 +1240,7 @@ def restore_version(
 def semantic_search(
     query: str,
     limit: int = 12,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_unlocked_admin),
 ) -> dict[str, Any]:
     del admin
     clean_query = " ".join(query.split())

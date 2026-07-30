@@ -1,19 +1,38 @@
 {
-  "name": "KAHLE-Vinci",
-  "colors": {
-    "ink": "0F2430",
-    "blue": "0069B3",
-    "blue_dark": "00457A",
-    "cyan": "00A3D7",
-    "light": "F4F7FA",
-    "muted": "8A8A8A",
-    "anthracite": "111111",
-    "signal_red": "CC0000",
-    "white": "FFFFFF"
-  },
-  "fonts": {
-    "headings": "Barlow Condensed",
-    "body": "VW Text",
-    "fallback": "Arial"
-  }
+    "name":  "KAHLE-Vinci",
+    "colors":  {
+                   "ink":  "0F2430",
+                   "blue":  "0069B3",
+                   "blue_dark":  "00457A",
+                   "cyan":  "00A3D7",
+                   "light":  "F4F7FA",
+                   "muted":  "8A8A8A",
+                   "anthracite":  "111111",
+                   "signal_red":  "CC0000",
+                   "white":  "FFFFFF"
+               },
+    "fonts":  {
+                  "headings":  "Barlow Condensed",
+                  "body":  "VW Text",
+                  "fallback":  "Arial"
+              },
+    "company":  {
+                    "name":  "Autohaus KAHLE GmbH \u0026 Co. KG",
+                    "address":  "Am Leineufer 49 | 30419 Hannover",
+                    "register":  "Amtsgericht Hannover HRA 18616",
+                    "registered_office":  "Sitz der Gesellschaft in Hannover",
+                    "general_partner":  "KAHLE Verwaltungs GmbH",
+                    "general_partner_register":  "Amtsgericht Hannover HRB 219226",
+                    "managing_directors":  "Karl-Heinz Kahle | Lukas Kahle | Thomas Keller",
+                    "vat_id":  "DE 115 699 464",
+                    "tax_id":  "25 / 213 / 21103",
+                    "phone":  "0511 / 27 999-0",
+                    "fax":  "0511 / 27 999-99",
+                    "accounting_fax":  "05032 / 804-290",
+                    "website":  "www.kahle.de",
+                    "email":  "info@kahle.de",
+                    "bank":  "Hannoversche Volksbank eG",
+                    "iban":  "DE79 2519 0001 0028 9647 00",
+                    "bic":  "VOHADE2HXXX"
+                }
 }
