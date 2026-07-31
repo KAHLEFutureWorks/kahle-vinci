@@ -381,7 +381,7 @@ FUNCTION_DEFINITIONS = {
         "path": FUNCTIONS_DIR / "kahle_toolcall_guard.py",
         "type": "filter",
         "description": "Outlet-Filter gegen Pseudo-Toolcalls und unbelegte interne Folgeantworten.",
-        "version": "0.2.2",
+        "version": "0.3.0",
         "is_global": 1,
     },
 }
