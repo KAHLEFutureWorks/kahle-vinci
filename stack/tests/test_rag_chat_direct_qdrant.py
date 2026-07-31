@@ -211,6 +211,111 @@ def test_scroll_source_chunks_uses_source_filter_and_paginates():
     assert payloads[0]["filter"]["should"][0]["match"]["value"] == "konzept.md"
     assert payloads[1]["offset"] == "next"
 
+def _source_chunk(index, text=None, score=0.0):
+    return {
+        "collection": "wissen",
+        "source_path": "anleitung.md",
+        "chunk_index": index,
+        "score": score,
+        "text": text if text is not None else f"Abschnitt {index} " + (str(index) * 80),
+    }
+
+
+def test_broad_query_expands_forward_across_document_budget():
+    module = load_module()
+    source = [_source_chunk(index) for index in range(8)]
+    selected = module._expand_source_context(
+        source,
+        [_source_chunk(0, score=0.71)],
+        max_chunks=6,
+        max_chars=12000,
+        neighbor_radius=1,
+        broad=module._is_broad_query("Wie genau arbeite ich im Teiledienst?"),
+    )
+
+    assert [chunk["chunk_index"] for chunk in selected] == [0, 1, 2, 3, 4, 5]
+    assert all(chunk.get("match_type") == "neighbor" for chunk in selected[1:])
+
+
+def test_specific_query_adds_immediate_neighbours_only():
+    module = load_module()
+    source = [_source_chunk(index) for index in range(8)]
+    selected = module._expand_source_context(
+        source,
+        [_source_chunk(3, score=0.77)],
+        max_chunks=6,
+        max_chars=12000,
+        neighbor_radius=1,
+        broad=False,
+    )
+
+    assert [chunk["chunk_index"] for chunk in selected] == [2, 3, 4]
+
+
+def test_context_budget_keeps_whole_chunks():
+    module = load_module()
+    source = [_source_chunk(index, text=str(index) * 100) for index in range(5)]
+    selected = module._expand_source_context(
+        source,
+        [_source_chunk(0, text="0" * 100, score=0.8)],
+        max_chunks=6,
+        max_chars=250,
+        broad=True,
+    )
+
+    assert [chunk["chunk_index"] for chunk in selected] == [0, 1]
+    assert all(len(chunk["text"]) == 100 for chunk in selected)
+
+
+def test_adjacent_chunk_overlap_is_removed_from_context():
+    module = load_module()
+    overlap = "gemeinsamer ueberlappender Kontext " * 3
+    chunks = [
+        _source_chunk(0, text="Erster Teil. " + overlap, score=0.8),
+        _source_chunk(1, text=overlap + "Zweiter Teil.", score=0.0),
+    ]
+    chunks[1]["match_type"] = "neighbor"
+
+    context = module._build_context(chunks)
+
+    assert context.count("gemeinsamer ueberlappender Kontext") == 3
+    assert "Erster Teil." in context
+    assert "Zweiter Teil." in context
+
+def test_exhaustive_query_loads_complete_document_when_it_fits():
+    module = load_module()
+    source = [_source_chunk(index, text=str(index) * 100) for index in range(5)]
+    query = "Was muss nach unserer KI-Richtlinie alles schriftlich erlaubt werden?"
+
+    selected = module._expand_source_context(
+        source,
+        [_source_chunk(2, text="2" * 100, score=0.81)],
+        max_chunks=6,
+        max_chars=12000,
+        neighbor_radius=1,
+        broad=True,
+        exhaustive=module._is_exhaustive_query(query),
+    )
+
+    assert module._is_exhaustive_query(query) is True
+    assert [chunk["chunk_index"] for chunk in selected] == [0, 1, 2, 3, 4]
+
+
+def test_exhaustive_query_still_respects_hard_limits():
+    module = load_module()
+    source = [_source_chunk(index, text=str(index) * 100) for index in range(8)]
+    selected = module._expand_source_context(
+        source,
+        [_source_chunk(2, text="2" * 100, score=0.81)],
+        max_chunks=6,
+        max_chars=12000,
+        broad=True,
+        exhaustive=True,
+    )
+
+    assert len(selected) == 6
+    assert len(selected) < len(source)
+
 def test_raw_mail_query_is_rejected_before_embedding():
     module = load_module()
     raw_mail = """Hallo Herr Langhorst,
@@ -264,6 +369,12 @@ if __name__ == "__main__":
     test_enumeration_retrieval_collects_distributed_numbered_headings()
     test_enumeration_retrieval_is_generic_for_phases()
     test_scroll_source_chunks_uses_source_filter_and_paginates()
+    test_broad_query_expands_forward_across_document_budget()
+    test_specific_query_adds_immediate_neighbours_only()
+    test_context_budget_keeps_whole_chunks()
+    test_adjacent_chunk_overlap_is_removed_from_context()
+    test_exhaustive_query_loads_complete_document_when_it_fits()
+    test_exhaustive_query_still_respects_hard_limits()
     test_raw_mail_query_is_rejected_before_embedding()
     test_raw_mail_without_signoff_is_rejected_before_embedding()
     test_answer_mail_command_with_raw_mail_is_rejected_before_embedding()

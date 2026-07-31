@@ -22,10 +22,22 @@ from pathlib import Path
 from typing import Optional, Any
 
 try:
-    from .kahle_document_theme import render_docx as _render_kahle_docx, render_pdf as _render_kahle_pdf
+    from .kahle_document_theme import (
+        render_docx as _render_kahle_docx,
+        render_pdf as _render_kahle_pdf,
+    )
+    from .fillable_forms import render_ki_permission_form_docx as _render_ki_permission_form_docx, render_ki_policy_quiz_docx as _render_ki_policy_quiz_docx, render_dynamic_form_docx as _render_dynamic_form_docx
+    from .fillable_pdf_forms import render_ki_permission_form_pdf as _render_ki_permission_form_pdf, render_ki_policy_quiz_pdf as _render_ki_policy_quiz_pdf, render_dynamic_form_pdf as _render_dynamic_form_pdf
+    from .human_document import infer_human_title, prepare_human_markdown
     from .rag_markdown import ensure_rag_frontmatter
 except ImportError:  # pragma: no cover - direct module execution in local tests
-    from kahle_document_theme import render_docx as _render_kahle_docx, render_pdf as _render_kahle_pdf
+    from kahle_document_theme import (
+        render_docx as _render_kahle_docx,
+        render_pdf as _render_kahle_pdf,
+    )
+    from fillable_forms import render_ki_permission_form_docx as _render_ki_permission_form_docx, render_ki_policy_quiz_docx as _render_ki_policy_quiz_docx, render_dynamic_form_docx as _render_dynamic_form_docx
+    from fillable_pdf_forms import render_ki_permission_form_pdf as _render_ki_permission_form_pdf, render_ki_policy_quiz_pdf as _render_ki_policy_quiz_pdf, render_dynamic_form_pdf as _render_dynamic_form_pdf
+    from human_document import infer_human_title, prepare_human_markdown
     from rag_markdown import ensure_rag_frontmatter
 
 from fastapi import FastAPI, HTTPException, Header, Query, Request
@@ -138,7 +150,7 @@ OWUI_UUID_PREFIX_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 NonEmptyStr = constr(strip_whitespace=True, min_length=1)
 
 
-app = FastAPI(title="OWUI File Proxy", version="1.7.0")
+app = FastAPI(title="OWUI File Proxy", version="1.9.0")
 
 _REQUEST_API_KEY: ContextVar[str] = ContextVar("request_api_key", default="")
 _DOCX_TEMPLATE_USED: ContextVar[bool] = ContextVar("docx_template_used", default=False)
@@ -250,6 +262,22 @@ def _sanitize_filename(name: str) -> str:
         name = f"file_{uuid.uuid4().hex}"
     return name
 
+
+def _visible_filename(name: str) -> str:
+    """Remove internal OWUI/storage prefixes from user-facing filenames."""
+    visible = re.split(r"[\\/]", str(name or ""))[-1]
+    for _ in range(3):
+        previous = visible
+        visible = re.sub(r"^\d{8}_\d{6}_[0-9a-f]{8}_", "", visible, flags=re.IGNORECASE)
+        visible = re.sub(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_",
+            "",
+            visible,
+            flags=re.IGNORECASE,
+        )
+        if visible == previous:
+            break
+    return _sanitize_filename(visible) if visible.strip("._") else ""
 
 def _reject_wildcards(raw: str) -> None:
     if not raw:
@@ -1217,12 +1245,13 @@ def _decode_download_token(token: str) -> tuple[str, int, str]:
     return rel, exp, sig
 
 
-def _build_download_url(rel: str) -> str:
+def _build_download_url(rel: str, download_name: str | None = None) -> str:
     exp = int(time.time()) + FILE_LINK_TTL_SECONDS
     download_id = uuid.uuid4().hex
     manifest = {
         "rel": _safe_relpath(rel),
         "exp": exp,
+        "filename": _visible_filename(download_name or Path(rel).name),
     }
     _write_atomic(
         UPLOAD_ROOT / ".download-links" / f"{download_id}.json",
@@ -1252,7 +1281,7 @@ def _save_bytes(filename: str, data: bytes) -> dict:
         "filename": safe_name,
         "size_bytes": len(data),
         "sha256": _sha256(data),
-        "download_url": _build_download_url(rel),
+        "download_url": _build_download_url(rel, safe_name),
     }
 
 
@@ -1356,6 +1385,22 @@ class DocxCreateSaveRequest(BaseModel):
     )
     title: str = Field("Dokument", description="Document title")
 
+class KiPermissionFormCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field(
+        "KI-Nutzungs-und-Freigabeantrag.docx",
+        description="Output filename ending in .docx",
+    )
+
+
+class KiPermissionPdfFormCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field("KI-Nutzungs-und-Freigabeantrag.pdf", description="Output filename ending in .pdf")
+
+class KiPolicyQuizCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field(..., description="Output filename ending in .docx or .pdf")
+
+class DynamicFormCreateSaveRequest(BaseModel):
+    filename: NonEmptyStr = Field(..., description="Output filename ending in .docx or .pdf")
+    schema: dict[str, Any] = Field(..., description="Validated interactive form schema")
 
 class PdfCreateSaveRequest(BaseModel):
     filename: NonEmptyStr = Field(..., description="Output filename ending in .pdf")
@@ -1813,6 +1858,117 @@ def docx_create_save(payload: DocxCreateSaveRequest, x_api_key: Optional[str] = 
     saved["template_used"] = bool(_DOCX_TEMPLATE_USED.get())
     return saved
 
+@app.post("/docx/ki-permission-form/create_save", operation_id="ki_permission_form_create_save", include_in_schema=False)
+def ki_permission_form_create_save(payload: KiPermissionFormCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    """Create the deterministic, fillable KAHLE KI usage permission form."""
+    _require_api_key(x_api_key)
+    out_name = _sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".docx"):
+        out_name = f"{out_name}.docx"
+    generated_at = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d %H:%M:%S")
+    data = _render_ki_permission_form_docx(KAHLE_DOCX_TEMPLATE, KAHLE_LOGO_PRIMARY, KAHLE_BRAND_CONFIG, generated_at)
+    if not data:
+        raise HTTPException(status_code=500, detail="fillable_ki_permission_form_render_failed")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file_too_large (>{MAX_FILE_BYTES} bytes)")
+    saved = _save_bytes(out_name, data)
+    saved["content_type"] = DOCX_MIME
+    saved["conversion"] = "fillable_ki_permission_form"
+    saved["template_used"] = KAHLE_DOCX_TEMPLATE.exists()
+    saved["fillable"] = True
+    return saved
+
+
+@app.post("/pdf/ki-permission-form/create_save", operation_id="ki_permission_pdf_form_create_save", include_in_schema=False)
+def ki_permission_pdf_form_create_save(payload: KiPermissionPdfFormCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    """Create the KAHLE KI permission form as a genuine PDF AcroForm."""
+    _require_api_key(x_api_key)
+    out_name = _sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".pdf"):
+        out_name = f"{out_name}.pdf"
+    generated_at = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+    data = _render_ki_permission_form_pdf(generated_at)
+    if not data:
+        raise HTTPException(status_code=500, detail="fillable_ki_permission_pdf_form_render_failed")
+    saved = _save_bytes(out_name, data)
+    saved["content_type"] = PDF_MIME
+    saved["conversion"] = "fillable_ki_permission_pdf_form"
+    saved["template_used"] = True
+    saved["fillable"] = True
+    saved["form_type"] = "AcroForm"
+    return saved
+
+@app.post("/docx/ki-policy-quiz/create_save", operation_id="ki_policy_quiz_docx_create_save", include_in_schema=False)
+def ki_policy_quiz_docx_create_save(payload: KiPolicyQuizCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    _require_api_key(x_api_key)
+    out_name = _sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".docx"):
+        out_name = f"{out_name}.docx"
+    generated_at = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d %H:%M:%S")
+    data = _render_ki_policy_quiz_docx(KAHLE_DOCX_TEMPLATE, KAHLE_LOGO_PRIMARY, KAHLE_BRAND_CONFIG, generated_at)
+    if not data:
+        raise HTTPException(status_code=500, detail="ki_policy_quiz_docx_render_failed")
+    saved = _save_bytes(out_name, data)
+    saved.update({"content_type": DOCX_MIME, "conversion": "interactive_ki_policy_quiz", "fillable": True, "questionnaire": True})
+    return saved
+
+
+@app.post("/pdf/ki-policy-quiz/create_save", operation_id="ki_policy_quiz_pdf_create_save", include_in_schema=False)
+def ki_policy_quiz_pdf_create_save(payload: KiPolicyQuizCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    _require_api_key(x_api_key)
+    out_name = _sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".pdf"):
+        out_name = f"{out_name}.pdf"
+    data = _render_ki_policy_quiz_pdf(datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M"))
+    if not data:
+        raise HTTPException(status_code=500, detail="ki_policy_quiz_pdf_render_failed")
+    saved = _save_bytes(out_name, data)
+    saved.update({"content_type": PDF_MIME, "conversion": "interactive_ki_policy_quiz", "fillable": True, "questionnaire": True, "form_type": "AcroForm"})
+    return saved
+
+
+def _validate_dynamic_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        raise HTTPException(status_code=422, detail="form_schema_must_be_object")
+    title = str(schema.get("title") or "").strip()
+    sections = schema.get("sections")
+    if not title or not isinstance(sections, list) or not sections:
+        raise HTTPException(status_code=422, detail="form_schema_requires_title_and_sections")
+    allowed = {"text", "multiline", "dropdown", "checkbox", "date"}
+    total = 0
+    for section in sections[:12]:
+        if not isinstance(section, dict) or not isinstance(section.get("items"), list):
+            raise HTTPException(status_code=422, detail="invalid_form_section")
+        for item in section.get("items")[:16]:
+            if not isinstance(item, dict) or str(item.get("type") or "text") not in allowed or not str(item.get("label") or "").strip():
+                raise HTTPException(status_code=422, detail="invalid_form_item")
+            if item.get("type") == "dropdown" and len(item.get("options") or []) < 2:
+                raise HTTPException(status_code=422, detail="dropdown_requires_options")
+            total += 1
+    if total < 3 or total > 120:
+        raise HTTPException(status_code=422, detail="form_schema_field_count_out_of_bounds")
+    return schema
+
+
+@app.post("/docx/dynamic-form/create_save", operation_id="dynamic_form_docx_create_save", include_in_schema=False)
+def dynamic_form_docx_create_save(payload: DynamicFormCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    _require_api_key(x_api_key); schema=_validate_dynamic_form_schema(payload.schema)
+    out_name=_sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".docx"): out_name=f"{out_name}.docx"
+    data=_render_dynamic_form_docx(KAHLE_DOCX_TEMPLATE,KAHLE_LOGO_PRIMARY,KAHLE_BRAND_CONFIG,datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d %H:%M:%S"),schema)
+    if not data: raise HTTPException(status_code=500,detail="dynamic_form_docx_render_failed")
+    saved=_save_bytes(out_name,data); saved.update({"content_type":DOCX_MIME,"conversion":"interactive_dynamic_form","fillable":True,"schema_validated":True}); return saved
+
+
+@app.post("/pdf/dynamic-form/create_save", operation_id="dynamic_form_pdf_create_save", include_in_schema=False)
+def dynamic_form_pdf_create_save(payload: DynamicFormCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
+    _require_api_key(x_api_key); schema=_validate_dynamic_form_schema(payload.schema)
+    out_name=_sanitize_filename(payload.filename)
+    if not out_name.lower().endswith(".pdf"): out_name=f"{out_name}.pdf"
+    data=_render_dynamic_form_pdf(schema,datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M"))
+    if not data: raise HTTPException(status_code=500,detail="dynamic_form_pdf_render_failed")
+    saved=_save_bytes(out_name,data); saved.update({"content_type":PDF_MIME,"conversion":"interactive_dynamic_form","fillable":True,"schema_validated":True,"form_type":"AcroForm"}); return saved
+
 
 @app.post("/pdf/create_save", operation_id="pdf_create_save", include_in_schema=False)
 def pdf_create_save(payload: PdfCreateSaveRequest, x_api_key: Optional[str] = Header(default=None)):
@@ -1900,7 +2056,7 @@ def files_download(
     media_type, _ = mimetypes.guess_type(abs_path.name)
     media_type = media_type or "application/octet-stream"
 
-    return FileResponse(path=str(abs_path), filename=abs_path.name, media_type=media_type)
+    return FileResponse(path=str(abs_path), filename=_visible_filename(abs_path.name), media_type=media_type)
 
 
 @app.get("/files/d/{download_id}", include_in_schema=False)
@@ -1917,6 +2073,7 @@ def files_download_short(download_id: str):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         exp = int(manifest.get("exp"))
         rel = _safe_relpath(str(manifest.get("rel") or ""))
+        download_name = _visible_filename(str(manifest.get("filename") or Path(rel).name))
     except Exception:
         raise HTTPException(status_code=404, detail="download_not_found")
 
@@ -1935,7 +2092,7 @@ def files_download_short(download_id: str):
     media_type, _ = mimetypes.guess_type(abs_path.name)
     return FileResponse(
         path=str(abs_path),
-        filename=abs_path.name,
+        filename=download_name,
         media_type=media_type or "application/octet-stream",
     )
 
@@ -2111,13 +2268,16 @@ def docx_to_pdf_save(payload: DocxToPdfSaveRequest, x_api_key: Optional[str] = H
 
     path = _resolve_path(payload.file_path, allowed_exts=(".docx",), require_exact=True)
     data = _read_file(path)
+    visible_source = _visible_filename(path.name)
+    source_stem = Path(visible_source).stem or "Konvertiert"
 
-    out_name = payload.output_name or f"{Path(path.name).stem}.pdf"
+    requested_out = _visible_filename(payload.output_name or "")
+    out_name = f"{source_stem}.pdf" if not requested_out or requested_out.casefold() == "converted.pdf" else requested_out
     if not out_name.lower().endswith(".pdf"):
         out_name = f"{out_name}.pdf"
 
-    title = Path(path.name).stem or "Konvertiert"
-    files = [("files", (path.name, data, DOCX_MIME))]
+    title = source_stem.replace("_", " ").strip() or "Konvertiert"
+    files = [("files", (visible_source, data, DOCX_MIME))]
     r = requests.post(
         f"{DOC_WORKER_URL}/bundle/to_md",
         headers=_worker_headers(),
@@ -2128,6 +2288,7 @@ def docx_to_pdf_save(payload: DocxToPdfSaveRequest, x_api_key: Optional[str] = H
     _raise_for_worker_response(r)
 
     markdown = r.content.decode("utf-8", errors="replace")
+    markdown = prepare_human_markdown(markdown, title=title)
     _PDF_TEMPLATE_USED.set(False)
     out = _text_to_pdf_bytes(markdown, title)
     if len(out) > MAX_FILE_BYTES:
@@ -2135,11 +2296,10 @@ def docx_to_pdf_save(payload: DocxToPdfSaveRequest, x_api_key: Optional[str] = H
 
     saved = _save_bytes(out_name, out)
     saved["content_type"] = PDF_MIME
-    saved["source_file"] = str(path.name)
+    saved["source_file"] = visible_source
     saved["conversion"] = "docx_to_pdf_branded"
     saved["template_used"] = bool(_PDF_TEMPLATE_USED.get())
     return saved
-
 
 # -----------------------------
 # Generic single-file -> Markdown
@@ -2154,9 +2314,12 @@ def file_to_md_save(payload: FileToMdSaveRequest, x_api_key: Optional[str] = Hea
         require_exact=True,
     )
     data = _read_file(path)
+    visible_source = _visible_filename(path.name)
+    source_stem = Path(visible_source).stem or "Konvertiert"
 
-    title = (payload.title or "Konvertiert").strip() or "Konvertiert"
-    mfiles = [("files", (path.name, data, "application/octet-stream"))]
+    requested_title = (payload.title or "").strip()
+    title = source_stem.replace("_", " ") if not requested_title or requested_title.casefold() == "konvertiert" else requested_title
+    mfiles = [("files", (visible_source, data, "application/octet-stream"))]
 
     r = requests.post(
         f"{DOC_WORKER_URL}/bundle/to_md",
@@ -2170,7 +2333,7 @@ def file_to_md_save(payload: FileToMdSaveRequest, x_api_key: Optional[str] = Hea
     if payload.output_name:
         out_name = payload.output_name
     else:
-        out_name = f"{Path(path.name).stem}.md"
+        out_name = f"{source_stem}.md"
     if not out_name.lower().endswith(".md"):
         out_name = f"{out_name}.md"
 
@@ -2182,7 +2345,7 @@ def file_to_md_save(payload: FileToMdSaveRequest, x_api_key: Optional[str] = Hea
     )
     saved = _save_bytes(out_name, markdown.encode("utf-8"))
     saved["content_type"] = "text/markdown; charset=utf-8"
-    saved["source_file"] = str(path.name)
+    saved["source_file"] = visible_source
     saved["conversion"] = "file_to_md"
     return saved
 
@@ -2197,15 +2360,18 @@ def file_to_docx_save(payload: FileToDocxSaveRequest, x_api_key: Optional[str] =
         require_exact=True,
     )
     data = _read_file(path)
+    visible_source = _visible_filename(path.name)
+    source_stem = Path(visible_source).stem or "Konvertiert"
 
-    title = (payload.title or "Konvertiert").strip() or "Konvertiert"
-    mfiles = [("files", (path.name, data, "application/octet-stream"))]
+    provided_title = (payload.title or "").strip()
+    requested_title = source_stem.replace("_", " ") if not provided_title or provided_title.casefold() == "konvertiert" else provided_title
+    mfiles = [("files", (visible_source, data, "application/octet-stream"))]
 
     r = requests.post(
         f"{DOC_WORKER_URL}/bundle/to_md",
         headers=_worker_headers(),
         files=mfiles,
-        data={"title": title, "mode": "raw"},
+        data={"title": requested_title, "mode": "raw"},
         timeout=300,
     )
     _raise_for_worker_response(r)
@@ -2213,16 +2379,18 @@ def file_to_docx_save(payload: FileToDocxSaveRequest, x_api_key: Optional[str] =
     if payload.output_name:
         out_name = payload.output_name
     else:
-        out_name = f"{Path(path.name).stem}.docx"
+        out_name = f"{source_stem}.docx"
     if not out_name.lower().endswith(".docx"):
         out_name = f"{out_name}.docx"
 
     markdown = r.content.decode("utf-8", errors="replace")
+    title = infer_human_title(markdown, requested_title, source_stem)
+    markdown = prepare_human_markdown(markdown, title=title)
     _DOCX_TEMPLATE_USED.set(False)
     out = _markdown_to_docx_bytes(markdown, title)
     saved = _save_bytes(out_name, out)
     saved["content_type"] = DOCX_MIME
-    saved["source_file"] = str(path.name)
+    saved["source_file"] = visible_source
     saved["conversion"] = "file_to_docx"
     saved["template_used"] = bool(_DOCX_TEMPLATE_USED.get())
     return saved

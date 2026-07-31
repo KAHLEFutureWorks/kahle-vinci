@@ -5,6 +5,7 @@ services:
     pids_limit: 512
     environment:
       WEBUI_URL: ${WEBUI_URL:?WEBUI_URL is required}
+      PUBLIC_FILE_BASE_URL: ${WEBUI_URL:?WEBUI_URL is required}
       CORS_ALLOW_ORIGIN: ${WEBUI_URL:?WEBUI_URL is required}
       ENABLE_SIGNUP: "False"
       ENABLE_OAUTH_SIGNUP: "True"

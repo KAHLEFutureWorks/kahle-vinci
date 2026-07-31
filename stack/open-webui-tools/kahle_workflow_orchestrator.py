@@ -1,7 +1,7 @@
 """
 title: KAHLE Workflow Orchestrator
 author: local
-version: 0.1.0
+version: 0.4.0
 description: Deterministisches Mehrschritt-Tool fuer KAHLE-Workflows mit Tasks, RAG/Web-Recherche und strukturierter Ausgabe.
 """
 
@@ -176,6 +176,96 @@ def _looks_like_direct_document_request(text: str, output_format: str) -> bool:
     )
     return asks_to_create and supplies_content
 
+def _looks_like_fillable_ki_permission_form_request(text: str, output_format: str) -> bool:
+    """Detect interactive Word templates for documenting KI approvals."""
+    if output_format not in {"docx", "pdf"}:
+        return False
+    lower = (text or "").lower()
+    wants_fillable = bool(re.search(r"\b(ausf[üu]llbar\w*|interaktiv\w*|aktive?\w*\s+word|formular\w*|vorlage\w*|eingabefeld\w*|checkbox\w*|anklickbar\w*|festhalt\w*|unterschrift\w*)\b", lower))
+    wants_permission = bool(re.search(r"\b(ki[- ]?nutzung\w*|erlaubnis\w*|genehmigung\w*|freigabe\w*|einwilligung\w*)\b", lower))
+    references_previous_form = output_format == "pdf" and "interaktiv" in lower and bool(re.search(r"\b(genau so|genau dies\w*|diese datei|dieses dokument|gleich\w*|vorherig\w*|vorlage\w*|daraus|auch einmal)\b", lower))
+    return wants_fillable and (wants_permission or references_previous_form)
+
+
+def _looks_like_ki_policy_quiz_request(text: str, output_format: str) -> bool:
+    if output_format not in {"docx", "pdf"}:
+        return False
+    lower = (text or "").lower()
+    wants_quiz = bool(re.search(r"\b(fragebogen\w*|wissenstest\w*|kenntnistest\w*|quiz\w*|wissenspr[üu]fung\w*)\b", lower))
+    wants_policy = bool(re.search(r"\b(ki[- ]?richtlinie\w*|richtlinie\w*.*\bki\b|ki\b.*richtlinie\w*)", lower))
+    return wants_quiz and wants_policy
+
+
+def _looks_like_interactive_form_request(text: str, output_format: str) -> bool:
+    if output_format not in {"docx", "pdf"}: return False
+    lower=(text or "").lower()
+    interactive=bool(re.search(r"\b(interaktiv\w*|ausf[üu]llbar\w*|formular\w*|eingabefeld\w*|dropdown\w*|h[äa]kchen\w*|anklickbar\w*)\b",lower))
+    artifact=bool(re.search(r"\b(fragebogen\w*|wissenstest\w*|kenntnistest\w*|quiz\w*|assessment\w*|checkliste\w*|erfassungsbogen\w*|antrag\w*|vorlage\w*|formular\w*)\b",lower))
+    return interactive and artifact
+
+
+def _form_kind(text: str) -> str:
+    lower=(text or "").lower()
+    if re.search(r"\b(fragebogen|wissenstest|kenntnistest|quiz|wissenspr[üu]fung)",lower): return "knowledge_test"
+    if "checkliste" in lower: return "checklist"
+    if re.search(r"\b(assessment|reifegrad|bewertung|audit)",lower): return "assessment"
+    return "intake_form"
+
+
+def _clean_rag_lines(context: str) -> tuple[list[str],list[str]]:
+    headings=[]; facts=[]; seen=set()
+    for raw in str(context or "").splitlines():
+        line=re.sub(r"^\s*(?:#{1,6}|[-*+] |\d+[.)]\s+|>\s*)","",raw).strip()
+        line=re.sub(r"\s+"," ",line).strip(" |-")
+        if not line or line.startswith("[#") or line.startswith(("META:","QUERY:","KONTEXT")): continue
+        if len(line)<8 or len(line)>360 or line.lower() in seen: continue
+        seen.add(line.lower())
+        if raw.lstrip().startswith("#") and len(line)<=100: headings.append(line)
+        elif re.search(r"\b(muss|müssen|darf|dürfen|soll|sollen|verboten|erforderlich|verpflichtet|nur|immer|unverzüglich|jährlich|prozess|schritt)\b",line,re.IGNORECASE): facts.append(line)
+        elif raw.lstrip().startswith(("- ","* ")): facts.append(line)
+    return headings[:12],facts[:30]
+
+
+def _form_topic_from_request(text: str, headings: list[str]) -> str:
+    compact=re.sub(r"\s+"," ",str(text or "")).strip()
+    match=re.search(r"\b(?:unsere|unseren|unserer|unserem|unser)\s+(.{3,90}?)(?:\s+an\b|\s+und\s+(?:erstell|mach|generier)|\s+(?:ein|eine|einen)\s+(?:interaktiv|ausf[üu]llbar|fragebogen|wissenstest|assessment|checkliste|formular)|,|$)",compact,re.IGNORECASE)
+    if match:
+        topic=re.sub(r"\b(?:einmal|bitte)\b","",match.group(1),flags=re.IGNORECASE).strip(" .,-")
+        if topic: return topic[:90]
+    return (headings[0] if headings else "interne Wissensgrundlage")[:90]
+
+
+def build_context_grounded_form_schema(auftrag: str, context: str) -> dict[str, Any] | None:
+    """Create a deterministic interactive form from retrieved source text without another LLM call."""
+    headings,facts=_clean_rag_lines(context)
+    if not headings and len(facts)<3: return None
+    kind=_form_kind(auftrag); topic=_form_topic_from_request(auftrag,headings)
+    identity=[{"id":"participant_name","label":"Name","type":"text"},{"id":"department","label":"Abteilung / Funktion","type":"text"},{"id":"location","label":"Standort","type":"text"},{"id":"date","label":"Datum","type":"date"}]
+    sections=[]
+    if kind=="knowledge_test":
+        items=[]
+        for i,heading in enumerate((headings[1:] or headings)[:7],1):
+            evidence=next((fact for fact in facts if any(word.lower() in fact.lower() for word in heading.split() if len(word)>5)),"")
+            items.append({"id":f"knowledge_{i}","label":f"Welche zentralen Vorgaben gelten im Themenbereich „{heading}“? Nennen Sie Regel, Zuständigkeit und erforderliches Verhalten.","type":"multiline","placeholder":"Antwort und praktisches Beispiel","source_evidence":evidence})
+        for fact in facts[:max(0,10-len(items))]:
+            cue=" ".join(re.findall(r"[A-Za-zÄÖÜäöüß0-9-]+",fact)[:8])
+            items.append({"id":f"transfer_{len(items)+1}","label":f"Wie ist die Vorgabe zum folgenden Themenhinweis im Arbeitsalltag anzuwenden: „{cue} …“?","type":"multiline","placeholder":"Vorgehen kurz begründen","source_evidence":fact})
+        sections=[{"title":"Wissens- und Verständnisfragen","description":"Antworten Sie ausschließlich auf Grundlage der behandelten internen Wissensquelle.","items":items[:10]}]
+    elif kind=="checklist":
+        items=[{"id":f"check_{i}","label":fact,"type":"checkbox","source_evidence":fact} for i,fact in enumerate(facts[:20],1)]
+        sections=[{"title":heading,"items":[item for item in items if any(w.lower() in item["label"].lower() for w in heading.split() if len(w)>5)][:8]} for heading in headings[:6]]
+        sections=[sec for sec in sections if sec["items"]] or [{"title":"Prüfpunkte","items":items}]
+    elif kind=="assessment":
+        items=[]
+        for i,fact in enumerate(facts[:12],1):
+            items.extend([{"id":f"status_{i}","label":fact,"type":"dropdown","options":["Erfüllt","Teilweise erfüllt","Nicht erfüllt","Nicht anwendbar"]},{"id":f"evidence_{i}","label":"Nachweis / Begründung","type":"multiline","placeholder":"Beleg, Verantwortliche und nächste Maßnahme"}])
+        sections=[{"title":"Bewertung der Anforderungen","items":items}]
+    else:
+        items=[]
+        for i,heading in enumerate(headings[:8],1): items.append({"id":f"section_{i}","label":heading,"type":"multiline","placeholder":"Angaben, Begründung und Nachweise"})
+        sections=[{"title":"Fachliche Angaben","items":items or [{"id":"purpose","label":"Zweck und gewünschtes Ergebnis","type":"multiline"},{"id":"scope","label":"Geltungsbereich","type":"multiline"},{"id":"owner","label":"Verantwortliche Person","type":"text"}]}]
+    if sum(len(s.get("items") or []) for s in sections)<3: return None
+    return {"title":f"{('Wissenstest' if kind=='knowledge_test' else 'Interaktives Formular')} – {topic}","kicker":"KAHLE INTERN · INTERAKTIVES FORMULAR","instructions":"Dieses Formular wurde deterministisch aus dem abgerufenen internen Kontext erstellt. Bitte vollständig und nachvollziehbar bearbeiten.","identity_fields":identity,"sections":sections,"declarations":["Ich habe die Angaben selbstständig und nach bestem Wissen gemacht."],"signature_fields":[{"id":"signature_name","label":"Name / digitale Bestätigung","type":"text"},{"id":"signature_date","label":"Datum","type":"date"}],"form_kind":kind,"source_grounded":True}
 
 def build_direct_document_markdown(auftrag: str) -> str:
     """Build a small document strictly from explicit user-provided content."""
@@ -314,6 +404,10 @@ def infer_download_format(auftrag: str, output_format: str = "auto") -> str:
         return requested
 
     text = (auftrag or "").lower()
+    creates_file = bool(re.search(r"\b(erstell\w*|erzeug\w*|generier\w*|mach\w*|gib\w*|wandle\w*|konvertier\w*)\b", text))
+    if creates_file and re.search(r"\bpdf\b", text): return "pdf"
+    if creates_file and re.search(r"\b(?:word|docx)\b", text): return "docx"
+    if creates_file and re.search(r"\b(?:markdown|md)\b", text): return "md"
     if any(word in text for word in ("pptx", "powerpoint", "präsentation", "praesentation", "folien", "slides")):
         return "none"
     file_markers = (
@@ -821,6 +915,58 @@ def create_downloadable_file(content: str, output_format: str, filename: str, ti
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+def create_fillable_ki_permission_form(filename: str, output_format: str = "docx") -> dict[str, Any]:
+    import requests
+
+    base_url = _env("OWUI_FILE_PROXY_URL", default="http://owui-file-proxy:8091").rstrip("/")
+    api_key = _env("OWUI_FILE_PROXY_API_KEY", "TOOL_API_KEY")
+    if not api_key:
+        return {"ok": False, "error": "OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
+    try:
+        response = requests.post(
+            f"{base_url}/{output_format}/ki-permission-form/create_save",
+            json={"filename": filename},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=120,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "error": f"file_proxy_http_{response.status_code}", "body": response.text[:1000]}
+        data = response.json()
+        return data if isinstance(data, dict) else {"ok": False, "error": "file_proxy_returned_non_object"}
+    except Exception as exc:
+        return {"ok": False, "error": f"file_proxy_exception: {exc}"}
+
+
+def create_ki_policy_quiz(filename: str, output_format: str) -> dict[str, Any]:
+    import requests
+    base_url = _env("OWUI_FILE_PROXY_URL", default="http://owui-file-proxy:8091").rstrip("/")
+    api_key = _env("OWUI_FILE_PROXY_API_KEY", "TOOL_API_KEY")
+    if not api_key:
+        return {"ok": False, "error": "OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
+    try:
+        response = requests.post(
+            f"{base_url}/{output_format}/ki-policy-quiz/create_save",
+            json={"filename": filename},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=45,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "error": f"file_proxy_http_{response.status_code}", "body": response.text[:1000]}
+        data = response.json()
+        return data if isinstance(data, dict) else {"ok": False, "error": "file_proxy_returned_non_object"}
+    except Exception as exc:
+        return {"ok": False, "error": f"file_proxy_exception: {exc}"}
+
+def create_dynamic_form(filename: str, output_format: str, schema: dict[str, Any]) -> dict[str, Any]:
+    import requests
+    base_url=_env("OWUI_FILE_PROXY_URL",default="http://owui-file-proxy:8091").rstrip("/"); api_key=_env("OWUI_FILE_PROXY_API_KEY","TOOL_API_KEY")
+    if not api_key: return {"ok":False,"error":"OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
+    try:
+        response=requests.post(f"{base_url}/{output_format}/dynamic-form/create_save",json={"filename":filename,"schema":schema},headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},timeout=45)
+        if response.status_code>=400: return {"ok":False,"error":f"file_proxy_http_{response.status_code}","body":response.text[:1000]}
+        data=response.json(); return data if isinstance(data,dict) else {"ok":False,"error":"file_proxy_returned_non_object"}
+    except Exception as exc: return {"ok":False,"error":f"file_proxy_exception: {exc}"}
+
 
 class Tools:
     class Valves(BaseModel):
@@ -879,6 +1025,50 @@ class Tools:
             })
 
         download_format = resolve_explicit_download_format(auftrag, output_format)
+        if _looks_like_interactive_form_request(auftrag, download_format):
+            rag_query=f"{auftrag} zentrale Inhalte Regeln Pflichten Ausnahmen Prozesse Prüfkriterien"
+            rag_result=parse_rag_result(self._run_internal_rag(rag_query))
+            if not rag_result.get("found") or rag_result.get("error"):
+                return _json({"workflow":"kahle_workflow_execute","auftrag":auftrag,"intent":"interactive_dynamic_form","status":"blocked","error":rag_result.get("error") or "Keine belastbare interne Wissensgrundlage gefunden.","answer_instruction":"Gib ausschließlich kurz aus, dass ohne passenden internen Kontext kein belastbares Formular erzeugt wurde."})
+            form_context=self._expand_form_source_context(str(rag_result.get("context") or ""))
+            schema=build_context_grounded_form_schema(auftrag,form_context)
+            if schema is None and _looks_like_ki_policy_quiz_request(auftrag,download_format):
+                out_name=str(filename or "").strip() or f"KI-Richtlinie-Wissenstest.{download_format}"
+                file_result=create_ki_policy_quiz(out_name,download_format)
+            elif schema is None:
+                return _json({"workflow":"kahle_workflow_execute","auftrag":auftrag,"intent":"interactive_dynamic_form","status":"blocked","error":"Der gefundene Kontext enthielt zu wenig strukturierbare Aussagen.","answer_instruction":"Gib ausschließlich den Fehler kurz aus; erfinde kein Formular."})
+            else:
+                out_name=str(filename or "").strip() or f"{_slugify(str(schema.get('title') or 'interaktives_formular'),default='interaktives_formular')}.{download_format}"
+                file_result=create_dynamic_form(out_name,download_format,schema)
+            return _json({"workflow":"kahle_workflow_execute","auftrag":auftrag,"intent":"interactive_dynamic_form","target":"file_output","generated_file":file_result,"download_url":file_result.get("download_url"),"filename":file_result.get("filename"),"sha256":file_result.get("sha256"),"size_bytes":file_result.get("size_bytes"),"fillable":bool(file_result.get("fillable")),"source_grounded":True,"form_kind":(schema or {}).get("form_kind","knowledge_test"),"answer_instruction":"Wenn generated_file.download_url vorhanden ist: Gib ausschließlich Download-Link und Metadaten aus. Wenn nicht: Gib generated_file.error kurz aus."})
+        if _looks_like_ki_policy_quiz_request(auftrag, download_format):
+            out_name = str(filename or "").strip() or f"KI-Richtlinie-Wissenstest.{download_format}"
+            file_result = create_ki_policy_quiz(out_name, download_format)
+            return _json({
+                "workflow": "kahle_workflow_execute", "auftrag": auftrag,
+                "intent": "interactive_ki_policy_quiz", "target": "file_output",
+                "generated_file": file_result, "download_url": file_result.get("download_url"),
+                "filename": file_result.get("filename"), "sha256": file_result.get("sha256"),
+                "size_bytes": file_result.get("size_bytes"), "fillable": bool(file_result.get("fillable")),
+                "questionnaire": True,
+                "answer_instruction": "Wenn generated_file.download_url vorhanden ist: Gib ausschliesslich Download-Link und Metadaten aus. Wenn nicht: Gib generated_file.error kurz aus.",
+            })
+        if _looks_like_fillable_ki_permission_form_request(auftrag, download_format):
+            out_name = str(filename or "").strip() or f"KI-Nutzungs-und-Freigabeantrag.{download_format}"
+            file_result = create_fillable_ki_permission_form(out_name, download_format)
+            return _json({
+                "workflow": "kahle_workflow_execute",
+                "auftrag": auftrag,
+                "intent": "fillable_ki_permission_form",
+                "target": "file_output",
+                "generated_file": file_result,
+                "download_url": file_result.get("download_url"),
+                "filename": file_result.get("filename"),
+                "sha256": file_result.get("sha256"),
+                "size_bytes": file_result.get("size_bytes"),
+                "fillable": bool(file_result.get("fillable")),
+                "answer_instruction": "Wenn generated_file.download_url vorhanden ist: Gib ausschliesslich Download-Link und Metadaten aus. Wenn nicht: Gib generated_file.error kurz aus.",
+            })
         if download_format != "none" and _looks_like_previous_result_request(auftrag):
             previous_answer = _latest_chat_message(__chat_id__, "assistant", require_result=True)
             if previous_answer:
@@ -1091,6 +1281,25 @@ class Tools:
             )
         except Exception:
             return
+
+    def _expand_form_source_context(self, context: str) -> str:
+        """Expand the best semantic hit to the complete source document for comprehensive forms."""
+        match=re.search(r"\[#\d+\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*chunk",str(context or ""))
+        if not match: return context
+        collection=match.group(1).strip(); source_path=match.group(2).strip()
+        if not collection or not source_path: return context
+        qdrant_url=self.valves.QDRANT_URL or _env("QDRANT_URI",default="http://qdrant:6333")
+        try:
+            result=_post_json(f"{qdrant_url.rstrip('/')}/collections/{collection}/points/scroll",{"filter":{"must":[{"key":"source_path","match":{"value":source_path}}]},"limit":100,"with_payload":True,"with_vector":False},timeout=int(self.valves.TIMEOUT_S)).get("result") or {}
+            points=result.get("points") or []
+            chunks=[]
+            for point in points:
+                payload=point.get("payload") or {}; value=str(payload.get("text") or payload.get("content") or "").strip()
+                if value: chunks.append((int(payload.get("chunk_index") or 0),value))
+            chunks.sort(key=lambda item:item[0]); expanded="\n\n".join(value for _,value in chunks)
+            return expanded[:30000] if len(expanded)>=500 else context
+        except Exception:
+            return context
 
     def _run_internal_rag(self, query: str) -> str:
         base_url = self.valves.IONOS_OPENAI_BASE_URL or _env(

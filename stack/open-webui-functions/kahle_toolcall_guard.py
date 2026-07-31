@@ -1,7 +1,7 @@
 """
 title: KAHLE Toolcall Guard
 author: local
-version: 0.2.1
+version: 0.3.0
 description: Repariert sichtbare Pseudo-Toolcalls und sichtbares Reasoning als letzte Sicherheitsschicht.
 """
 
@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     from pydantic import BaseModel, Field
@@ -81,6 +82,22 @@ def _env(*names: str, default: str = "") -> str:
     return default
 
 
+def _canonical_download_url(value: str) -> str:
+    public_base = _env("PUBLIC_FILE_BASE_URL", "WEBUI_URL").rstrip("/")
+    if not public_base or not value:
+        return value
+    try:
+        source = urlsplit(value)
+        target = urlsplit(public_base)
+        if not source.path.startswith("/files/") or not target.scheme or not target.netloc:
+            return value
+        return urlunsplit((target.scheme, target.netloc, source.path, source.query, source.fragment))
+    except Exception:
+        return value
+
+
+def _canonicalize_download_links(text: str) -> str:
+    return REAL_DOWNLOAD_RE.sub(lambda match: _canonical_download_url(match.group(0)), text or "")
 def _infer_output_format(text: str) -> str:
     lower = (text or "").lower()
     if "output_format" in lower or "output-format" in lower:
@@ -137,6 +154,62 @@ def _infer_requested_file_format(text: str) -> str:
     if any(marker in lower for marker in ("markdown", "md-datei", ".md")):
         return "md"
     return ""
+
+def _is_fillable_ki_permission_form_request(text: str, output_format: str = "docx") -> bool:
+    if output_format not in {"docx", "pdf"}:
+        return False
+    lower = (text or "").lower()
+    wants_fillable = bool(re.search(r"\b(ausf[üu]llbar\w*|interaktiv\w*|aktive?\w*\s+word|formular\w*|vorlage\w*|eingabefeld\w*|checkbox\w*|anklickbar\w*|festhalt\w*|unterschrift\w*)\b", lower))
+    wants_permission = bool(re.search(r"\b(ki[- ]?nutzung\w*|erlaubnis\w*|genehmigung\w*|freigabe\w*|einwilligung\w*)\b", lower))
+    references_previous_form = output_format == "pdf" and "interaktiv" in lower and bool(re.search(r"\b(genau so|genau dies\w*|diese datei|dieses dokument|gleich\w*|vorherig\w*|vorlage\w*|daraus|auch einmal)\b", lower))
+    return wants_fillable and (wants_permission or references_previous_form)
+
+def _is_ki_policy_quiz_request(text: str, output_format: str = "") -> bool:
+    if output_format not in {"docx", "pdf"}:
+        return False
+    lower = (text or "").lower()
+    wants_quiz = bool(
+        re.search(
+            r"\b(fragebogen\w*|wissenstest\w*|kenntnistest\w*|quiz\w*|wissenspr[üu]fung\w*|wissen\w*\s+(?:der|von|unserer)\s+mitarbeit\w*\s+(?:gut\s+)?pr[üu]f\w*)\b",
+            lower,
+        )
+    )
+    wants_policy = bool(re.search(r"\b(ki[- ]?richtlinie\w*|richtlinie\w*\s+(?:zur|f[üu]r)\s+ki)\b", lower))
+    return wants_quiz and wants_policy
+
+
+def _is_interactive_form_request(text: str, output_format: str = "") -> bool:
+    if output_format not in {"docx", "pdf"}: return False
+    lower=(text or "").lower()
+    return bool(re.search(r"\b(interaktiv\w*|ausf[üu]llbar\w*|formular\w*|eingabefeld\w*|dropdown\w*|h[äa]kchen\w*|anklickbar\w*)\b",lower)) and bool(re.search(r"\b(fragebogen\w*|wissenstest\w*|kenntnistest\w*|quiz\w*|assessment\w*|checkliste\w*|erfassungsbogen\w*|antrag\w*|vorlage\w*|formular\w*)\b",lower))
+
+
+def _build_guard_form_schema(request_text: str, rag_raw: str) -> dict[str, Any] | None:
+    marker="KONTEXT (zitierbar mit [#]):"; context=rag_raw.split(marker,1)[1] if marker in rag_raw else ""
+    headings=[]; facts=[]; seen=set()
+    for raw in context.splitlines():
+        line=re.sub(r"^\s*(?:#{1,6}|[-*+] |\d+[.)]\s+|>\s*)","",raw).strip(); line=re.sub(r"\s+"," ",line).strip(" |-")
+        if not line or line.startswith("[#") or len(line)<8 or len(line)>360 or line.lower() in seen: continue
+        seen.add(line.lower())
+        if raw.lstrip().startswith("#") and len(line)<=100: headings.append(line)
+        elif re.search(r"\b(muss|müssen|darf|dürfen|soll|sollen|verboten|erforderlich|verpflichtet|nur|immer|unverzüglich|jährlich|prozess|schritt)\b",line,re.IGNORECASE) or raw.lstrip().startswith(("- ","* ")): facts.append(line)
+    if not headings and len(facts)<3: return None
+    lower=(request_text or "").lower(); kind="knowledge_test" if re.search(r"\b(fragebogen|wissenstest|kenntnistest|quiz|wissenspr[üu]fung)",lower) else ("checklist" if "checkliste" in lower else ("assessment" if re.search(r"\b(assessment|reifegrad|bewertung|audit)",lower) else "intake_form"))
+    if kind=="knowledge_test":
+        items=[]
+        for i,heading in enumerate((headings[1:] or headings)[:7],1): items.append({"id":f"knowledge_{i}","label":f"Welche zentralen Vorgaben gelten im Themenbereich „{heading}“? Nennen Sie Regel, Zuständigkeit und erforderliches Verhalten.","type":"multiline","placeholder":"Antwort und praktisches Beispiel"})
+        for fact in facts[:max(0,10-len(items))]: items.append({"id":f"transfer_{len(items)+1}","label":f"Wie wenden Sie diese interne Vorgabe im Arbeitsalltag an: „{' '.join(fact.split()[:8])} …“?","type":"multiline","placeholder":"Vorgehen kurz begründen"})
+        sections=[{"title":"Wissens- und Verständnisfragen","items":items[:10]}]
+    elif kind=="checklist": sections=[{"title":"Prüfpunkte","items":[{"id":f"check_{i}","label":fact,"type":"checkbox"} for i,fact in enumerate(facts[:20],1)]}]
+    elif kind=="assessment":
+        items=[]
+        for i,fact in enumerate(facts[:12],1): items.extend([{"id":f"status_{i}","label":fact,"type":"dropdown","options":["Erfüllt","Teilweise erfüllt","Nicht erfüllt","Nicht anwendbar"]},{"id":f"evidence_{i}","label":"Nachweis / Begründung","type":"multiline"}])
+        sections=[{"title":"Bewertung der Anforderungen","items":items}]
+    else: sections=[{"title":"Fachliche Angaben","items":[{"id":f"section_{i}","label":heading,"type":"multiline"} for i,heading in enumerate(headings[:8],1)]}]
+    if sum(len(x.get("items") or []) for x in sections)<3: return None
+    match=re.search(r"\b(?:unsere|unseren|unserer|unserem|unser)\s+(.{3,90}?)(?:\s+an\b|\s+und\s+(?:erstell|mach|generier)|\s+(?:ein|eine|einen)\s+(?:interaktiv|ausf[üu]llbar|fragebogen|wissenstest|assessment|checkliste|formular)|,|$)",request_text,re.IGNORECASE)
+    topic=(match.group(1).strip(" .,-") if match else (headings[0] if headings else "interne Wissensgrundlage"))[:90]
+    return {"title":f"{('Wissenstest' if kind=='knowledge_test' else 'Interaktives Formular')} – {topic}","kicker":"KAHLE INTERN · INTERAKTIVES FORMULAR","instructions":"Deterministisch aus dem abgerufenen internen Kontext erstellt.","identity_fields":[{"id":"participant_name","label":"Name","type":"text"},{"id":"department","label":"Abteilung / Funktion","type":"text"},{"id":"date","label":"Datum","type":"date"}],"sections":sections,"declarations":["Ich habe die Angaben selbstständig und nach bestem Wissen gemacht."],"signature_fields":[{"id":"signature_name","label":"Name / digitale Bestätigung","type":"text"},{"id":"signature_date","label":"Datum","type":"date"}]}
 
 
 def _infer_output_format_from_request(text: str) -> str:
@@ -279,7 +352,7 @@ def _download_format(result: dict[str, Any]) -> str:
         "SHA256: {sha256}\n"
         "Groesse: {size_bytes} Bytes"
     ).format(
-        download_url=result.get("download_url", ""),
+        download_url=_canonical_download_url(str(result.get("download_url", ""))),
         filename=result.get("filename", ""),
         sha256=result.get("sha256", ""),
         size_bytes=result.get("size_bytes", ""),
@@ -700,10 +773,22 @@ def _is_substantive_file_content(content: str) -> bool:
     return True
 
 
-def _write_file_response(message: dict[str, Any], source_content: str, output_format: str, request_text: str) -> bool:
+def _write_file_response(message: dict[str, Any], source_content: str, output_format: str, request_text: str, messages: list[dict[str, Any]] | None = None) -> bool:
     if output_format not in {"pdf", "docx", "md"}:
         return False
-    result = _create_file(source_content, output_format, _filename_from_request(request_text, output_format))
+    if _is_fillable_ki_permission_form_request(request_text, output_format):
+        result = _create_fillable_ki_permission_form(f"KI-Nutzungs-und-Freigabeantrag.{output_format}", output_format)
+    elif _is_interactive_form_request(request_text, output_format):
+        rag_raw = _call_rag_chat_tool(request_text, messages or [])
+        schema = _build_guard_form_schema(request_text, rag_raw)
+        if schema:
+            result = _create_dynamic_form(f"Interaktives-Formular.{output_format}", output_format, schema)
+        elif _is_ki_policy_quiz_request(request_text, output_format):
+            result = _create_ki_policy_quiz(f"KI-Richtlinie-Wissenstest.{output_format}", output_format)
+        else:
+            result = {"ok": False, "error": "Kein belastbarer interner Kontext für das interaktive Formular gefunden"}
+    else:
+        result = _create_file(source_content, output_format, _filename_from_request(request_text, output_format))
     if result.get("download_url"):
         _set_message_content(message, _download_format(result))
     else:
@@ -1231,6 +1316,60 @@ def _create_file(content: str, output_format: str, filename: str) -> dict[str, A
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+def _create_fillable_ki_permission_form(filename: str, output_format: str = "docx") -> dict[str, Any]:
+    if requests is None:
+        return {"ok": False, "error": "Python package requests is not available"}
+    base_url = _env("OWUI_FILE_PROXY_URL", default="http://owui-file-proxy:8091").rstrip("/")
+    api_key = _env("OWUI_FILE_PROXY_API_KEY", "TOOL_API_KEY")
+    if not api_key:
+        return {"ok": False, "error": "OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
+    try:
+        response = requests.post(
+            f"{base_url}/{output_format}/ki-permission-form/create_save",
+            json={"filename": filename},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=120,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "error": f"file_proxy_http_{response.status_code}", "body": response.text[:1000]}
+        data = response.json()
+        return data if isinstance(data, dict) else {"ok": False, "error": "file_proxy_returned_non_object"}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _create_ki_policy_quiz(filename: str, output_format: str = "pdf") -> dict[str, Any]:
+    if requests is None:
+        return {"ok": False, "error": "Python package requests is not available"}
+    base_url = _env("OWUI_FILE_PROXY_URL", default="http://owui-file-proxy:8091").rstrip("/")
+    api_key = _env("OWUI_FILE_PROXY_API_KEY", "TOOL_API_KEY")
+    if not api_key:
+        return {"ok": False, "error": "OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
+    try:
+        response = requests.post(
+            f"{base_url}/{output_format}/ki-policy-quiz/create_save",
+            json={"filename": filename},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=45,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "error": f"file_proxy_http_{response.status_code}", "body": response.text[:1000]}
+        data = response.json()
+        return data if isinstance(data, dict) else {"ok": False, "error": "file_proxy_returned_non_object"}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _create_dynamic_form(filename: str, output_format: str, schema: dict[str, Any]) -> dict[str, Any]:
+    if requests is None: return {"ok":False,"error":"Python package requests is not available"}
+    base_url=_env("OWUI_FILE_PROXY_URL",default="http://owui-file-proxy:8091").rstrip("/"); api_key=_env("OWUI_FILE_PROXY_API_KEY","TOOL_API_KEY")
+    if not api_key: return {"ok":False,"error":"OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
+    try:
+        response=requests.post(f"{base_url}/{output_format}/dynamic-form/create_save",json={"filename":filename,"schema":schema},headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},timeout=45)
+        if response.status_code>=400: return {"ok":False,"error":f"file_proxy_http_{response.status_code}","body":response.text[:1000]}
+        data=response.json(); return data if isinstance(data,dict) else {"ok":False,"error":"file_proxy_returned_non_object"}
+    except Exception as exc: return {"ok":False,"error":f"{type(exc).__name__}: {exc}"}
+
 
 FILE_PROXY_TOOL_ENDPOINTS = {
     "file_to_md_save": "/file/to_md_save",
@@ -1616,6 +1755,17 @@ class Filter:
 
             visible_workflow_call = _extract_visible_workflow_file_call(content, request_text)
             if visible_workflow_call:
+                form_format = str(visible_workflow_call.get("output_format") or "docx")
+                if _is_fillable_ki_permission_form_request(request_text, form_format):
+                    result = _create_fillable_ki_permission_form(f"KI-Nutzungs-und-Freigabeantrag.{form_format}", form_format)
+                    if result.get("download_url"):
+                        _set_message_content(message, _download_format(result))
+                    else:
+                        _set_message_content(message, f"Tool-Fehler: {result.get('error') or 'Formular konnte nicht erstellt werden'}.")
+                    continue
+                if _is_interactive_form_request(request_text, form_format):
+                    _write_file_response(message, content, form_format, request_text, messages)
+                    continue
                 source_content = str(visible_workflow_call.get("content") or "").strip()
                 if not _is_substantive_file_content(source_content) and _is_previous_result_file_request(request_text):
                     source_content = _latest_previous_assistant(messages, index)
@@ -1717,7 +1867,7 @@ class Filter:
                         _set_message_content(message, "Tool-Fehler: Kein vorheriger Ergebnistext gefunden, aus dem eine Datei erstellt werden kann.")
                         continue
 
-                _write_file_response(message, source_content, output_format, request_text)
+                _write_file_response(message, source_content, output_format, request_text, messages)
                 continue
 
             if PSEUDO_TOOLCALL_RE.search(content):
@@ -1743,7 +1893,7 @@ class Filter:
                     _set_message_content(message, "Tool-Fehler: Kein vorheriger Ergebnistext gefunden, aus dem eine Datei erstellt werden kann.")
                     continue
 
-                _write_file_response(message, source_content, output_format, request_text)
+                _write_file_response(message, source_content, output_format, request_text, messages)
                 continue
 
             output_format = _infer_requested_file_format(request_text)
@@ -1762,12 +1912,16 @@ class Filter:
                 if not _is_substantive_file_content(source_content):
                     _set_message_content(message, "Tool-Fehler: Der Dokumentinhalt konnte nicht erzeugt werden.")
                     continue
-                _write_file_response(message, source_content, output_format, request_text)
+                _write_file_response(message, source_content, output_format, request_text, messages)
                 continue
 
         for message in messages:
             if message.get("role") != "assistant":
                 continue
+            content = str(message.get("content") or "")
+            canonical_content = _canonicalize_download_links(content)
+            if canonical_content != content:
+                _set_message_content(message, canonical_content)
             if _has_download_metadata(str(message.get("content") or "")):
                 _sync_output_text(message)
 

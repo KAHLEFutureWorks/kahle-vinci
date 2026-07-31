@@ -153,6 +153,64 @@ def parse_markdown(content: str, title: str) -> list[dict[str, Any]]:
     return blocks
 
 
+def _fixed_width_table(text: str) -> tuple[list[str], list[list[str]]] | None:
+    lines = [line.rstrip() for line in (text or "").splitlines()]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len(lines) < 4:
+        return None
+
+    header_index = -1
+    starts: list[int] = []
+    headers: list[str] = []
+    for index, line in enumerate(lines):
+        matches = list(re.finditer(r"\S(?:.*?\S)?(?=\s{2,}|$)", line))
+        values = [match.group(0).strip() for match in matches]
+        if len(values) >= 3 and len(line) <= 180:
+            header_index = index
+            starts = [match.start() for match in matches]
+            headers = values
+            break
+    if header_index < 0 or len(starts) < 3:
+        return None
+
+    ends = starts[1:] + [max(max(len(line) for line in lines), starts[-1] + 20)]
+
+    def split_row(line: str) -> list[str]:
+        return [line[start:end].strip() if start < len(line) else "" for start, end in zip(starts, ends)]
+
+    rows: list[list[str]] = [headers]
+    current: list[str] | None = None
+    previous_blank = True
+    for line in lines[header_index + 1 :]:
+        if not line.strip():
+            if current is not None:
+                rows.append(current)
+                current = None
+            previous_blank = True
+            continue
+        cells = split_row(line)
+        middle_value = any(cells[1:-1])
+        starts_new = current is None or middle_value or previous_blank
+        if starts_new:
+            if current is not None:
+                rows.append(current)
+            current = cells
+        else:
+            for cell_index, value in enumerate(cells):
+                if value:
+                    current[cell_index] = f"{current[cell_index]} {value}".strip()
+        previous_blank = False
+    if current is not None:
+        rows.append(current)
+
+    meaningful_rows = [row for row in rows[1:] if any(row)]
+    if len(meaningful_rows) < 2:
+        return None
+    prefix = [line.strip() for line in lines[:header_index] if line.strip()]
+    return prefix, [rows[0], *meaningful_rows]
 def _clear_container(container: Any) -> None:
     element = container._element
     for child in list(element):
@@ -377,59 +435,166 @@ def _add_inline_docx(paragraph: Any, text: str, *, color: str = INK, size: float
         run.italic = italic
 
 
+def _set_cell_width(cell: Any, width_twips: int) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tc_w = tc_pr.find(qn("w:tcW"))
+    if tc_w is None:
+        tc_w = OxmlElement("w:tcW")
+        tc_pr.append(tc_w)
+    tc_w.set(qn("w:w"), str(width_twips))
+    tc_w.set(qn("w:type"), "dxa")
+
+
+def _set_table_fixed(table: Any, width_twips: int) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    tbl_pr = table._tbl.tblPr
+    layout = tbl_pr.find(qn("w:tblLayout"))
+    if layout is None:
+        layout = OxmlElement("w:tblLayout")
+        tbl_pr.append(layout)
+    layout.set(qn("w:type"), "fixed")
+    tbl_w = tbl_pr.find(qn("w:tblW"))
+    if tbl_w is None:
+        tbl_w = OxmlElement("w:tblW")
+        tbl_pr.append(tbl_w)
+    tbl_w.set(qn("w:w"), str(width_twips))
+    tbl_w.set(qn("w:type"), "dxa")
+
+
+def _set_table_grid(table: Any, widths: list[int]) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    grid = table._tbl.tblGrid
+    for child in list(grid):
+        grid.remove(child)
+    for width in widths:
+        column = OxmlElement("w:gridCol")
+        column.set(qn("w:w"), str(width))
+        grid.append(column)
+def _set_row_flags(row: Any, *, repeat_header: bool = False) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    tr_pr = row._tr.get_or_add_trPr()
+    cant_split = OxmlElement("w:cantSplit")
+    tr_pr.append(cant_split)
+    if repeat_header:
+        header = OxmlElement("w:tblHeader")
+        header.set(qn("w:val"), "true")
+        tr_pr.append(header)
+
+
+def _docx_table_weights(rows: list[list[str]]) -> list[float]:
+    width = len(rows[0])
+    headers = [cell.strip().casefold() for cell in rows[0]]
+    if width == 4 and headers[1] in {"ja", "yes"} and headers[2] in {"nein", "no"}:
+        return [5.2, 0.75, 0.75, 3.3]
+    lengths = []
+    for column_index in range(width):
+        values = [len(row[column_index].strip()) for row in rows if column_index < len(row)]
+        lengths.append(max(8.0, min(52.0, sum(values) / max(1, len(values)))))
+    return [max(0.8, value ** 0.72) for value in lengths]
+
+
 def _add_docx_table(document: Any, rows: list[list[str]]) -> None:
     from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Cm
+    from docx.shared import Cm, Pt
 
     if not rows:
         return
     width = len(rows[0])
     table = document.add_table(rows=len(rows), cols=width)
     table.autofit = False
-    usable = 17.4
-    weights = [1.0] * width
-    if width >= 2:
-        weights[1] = 2.4
+    usable_twips = 9865  # 17.4 cm
+    weights = _docx_table_weights(rows)
     total = sum(weights)
+    widths = [round(usable_twips * weight / total) for weight in weights]
+    widths[-1] += usable_twips - sum(widths)
+    _set_table_fixed(table, usable_twips)
+    _set_table_grid(table, widths)
+
     for row_index, row in enumerate(rows):
+        _set_row_flags(table.rows[row_index], repeat_header=row_index == 0)
         for column_index, value in enumerate(row):
             cell = table.cell(row_index, column_index)
-            cell.width = Cm(usable * weights[column_index] / total)
+            _set_cell_width(cell, widths[column_index])
+            cell.width = Cm(17.4 * widths[column_index] / usable_twips)
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-            _set_cell_margins(cell, 105, 120, 105, 120)
+            _set_cell_margins(cell, 125 if row_index == 0 else 110, 150, 125 if row_index == 0 else 110, 150)
             if row_index == 0:
                 _set_cell_shading(cell, INK)
             elif row_index % 2 == 0:
                 _set_cell_shading(cell, LIGHT)
             p = cell.paragraphs[0]
-            p.paragraph_format.space_after = Cm(0)
-            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if column_index == width - 1 and re.search(r"\d", value) else WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.15
+            compact_status = width == 4 and column_index in {1, 2}
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER if compact_status else WD_ALIGN_PARAGRAPH.LEFT
             run = p.add_run(value)
-            _set_run(run, name="Arial", size=8.5, bold=row_index == 0, color=WHITE if row_index == 0 else INK, all_caps=row_index == 0)
-    caption = document.add_paragraph("Tabelle · Automatisch aus dem Inhalt übernommen", style="Kahle Caption")
-    caption.paragraph_format.space_before = Cm(0.08)
+            _set_run(
+                run,
+                name="Arial",
+                size=8.2 if row_index else 8.0,
+                bold=row_index == 0 or compact_status,
+                color=WHITE if row_index == 0 else INK,
+                all_caps=row_index == 0,
+            )
+    caption = document.add_paragraph("Tabelle \u00b7 Automatisch aus dem Inhalt \u00fcbernommen", style="Kahle Caption")
+    caption.paragraph_format.space_before = Pt(4)
+    caption.paragraph_format.space_after = Pt(9)
 
 
 def _add_docx_callout(document: Any, text: str) -> None:
-    from docx.shared import Cm
+    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+    from docx.shared import Cm, Pt
 
-    lower = text.casefold()
-    signal = lower.startswith(("warnung", "frist", "achtung"))
+    match = re.match(r"^(Hinweis|Warnung|Achtung|Wichtig|Frist)\s*:\s*(.*)$", text.strip(), re.IGNORECASE | re.DOTALL)
+    prefix = match.group(1) if match else "Kernaussage"
+    body = match.group(2).strip() if match else text.strip()
+    signal = prefix.casefold() in {"warnung", "achtung", "frist"}
     fill = RED if signal else BLUE
-    table = document.add_table(rows=1, cols=1)
-    table.autofit = False
-    table.columns[0].width = Cm(17.4)
-    cell = table.cell(0, 0)
-    _set_cell_shading(cell, fill)
-    _set_cell_margins(cell, 220, 260, 220, 260)
-    p = cell.paragraphs[0]
-    p.paragraph_format.space_after = Cm(0)
-    label = "WICHTIG" if signal else "KERNAUSSAGE"
-    run = p.add_run(label + "\n")
-    _set_run(run, name="Arial", size=7.5, bold=True, color=WHITE, all_caps=True)
-    _add_inline_docx(p, text, color=WHITE, size=12)
 
+    spacer = document.add_paragraph()
+    spacer.paragraph_format.space_before = Pt(2)
+    spacer.paragraph_format.space_after = Pt(0)
+    _paragraph_rule(spacer, fill, size=12)
+
+    table = document.add_table(rows=1, cols=2)
+    table.autofit = False
+    usable_twips = 9865
+    label_width = 1800
+    body_width = usable_twips - label_width
+    _set_table_fixed(table, usable_twips)
+    _set_table_grid(table, [label_width, body_width])
+    _set_row_flags(table.rows[0])
+    label_cell, body_cell = table.rows[0].cells
+    for cell, width in ((label_cell, label_width), (body_cell, body_width)):
+        _set_cell_width(cell, width)
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        _set_cell_shading(cell, fill)
+    _set_cell_margins(label_cell, 190, 210, 190, 150)
+    _set_cell_margins(body_cell, 190, 150, 190, 230)
+
+    label_p = label_cell.paragraphs[0]
+    label_p.paragraph_format.space_after = Pt(0)
+    label_run = label_p.add_run(prefix.upper())
+    _set_run(label_run, name="Arial", size=7.5, bold=True, color=WHITE, all_caps=True)
+
+    body_p = body_cell.paragraphs[0]
+    body_p.paragraph_format.space_after = Pt(0)
+    body_p.paragraph_format.line_spacing = 1.2
+    _add_inline_docx(body_p, body, color=WHITE, size=10.5)
+
+    after = document.add_paragraph()
+    after.paragraph_format.space_before = Pt(0)
+    after.paragraph_format.space_after = Pt(4)
 
 def render_docx(content: str, title: str, template_path: Path, logo_path: Path, config_path: Path, generated_at: str) -> bytes | None:
     try:
@@ -508,8 +673,16 @@ def render_docx(content: str, title: str, template_path: Path, logo_path: Path, 
             elif kind == "callout":
                 _add_docx_callout(document, block["text"])
             elif kind == "code":
-                for line in block["text"].splitlines() or [""]:
-                    document.add_paragraph(line, style="Kahle Code")
+                fixed_table = _fixed_width_table(block["text"])
+                if fixed_table:
+                    prefix, rows = fixed_table
+                    for prefix_index, line in enumerate(prefix):
+                        p = document.add_paragraph(style="Heading 2" if prefix_index == 0 else "Normal")
+                        _add_inline_docx(p, line)
+                    _add_docx_table(document, rows)
+                else:
+                    for line in block["text"].splitlines() or [""]:
+                        document.add_paragraph(line, style="Kahle Code")
 
         core = document.core_properties
         core.title = (title or "Dokument").strip()

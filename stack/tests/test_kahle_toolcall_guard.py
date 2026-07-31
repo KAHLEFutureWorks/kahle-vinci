@@ -173,6 +173,28 @@ def test_direct_file_promise_synthesizes_and_creates_docx():
         module._synthesize_requested_file_content = original_synthesize
 
 
+def test_fillable_ki_permission_request_never_uses_generic_docx_export():
+    module = load_module()
+    original_form = module._create_fillable_ki_permission_form
+    original_create = module._create_file
+    try:
+        captured = {}
+        def fake_form(filename, output_format="docx"):
+            captured["filename"] = filename
+            return {"download_url":"http://localhost:8091/files/d/form","filename":filename,"sha256":"abc","size_bytes":456,"fillable":True}
+        module._create_fillable_ki_permission_form = fake_form
+        module._create_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generic DOCX export used"))
+        body = {"messages":[
+            {"role":"user","content":"Bitte erstelle eine ausfüllbare/aktive Word Datei, die wir als Vorlage nehmen können, um diese Erlaubnisse schriftlich festzuhalten"},
+            {"role":"assistant","content":json.dumps({"tool":"kahle_workflow_execute","parameters":{"output_format":"docx","content":"# Statischer Platzhalter"}})},
+        ]}
+        result = module.Filter().outlet(body)
+        assert captured["filename"] == "KI-Nutzungs-und-Freigabeantrag.docx"
+        assert "KI-Nutzungs-und-Freigabeantrag.docx" in result["messages"][-1]["content"]
+    finally:
+        module._create_fillable_ki_permission_form = original_form
+        module._create_file = original_create
+
 
 def test_successful_rag_source_replaces_false_no_internal_knowledge_answer():
     module = load_module()
@@ -1692,8 +1714,23 @@ def test_short_download_id_is_valid_and_not_saved_as_wrapper_file():
     finally:
         module._create_file = original_create
 
+def test_download_host_is_normalized_to_configured_vinci_host():
+    module = load_module()
+    original = os.environ.get("PUBLIC_FILE_BASE_URL")
+    try:
+        os.environ["PUBLIC_FILE_BASE_URL"] = "https://vinci.kahle.de"
+        stale = "https://openwebui-dev.kahle.de/files/d/efdbf4b281114461a1573e228e3a2235"
+        normalized = module._canonicalize_download_links(f"Download-Link: {stale}")
+        assert "https://vinci.kahle.de/files/d/efdbf4b281114461a1573e228e3a2235" in normalized
+        assert "openwebui-dev.kahle.de" not in normalized
+    finally:
+        if original is None:
+            os.environ.pop("PUBLIC_FILE_BASE_URL", None)
+        else:
+            os.environ["PUBLIC_FILE_BASE_URL"] = original
 if __name__ == "__main__":
     test_visible_workflow_pseudo_call_is_replaced_with_download_metadata()
+    test_fillable_ki_permission_request_never_uses_generic_docx_export()
     test_successful_rag_source_replaces_false_no_internal_knowledge_answer()
     test_internal_followup_without_toolcall_is_refreshed_from_rag()
     test_download_replacement_updates_output_text_as_well_as_content()
@@ -1721,4 +1758,5 @@ if __name__ == "__main__":
     test_blocked_safe_webcaller_source_overrides_model_answer()
     test_admin_gets_kb_expiry_notice_once_per_day()
     test_file_saved_source_payload_overrides_mutated_model_download_token()
+    test_download_host_is_normalized_to_configured_vinci_host()
     print("kahle toolcall guard tests passed")

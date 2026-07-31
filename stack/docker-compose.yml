@@ -42,6 +42,7 @@ services:
       N8N_SAFE_WEBSEARCH_TIMEOUT: ${N8N_SAFE_WEBSEARCH_TIMEOUT:-50}
       OWUI_FILE_PROXY_URL: http://owui-file-proxy:8091
       OWUI_FILE_PROXY_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      PUBLIC_FILE_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8091}
       DEFAULT_PROMPT_SUGGESTIONS: >-
         [
           {"title":["Kundenmail formulieren","freundlich, klar, autohausnah"],"content":"Formuliere eine freundliche Antwort an einen Kunden. Nutze förmliches Sie, bleibe verbindlich und verwende Platzhalter für Namen, Standort und Kontaktdaten. Anliegen: "},

@@ -14,6 +14,7 @@ B) Neue Datei aus Recherche, Antwort, Ergebnis, Entwurf oder Chatverlauf erstell
 2. Das blosse Einfuegen eines Textes, einer Liste, Checkliste, Antwort, eines Codeblocks oder eines kopierten Inhalts ist KEIN Dateiwunsch. Ohne ausdruecklichen Dateiwunsch niemals einen Datei-Toolcall oder `kahle_workflow_execute` mit Datei-Ausgabe starten.
 3. Frage niemals nach einem Upload-Dateinamen.
 4. Wenn Recherche/Websuche/RAG UND Datei-Ausgabe in derselben Anfrage ausdruecklich verlangt werden, nutze bevorzugt `kahle_workflow_execute` mit `output_format="pdf"`, `"docx"`, `"pptx"` oder `"md"`.
+4a. Fuer interaktive oder ausfuellbare Frageboegen, Wissenstests, Assessments, Checklisten, Antraege und Formulare nutze immer genau einen Aufruf von kahle_workflow_execute mit der vollstaendigen Nutzeranfrage. Fuehre davor keinen separaten ag_chat-Aufruf aus; der Workflow beschafft und validiert seinen internen Kontext selbst.
 5. Wenn der Nutzer in seiner aktuellen Nachricht ausdruecklich verlangt, vorhandenen Chatinhalt als Datei auszugeben, nutze `kahle_workflow_execute` mit passendem `output_format`; das Tool kann den vorherigen Chatinhalt selbst aufnehmen.
 6. Direkte *_create_save Tools nur nutzen, wenn sie sichtbar sind UND du filename UND content sicher mitgeben kannst.
 7. content ist der vollstaendige relevante Recherche-/Antwort-/Entwurfstext aus dieser Unterhaltung.

@@ -1,7 +1,7 @@
 """
 title: RAG_Chat KAHLE (Qdrant)
 author: local
-version: 0.5.0
+version: 0.6.1
 description: Durchsucht die internen KAHLE Knowledgebases direkt in Qdrant und gibt zitierbaren Kontext zurück.
 """
 
@@ -428,19 +428,142 @@ def _merge_context_chunks(structural, semantic, max_chunks):
             break
     return merged
 
+def _is_broad_query(query):
+    folded = _ascii_fold(str(query or ""))
+    return bool(
+        re.search(
+            r"\b(?:wie\s+(?:genau\s+)?(?:arbeite|funktioniert|geht|nutze|verwende)|"
+            r"erklaer(?:e|ung)?|anleitung|ablauf|prozess|uebersicht|"
+            r"was\s+weisst\s+du\s+(?:intern\s+)?ueber)\b",
+            folded,
+        )
+    )
+
+
+def _is_exhaustive_query(query):
+    folded = _ascii_fold(str(query or ""))
+    return bool(
+        re.search(
+            r"\b(?:alles|saemtliche|vollstaendig(?:e|en|er|es)?|"
+            r"alle\s+(?:punkte|schritte|regeln|anforderungen|vorgaben|informationen|"
+            r"faelle|themen|kriterien|massnahmen|freigaben|bestaetigungen))\b",
+            folded,
+        )
+    )
+
+def _chunk_number(chunk):
+    try:
+        return int(chunk.get("chunk_index"))
+    except (TypeError, ValueError):
+        return -1
+
+
+def _expand_source_context(
+    source_chunks,
+    seeds,
+    max_chunks,
+    max_chars,
+    neighbor_radius=1,
+    broad=False,
+    exhaustive=False,
+):
+    """Expand relevant seed chunks with coherent neighbours from one source."""
+    source_by_index = {
+        _chunk_number(chunk): dict(chunk)
+        for chunk in source_chunks
+        if _chunk_number(chunk) >= 0
+    }
+    if not source_by_index:
+        return list(seeds)[: int(max_chunks)]
+
+    seed_by_index = {}
+    for seed in seeds:
+        index = _chunk_number(seed)
+        if index < 0 or index not in source_by_index:
+            continue
+        candidate = dict(source_by_index[index])
+        candidate.update(seed)
+        seed_by_index[index] = candidate
+
+    if not seed_by_index:
+        return []
+
+    seed_indexes = list(seed_by_index)
+    complete_size = sum(len(str(chunk.get("text") or "")) for chunk in source_by_index.values())
+    complete_fits = len(source_by_index) <= int(max_chunks) and complete_size <= int(max_chars)
+    if exhaustive and complete_fits:
+        candidate_indexes = sorted(source_by_index)
+    elif broad:
+        candidate_indexes = sorted(
+            source_by_index,
+            key=lambda index: (min(abs(index - seed) for seed in seed_indexes), index),
+        )
+    else:
+        allowed = set(seed_indexes)
+        for seed in seed_indexes:
+            for delta in range(1, max(0, int(neighbor_radius)) + 1):
+                allowed.update((seed - delta, seed + delta))
+        candidate_indexes = sorted(
+            (index for index in allowed if index in source_by_index),
+            key=lambda index: (
+                0 if index in seed_by_index else 1,
+                min(abs(index - seed) for seed in seed_indexes),
+                index,
+            ),
+        )
+
+    selected = []
+    used_chars = 0
+    for index in candidate_indexes:
+        is_seed = index in seed_by_index
+        chunk = dict(seed_by_index.get(index) or source_by_index[index])
+        if not is_seed:
+            chunk["match_type"] = "neighbor"
+        size = len(str(chunk.get("text") or ""))
+        if selected and used_chars + size > int(max_chars):
+            continue
+        selected.append(chunk)
+        used_chars += size
+        if len(selected) >= int(max_chunks):
+            break
+    return sorted(selected, key=_chunk_number)
+
+
+def _trim_adjacent_overlap(previous, current, max_overlap=400, min_overlap=40):
+    previous = str(previous or "")
+    current = str(current or "")
+    upper = min(int(max_overlap), len(previous), len(current))
+    for size in range(upper, int(min_overlap) - 1, -1):
+        if previous[-size:] == current[:size]:
+            return current[size:].lstrip()
+    return current
+
 def _build_context(chunks):
     parts = []
+    previous_text = ""
+    previous_source = None
+    previous_index = None
     for index, chunk in enumerate(chunks, start=1):
         match_info = (
             "structure"
             if chunk.get("match_type") == "structural"
+            else "neighbor"
+            if chunk.get("match_type") == "neighbor"
             else f"score {chunk['score']:.3f}"
         )
         header = (
             f"[#{index} | {chunk['collection']} | {chunk['source_path']} "
             f"| chunk {chunk['chunk_index']} | {match_info}]"
         )
-        parts.append(f"{header}\n{chunk['text'][:1800]}".strip())
+        text = str(chunk.get("text") or "")
+        source = (chunk.get("collection") or "", chunk.get("source_path") or "")
+        chunk_index = _chunk_number(chunk)
+        if source == previous_source and previous_index is not None and chunk_index == previous_index + 1:
+            text = _trim_adjacent_overlap(previous_text, text)
+        parts.append(f"{header}\n{text}".strip())
+        previous_text = str(chunk.get("text") or "")
+        previous_source = source
+        previous_index = chunk_index
     return "\n\n".join(parts).strip()
 
 
@@ -487,6 +610,8 @@ class Tools:
         )
         ANSWER_THRESHOLD: float = Field(default=0.45, description="Mindestscore für FOUND true.")
         MAX_CHUNKS: int = Field(default=6, description="Maximale Anzahl Kontext-Chunks.")
+        CONTEXT_MAX_CHARS: int = Field(default=12000, description="Maximales Zeichenbudget fuer den RAG-Kontext.")
+        NEIGHBOR_RADIUS: int = Field(default=1, description="Nachbar-Chunks je relevantem Treffer.")
         TIMEOUT_S: int = Field(default=60, description="HTTP Timeout in Sekunden.")
 
     def __init__(self):
@@ -583,14 +708,15 @@ class Tools:
 
         top_chunks = _prefer_top_source_chunks(top_candidates, int(self.valves.MAX_CHUNKS), threshold)
         structural_chunks = []
-        if _enumeration_hint(query):
-            source_map = exact_sources
-            if not source_map and top_chunks:
-                source_map = {
-                    top_chunks[0]["collection"]: [top_chunks[0]["source_path"]]
-                }
+        source_chunks = []
+        document_chunk_count = 0
+        exhaustive_query = _is_exhaustive_query(query)
+        retrieval_mode = "exhaustive" if exhaustive_query else "broad" if _is_broad_query(query) else "focused"
+        if top_chunks and top_chunks[0].get("source_path"):
+            source_map = {
+                top_chunks[0]["collection"]: [top_chunks[0]["source_path"]]
+            }
             try:
-                source_chunks = []
                 for collection, source_paths in source_map.items():
                     source_chunks.extend(
                         _scroll_source_chunks(
@@ -600,18 +726,44 @@ class Tools:
                             timeout,
                         )
                     )
-                structural_chunks = _select_structural_chunks(
-                    source_chunks,
-                    query,
-                    int(self.valves.MAX_CHUNKS),
-                )
-                top_chunks = _merge_context_chunks(
+                document_chunk_count = len(source_chunks)
+                if _enumeration_hint(query):
+                    structural_chunks = _select_structural_chunks(
+                        source_chunks,
+                        query,
+                        int(self.valves.MAX_CHUNKS),
+                    )
+                seeds = _merge_context_chunks(
                     structural_chunks,
                     top_chunks,
                     int(self.valves.MAX_CHUNKS),
                 )
+                expanded = _expand_source_context(
+                    source_chunks,
+                    seeds,
+                    int(self.valves.MAX_CHUNKS),
+                    int(self.valves.CONTEXT_MAX_CHARS),
+                    neighbor_radius=int(self.valves.NEIGHBOR_RADIUS),
+                    broad=_is_broad_query(query) or exhaustive_query,
+                    exhaustive=exhaustive_query,
+                )
+                if expanded:
+                    top_chunks = expanded
             except Exception:
+                source_chunks = []
+                document_chunk_count = 0
                 structural_chunks = []
+
+        selected_indexes = ",".join(
+            str(_chunk_number(chunk)) for chunk in top_chunks if _chunk_number(chunk) >= 0
+        ) or "n/a"
+        coverage = (
+            f"{len(top_chunks)}/{document_chunk_count}"
+            if document_chunk_count
+            else f"{len(top_chunks)}/?"
+        )
+        truncated = bool(document_chunk_count and len(top_chunks) < document_chunk_count)
+        context = _build_context(top_chunks)
         return (
             "KAHLE_RAG_RESULT\n"
             "FOUND: true\n"
@@ -622,7 +774,9 @@ class Tools:
             "Keine Vermutungen oder Ergaenzungen. Jede KAHLE-Aussage muss eine Quellenmarke [#] enthalten.\n"
             f"META: top1_score={top_score:.3f} threshold={threshold:.2f} model={model} "
             f"routing={'exact_source' if exact_sources else 'semantic'} "
-            f"structure_hits={len(structural_chunks)}\n\n"
+            f"structure_hits={len(structural_chunks)} retrieval_mode={retrieval_mode} selected_chunks={selected_indexes} "
+            f"document_chunks={document_chunk_count or 'unknown'} context_coverage={coverage} "
+            f"truncated={str(truncated).lower()} context_chars={len(context)}\n\n"
             "KONTEXT (zitierbar mit [#]):\n"
-            f"{_build_context(top_chunks)}"
+            f"{context}"
         )

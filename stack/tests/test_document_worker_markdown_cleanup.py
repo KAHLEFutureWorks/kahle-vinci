@@ -135,8 +135,51 @@ def test_pdf_margin_cleanup_and_layout_preservation():
     assert "<!-- Seite 100 -->" in markdown
     assert "### 2.6.3 Titel" in markdown
     assert "```text" in markdown
-    assert table in markdown
+    assert "Feld    Beschreibung" in markdown
+    assert "Konto    Erlösbuchung" in markdown
 
+
+def test_official_journal_spacing_is_not_misclassified_as_table():
+    page = """
+ABl.       L       vom       12.7.2024
+(72)       Um       Bedenken       hinsichtlich       der       Komplexität       bestimmter       KI-Systeme       auszuräumen
+           Betreiber       bei       der       Erfüllung       ihrer       Pflichten       gemäß       dieser       Verordnung
+           Hochrisiko-KI-Systeme       sollten       so       gestaltet       sein       dass       Betreiber       sie       verstehen
+           Informationen       müssen       zugänglich       umfassend       und       verständlich       sein
+           Die       Dokumentation       unterstützt       eine       fundierte       Entscheidung
+"""
+    assert not HELPERS["_looks_like_tabular_page"](page)
+    markdown = HELPERS["_pdf_page_to_markdown"](page, 21)
+    assert "```text" not in markdown
+    assert "       " not in markdown
+
+
+def test_normalize_unicode_spaces_and_pdf_hyphenation():
+    raw = "unverzüg-\nlich\u00a0die Verarbeitung\nHochrisiko-\nKI-System"
+    cleaned = HELPERS["_normalize_extracted_text"](raw, paragraphize=True)
+    assert "unverzüglich" in cleaned
+    assert "Hochrisiko-KI-System" in cleaned
+    assert "\u00a0" not in cleaned
+
+
+def test_legal_structure_becomes_markdown_headings():
+    assert HELPERS["_markdown_heading"]("KAPITEL III") == "## KAPITEL III"
+    assert HELPERS["_markdown_heading"]("Abschnitt 2") == "### Abschnitt 2"
+    assert HELPERS["_markdown_heading"]("Artikel 48") == "### Artikel 48"
+
+def test_legal_sidebar_references_are_removed_without_losing_body_text():
+    raw = """ErwGr. (1) Die betroffene Person hat das Recht, unverzüg-\n65–66 lich die Löschung zu verlangen."""
+    cleaned = HELPERS["_strip_inline_reference_columns"](raw)
+    normalized = HELPERS["_normalize_extracted_text"](cleaned, paragraphize=True)
+    assert "ErwGr." not in normalized
+    assert "65–66" not in normalized
+    assert "unverzüglich" in normalized
+
+
+def test_definition_and_footnote_lines_are_not_headings():
+    assert HELPERS["_markdown_heading"]("1. „KI-System“ ein maschinengestütztes System, das für einen autonomen Betrieb ausgelegt ist") is None
+    assert HELPERS["_markdown_heading"]("12. Dezember 2012 über die gerichtliche Zuständigkeit und die Anerkennung von Entscheidungen") is None
+    assert HELPERS["_markdown_heading"]("1. Einführung") == "### 1 Einführung"
 
 def test_ocr_deduplicates_page_text_and_redacts_sensitive_values():
     lines = [
@@ -177,7 +220,7 @@ Weitere Besch\u00e4digung                                                       
     markdown = HELPERS["_pdf_page_to_markdown"](page, 3)
     assert "```text" in markdown
     assert "Glasbruch Verglasung" in markdown
-    assert "   X     Versicherung" in markdown
+    assert "Glasbruch Verglasung    X    Versicherung" in markdown
 
 def test_centered_bullets_are_not_misclassified_as_table():
     block = """
@@ -200,6 +243,11 @@ if __name__ == "__main__":
     test_paragraphize_merges_sentence_continuation_across_soft_blank()
     test_pdf_margin_cleanup_and_layout_preservation()
     test_short_pdf_keeps_repeated_content()
+    test_official_journal_spacing_is_not_misclassified_as_table()
+    test_normalize_unicode_spaces_and_pdf_hyphenation()
+    test_legal_structure_becomes_markdown_headings()
+    test_legal_sidebar_references_are_removed_without_losing_body_text()
+    test_definition_and_footnote_lines_are_not_headings()
     test_ocr_deduplicates_page_text_and_redacts_sensitive_values()
     test_ocr_deduplicates_across_document_and_removes_dynamic_examples()
     test_tabular_pdf_page_preserves_column_alignment()

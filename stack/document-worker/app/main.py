@@ -27,7 +27,7 @@ from .pdf_ops import pdf_remove_pages
 # App & Logging
 # ----------------------------
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.7.0"
 
 app = FastAPI(title="KAHLE-Vinci Document Worker", version=APP_VERSION)
 
@@ -174,6 +174,19 @@ def _fix_letter_spaced_words(text: str) -> str:
 def _normalize_extracted_text(text: str, *, paragraphize: bool = False) -> str:
     text = _repair_mojibake(text or "")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.translate({
+        0x00A0: ord(" "),
+        0x2007: ord(" "),
+        0x202F: ord(" "),
+        0x2009: ord(" "),
+        0x200A: ord(" "),
+        0x200B: None,
+        0x00AD: None,
+    })
+    # Undo visual PDF line wrapping. Lowercase continuations are usually
+    # typesetting hyphenation; uppercase continuations are usually compounds.
+    text = re.sub(r"(?<=[a-zäöüß])- *\n *([a-zäöüß])", r"\1", text)
+    text = re.sub(r"(?<=\w)- *\n *(?=\w)", "-", text)
     text = _fix_letter_spaced_words(text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" +([,.;:!?])", r"\1", text)
@@ -194,13 +207,15 @@ def _is_markdown_structural_line(line: str) -> bool:
         return True
     if re.match(r"^\|.*\|$", line):
         return True
+    if re.match(r"^\(\d+[a-z]?\)\s+", line, flags=re.IGNORECASE):
+        return True
     if len(line) <= 90 and line.endswith(":"):
         return True
     return False
 
 
 def _is_markdown_list_line(line: str) -> bool:
-    return bool(re.match(r"^([-*+]|\d+[.)])\s+", line or ""))
+    return bool(re.match(r"^([-*+]|\d+[.)]|\(\d+[a-z]?\)|[a-z]\))\s+", line or "", flags=re.IGNORECASE))
 
 
 def _line_ends_sentence(line: str) -> bool:
@@ -310,16 +325,57 @@ def _strip_pdf_margin_lines(text: str, repeated: set[str], edge_lines: int = 8) 
     lines = text.splitlines()
     nonempty = [i for i, line in enumerate(lines) if line.strip()]
     edge = set(nonempty[:edge_lines] + nonempty[-edge_lines:])
-    return "\n".join(line.rstrip() for i, line in enumerate(lines) if not (i in edge and _canonical_pdf_margin_line(line) in repeated)).strip()
+    removed: set[int] = set()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if i in edge and (_canonical_pdf_margin_line(line) in repeated or re.fullmatch(r"\d{1,4}", stripped)):
+            removed.add(i)
+        if i in edge and stripped[::-1].casefold() in {"artikel", "kapitel", "abschnitt", "seite"}:
+            removed.add(i)
+            if i > 0 and re.fullmatch(r"\d{1,3}[–-]\d{1,3}", lines[i - 1].strip()):
+                removed.add(i - 1)
+    return "\n".join(line.rstrip() for i, line in enumerate(lines) if i not in removed).strip()
+
+
+def _strip_inline_reference_columns(text: str) -> str:
+    """Remove narrow legal-reference sidebars without deleting the body text."""
+    cleaned: List[str] = []
+    pending_reference_number = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if re.match(r"(?i)^ErwGr\.\s*", line):
+            line = re.sub(r"(?i)^ErwGr\.\s*", "", line)
+            pending_reference_number = True
+        elif pending_reference_number:
+            line = re.sub(r"^\d{1,3}(?:[–-]\d{1,3})?\s+(?=[a-zäöüß])", "", line)
+            pending_reference_number = False
+        cleaned.append(line)
+    return "\n".join(cleaned)
 
 
 def _markdown_heading(line: str) -> Optional[str]:
     value = re.sub(r"\s+", " ", line or "").strip()
+    if re.match(r"^(?:KAPITEL|ANHANG)\s+[IVXLCDM\d]+(?:\s*[—:-]\s*[^.;]+)?$", value, flags=re.IGNORECASE):
+        return f"## {value}"
+    if re.match(r"^(?:ABSCHNITT|UNTERABSCHNITT)\s+\d+[a-z]?(?:\s*[—:-]\s*[^.;]+)?$", value, flags=re.IGNORECASE):
+        return f"### {value}"
+    if re.match(r"^(?:Artikel|Art\.)\s*\d+[a-z]?$", value, flags=re.IGNORECASE):
+        return f"### {value}"
+    if re.match(r"^§+\s*\d+[a-z]?(?:\s+.*)?$", value, flags=re.IGNORECASE):
+        return f"### {value}"
     match = _PDF_HEADING_RE.match(value)
     if not match or len(match.group(2)) > 140 or match.group(2).endswith((".", ";", ",")):
         return None
     number = re.sub(r"\s+", "", match.group(1))
-    return f"### {number} {match.group(2).strip()}"
+    title = match.group(2).strip()
+    if "." not in number:
+        if not re.match(r"^\d+[.)]\s+", value):
+            return None
+        if len(title) > 80 or len(title.split()) > 10 or title.startswith(("„", "“", '"')):
+            return None
+        if re.match(r"(?i)^(?:Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\b", title):
+            return None
+    return f"### {number} {title}"
 
 
 def _looks_like_fixed_width_table(block: str) -> bool:
@@ -356,7 +412,23 @@ def _looks_like_tabular_page(text: str) -> bool:
             continue
         candidate_count += 1
         gap_buckets[round(match.end(1) / 4)] += 1
+    gap_counts = [len(re.findall(r"[ \t]{3,}", line)) for line in lines if re.search(r"[ \t]{3,}", line)]
+    # Broken PDF glyph positioning can insert a large gap between nearly every
+    # word. That is prose, not a table, and must never be preserved verbatim.
+    if gap_counts:
+        median_gap_count = sorted(gap_counts)[len(gap_counts) // 2]
+        if median_gap_count < 2 or median_gap_count > 6:
+            return False
+    widths = sorted(len(line.expandtabs(4)) for line in lines)
+    if widths[len(widths) // 2] > 320:
+        return False
     return candidate_count >= 5 and bool(gap_buckets) and max(gap_buckets.values()) >= 5
+
+
+def _compact_fixed_width_block(block: str) -> str:
+    """Bound padding in genuine fixed-width tables for compact RAG context."""
+    lines = [line.rstrip() for line in block.splitlines() if line.strip()]
+    return "\n".join(re.sub(r"[ \t]{5,}", "    ", line).strip() for line in lines)
 
 
 def _ocr_key(value: str) -> str:
@@ -507,19 +579,23 @@ def _extract_page_image_ocr(page: Any, page_text: str, document_seen: Optional[s
 def _pdf_page_to_markdown(text: str, page_number: int, image_ocr: str = "") -> str:
     rendered = [f"<!-- Seite {page_number} -->"]
     if _looks_like_tabular_page(text):
-        rendered.append(f"```text\n{text.strip()}\n```")
+        rendered.append(f"```text\n{_compact_fixed_width_block(text)}\n```")
     else:
         for block in re.split(r"\n\s*\n", text.strip()):
             if not block.strip():
                 continue
             if _looks_like_fixed_width_table(block):
-                rendered.append(f"```text\n{block.strip()}\n```")
+                rendered.append(f"```text\n{_compact_fixed_width_block(block)}\n```")
                 continue
             lines = [line.strip() for line in block.splitlines() if line.strip()]
             if len(lines) == 1 and (heading := _markdown_heading(lines[0])):
                 rendered.append(heading)
             else:
-                normalized = _normalize_extracted_text("\n".join(lines), paragraphize=True)
+                structured: List[str] = []
+                for line in lines:
+                    heading = _markdown_heading(line)
+                    structured.append(heading or line)
+                normalized = _normalize_extracted_text("\n".join(structured), paragraphize=True)
                 rendered.append(normalized)
     if image_ocr:
         rendered.append("#### Zusätzlicher Bildinhalt (OCR, automatisch erkannt)\n" + image_ocr)
@@ -558,34 +634,162 @@ def _extract_text_markitdown(filename: str, content: bytes) -> Optional[str]:
                 pass
 
 
+def _escape_markdown_cell(value: str) -> str:
+    value = _normalize_extracted_text(value or "", paragraphize=False)
+    return value.replace("|", "\\|").replace("\n", "<br>").strip()
+
+
+def _docx_effective_cells(row: Any) -> List[Any]:
+    """Return physical cells once; python-docx repeats horizontally merged cells."""
+    cells: List[Any] = []
+    seen: set[int] = set()
+    for cell in row.cells:
+        identity = id(cell._tc)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        cells.append(cell)
+    return cells
+
+
+def _docx_cell_lines(cell: Any) -> List[str]:
+    lines: List[str] = []
+    for paragraph in cell.paragraphs:
+        raw_lines = (paragraph.text or "").splitlines() or [paragraph.text or ""]
+        for raw_line in raw_lines:
+            text = _normalize_extracted_text(raw_line, paragraphize=False)
+            if text:
+                lines.append(text)
+    return lines
+
+
+def _docx_render_table_rows(rows: List[List[List[str]]]) -> str:
+    """Render mixed merged/layout tables as semantic Markdown blocks."""
+    rendered: List[str] = []
+    index = 0
+    section_number = re.compile(r"^\d+[.)]?$")
+
+    while index < len(rows):
+        cells = rows[index]
+        width = len(cells)
+
+        if width >= 3:
+            group: List[List[List[str]]] = []
+            while index < len(rows) and len(rows[index]) == width:
+                group.append(rows[index])
+                index += 1
+            compact_first = [
+                " ".join(row[0]).strip()
+                for row in group
+                if row and " ".join(row[0]).strip()
+            ]
+            drop_first = bool(compact_first) and all(
+                value == compact_first[0] and section_number.fullmatch(value)
+                for value in compact_first
+            )
+            table_rows: List[List[str]] = []
+            for row in group:
+                source = row[1:] if drop_first else row
+                table_rows.append([
+                    _escape_markdown_cell("\n".join(cell_lines))
+                    for cell_lines in source
+                ])
+            if table_rows:
+                header = table_rows[0]
+                table_block = ["| " + " | ".join(header) + " |"]
+                table_block.append("| " + " | ".join("---" for _ in header) + " |")
+                table_block.extend("| " + " | ".join(row) + " |" for row in table_rows[1:])
+                rendered.append("\n".join(table_block))
+            continue
+
+        if width == 1:
+            lines = cells[0]
+            if lines:
+                callout = bool(re.match(r"^(?:Wichtig|Hinweis|Achtung|Warnung|Rechtsgrund)\b", lines[0], re.IGNORECASE))
+                if callout:
+                    rendered.append("\n".join(f"> {line}" for line in lines))
+                else:
+                    rendered.extend(lines)
+            index += 1
+            continue
+
+        left = " ".join(cells[0]).strip()
+        right = cells[1]
+        right_text = " ".join(right).strip()
+        if left and not section_number.fullmatch(left):
+            group: List[List[List[str]]] = []
+            while index < len(rows) and len(rows[index]) == 2:
+                candidate_left = " ".join(rows[index][0]).strip()
+                if not candidate_left or section_number.fullmatch(candidate_left):
+                    break
+                group.append(rows[index])
+                index += 1
+            table_rows = [
+                [_escape_markdown_cell("\n".join(cell_lines)) for cell_lines in row]
+                for row in group
+            ]
+            header = table_rows[0]
+            table_block = ["| " + " | ".join(header) + " |"]
+            table_block.append("| " + " | ".join("---" for _ in header) + " |")
+            table_block.extend("| " + " | ".join(row) + " |" for row in table_rows[1:])
+            rendered.append("\n".join(table_block))
+            continue
+        if section_number.fullmatch(left) and right_text and len(right_text) <= 120:
+            rendered.append(f"## {left.rstrip('.') + '.'} {right_text}")
+        else:
+            rendered.extend(right or cells[0])
+        index += 1
+
+    return "\n\n".join(part for part in rendered if part.strip())
+
+
+def _docx_table_to_markdown(table: Any) -> str:
+    rows: List[List[List[str]]] = []
+    for row in table.rows:
+        values = [_docx_cell_lines(cell) for cell in _docx_effective_cells(row)]
+        if any(values):
+            rows.append(values)
+    if not rows:
+        return ""
+    return _docx_render_table_rows(rows)
+
 def _extract_text_docx(docx_bytes: bytes) -> str:
-    # Extract plain text from DOCX using python-docx
+    """Convert DOCX body content to compact, ordered, semantic Markdown."""
     try:
         from docx import Document  # type: ignore
+        from docx.table import Table  # type: ignore
+        from docx.text.paragraph import Paragraph  # type: ignore
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"python-docx not available: {e}")
 
     doc = Document(io.BytesIO(docx_bytes))
     parts: List[str] = []
+    for child in doc.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            paragraph = Paragraph(child, doc)
+            text = _normalize_extracted_text(paragraph.text, paragraphize=False)
+            if not text:
+                continue
+            style_name = (getattr(paragraph.style, "name", "") or "").strip()
+            style_id = (getattr(paragraph.style, "style_id", "") or "").strip()
+            heading_match = re.search(r"(?:Heading|Überschrift)\s*([1-6])", f"{style_name} {style_id}", flags=re.IGNORECASE)
+            if heading_match:
+                text = f"{'#' * int(heading_match.group(1))} {text}"
+            elif re.search(r"(?:Title|Titel)", f"{style_name} {style_id}", flags=re.IGNORECASE):
+                text = f"# {text}"
+            elif re.search(r"List\s*Bullet|Aufzähl", f"{style_name} {style_id}", flags=re.IGNORECASE):
+                text = f"- {text}"
+            elif re.search(r"List\s*Number|Nummer", f"{style_name} {style_id}", flags=re.IGNORECASE):
+                text = f"1. {text}"
+            parts.append(text)
+        elif child.tag.endswith("}tbl"):
+            table_markdown = _docx_table_to_markdown(Table(child, doc))
+            if table_markdown:
+                parts.append(table_markdown)
 
-    # paragraphs
-    for p in doc.paragraphs:
-        if p.text:
-            parts.append(p.text)
-
-    # tables
-    for t in doc.tables:
-        for row in t.rows:
-            row_cells = []
-            for cell in row.cells:
-                cell_text = "\n".join([p.text for p in cell.paragraphs if p.text]).strip()
-                row_cells.append(cell_text)
-            if any(row_cells):
-                parts.append(" | ".join(row_cells))
-
-    return _normalize_extracted_text("\n".join(parts).strip(), paragraphize=False)
-
-
+    result = "\n\n".join(parts)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
 def _extract_text_pdf(pdf_bytes: bytes) -> str:
     try:
         from pypdf import PdfReader  # type: ignore
@@ -593,26 +797,48 @@ def _extract_text_pdf(pdf_bytes: bytes) -> str:
         raise HTTPException(status_code=500, detail=f"pypdf not available: {e}")
 
     reader = PdfReader(io.BytesIO(pdf_bytes))
-    raw_pages: List[str] = []
+    logging.getLogger("pypdf._text_extraction._layout_mode._fixed_width_page").setLevel(logging.ERROR)
+    layout_pages: List[str] = []
+    fallback_pages: List[str] = []
     for page in reader.pages:
         try:
-            text = page.extract_text(extraction_mode="layout") or ""
-        except TypeError:
-            text = page.extract_text() or ""
+            layout = page.extract_text(extraction_mode="layout") or ""
         except Exception:
-            text = ""
-        raw_pages.append(text)
+            layout = ""
+        try:
+            fallback = page.extract_text() or ""
+        except Exception:
+            fallback = ""
+        layout_pages.append(layout)
+        fallback_pages.append(fallback)
 
-    repeated = _detect_repeated_pdf_margin_lines(raw_pages)
+    # pdfplumber reconstructs words from glyph coordinates much more reliably
+    # for official journals and other PDFs with unusual font spacing.
+    plain_pages: List[str] = []
+    try:
+        import pdfplumber  # type: ignore
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as document:
+            plain_pages = [page.extract_text(layout=False, x_tolerance=2, y_tolerance=3) or "" for page in document.pages]
+    except Exception:
+        plain_pages = fallback_pages
+
+    selected_pages: List[str] = []
+    for index, layout in enumerate(layout_pages):
+        plain = plain_pages[index] if index < len(plain_pages) else fallback_pages[index]
+        if _looks_like_tabular_page(layout):
+            selected_pages.append(layout)
+        else:
+            selected_pages.append(plain or fallback_pages[index] or layout)
+
+    repeated = _detect_repeated_pdf_margin_lines(selected_pages)
     rendered_pages: List[str] = []
     document_ocr_seen: set[str] = set()
-    for index, (page, text) in enumerate(zip(reader.pages, raw_pages), start=1):
-        cleaned = _strip_pdf_margin_lines(text, repeated)
+    for index, (page, text) in enumerate(zip(reader.pages, selected_pages), start=1):
+        cleaned = _strip_inline_reference_columns(_strip_pdf_margin_lines(text, repeated))
         image_ocr = _extract_page_image_ocr(page, cleaned, document_ocr_seen)
         if cleaned.strip() or image_ocr:
             rendered_pages.append(_pdf_page_to_markdown(cleaned, index, image_ocr))
     return "\n\n".join(rendered_pages).strip()
-
 def _extract_text_xlsx(xlsx_bytes: bytes, max_rows: int = 200, max_cols: int = 50) -> str:
     try:
         import openpyxl  # type: ignore
@@ -655,27 +881,25 @@ def _guess_ext(filename: str) -> str:
 def _extract_text_by_ext(filename: str, content: bytes) -> Tuple[str, str]:
     ext = _guess_ext(filename)
 
-    # PDFs retain page boundaries for generic margin removal and layout preservation.
+    # PDFs retain page boundaries; DOCX uses an ordered semantic converter so
+    # headings, lists and tables survive independently of MarkItDown versions.
     if ext == "pdf":
         return ext, _extract_text_pdf(content)
+    if ext == "docx":
+        return ext, _extract_text_docx(content)
 
     markitdown_text = _extract_text_markitdown(filename, content)
     if markitdown_text is not None:
-        return ext or "unknown", _normalize_extracted_text(markitdown_text, paragraphize=(ext == "pdf"))
+        return ext or "unknown", _normalize_extracted_text(markitdown_text, paragraphize=False)
 
     if ext in ("txt", "md", "csv"):
         return ext, _normalize_extracted_text(_decode_text(content).strip(), paragraphize=False)
-
-    if ext == "docx":
-        return ext, _extract_text_docx(content)
 
     if ext in ("xlsx", "xlsm"):
         return ext, _extract_text_xlsx(content)
 
     # unknown: attempt as text
     return ext or "unknown", _decode_text(content).strip()
-
-
 def _render_text_to_pdf_bytes(content: str) -> bytes:
     try:
         from reportlab.pdfgen import canvas  # type: ignore

@@ -50,6 +50,7 @@ Hard rules:
 Routing:
 - Generated research/analysis/chat result -> downloadable PDF/DOCX/MD: use kahle_workflow_execute.
 - Research/Web search AND downloadable PDF/DOCX/MD in one request: use kahle_workflow_execute once, with auftrag as the full user request and output_format set to pdf/docx/md.
+- Interactive/fillable questionnaires, knowledge tests, assessments, checklists, applications and forms: use kahle_workflow_execute exactly once with the full request. Do not call rag_chat separately; the workflow retrieves and validates internal context itself.
 - PowerPoint/PPTX output is disabled. If the user asks for PowerPoint/PPTX, do not call a document creation tool; offer PDF, DOCX or Markdown instead.
 - "aus dem Ergebnis", "daraus", "aus der vorherigen Antwort" or similar -> use kahle_workflow_execute with auftrag as the full user request and output_format set to the requested file type.
 - Do not use pdf_create_save/docx_create_save/text_create_save for generated content when kahle_workflow_execute is available.
@@ -335,7 +336,7 @@ TOOL_DEFINITIONS = {
             }
         ],
         "description": "Dynamische RAG-Suche mit semantischem und strukturbezogenem Retrieval über alle aktiven Bases.",
-        "version": "0.5.0",
+        "version": "0.6.1",
     },
     "safe_webcaller": {
         "name": "Safe Webcaller",
@@ -380,7 +381,7 @@ FUNCTION_DEFINITIONS = {
         "path": FUNCTIONS_DIR / "kahle_toolcall_guard.py",
         "type": "filter",
         "description": "Outlet-Filter gegen Pseudo-Toolcalls und unbelegte interne Folgeantworten.",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "is_global": 1,
     },
 }

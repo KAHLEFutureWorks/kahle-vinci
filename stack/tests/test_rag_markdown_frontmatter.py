@@ -54,7 +54,7 @@ class RagMarkdownFrontmatterTests(unittest.TestCase):
     def test_all_downloadable_markdown_paths_apply_frontmatter(self):
         source = MAIN_PATH.read_text(encoding="utf-8")
         self.assertGreaterEqual(source.count("ensure_rag_frontmatter("), 4)
-        self.assertIn('version="1.7.0"', source)
+        self.assertIn('version="1.9.0"', source)
 
 
 if __name__ == "__main__":
