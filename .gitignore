@@ -83,6 +83,7 @@ worktrees/
 
 # Local rollout, backup, release and comparison artifacts
 /.rollout/
+/.tmp/
 /.tmp-*/
 /.admin-dashboard-git-metadata/
 /backups/
