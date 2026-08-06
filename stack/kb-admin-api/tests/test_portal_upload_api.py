@@ -199,3 +199,89 @@ def test_required_scanner_outage_fails_closed_and_creates_admin_incident():
         assert response.status_code==503
         assert response.json()["detail"].startswith("required_check_unavailable:")
         assert module.QUALITY_CASES.open_cases()["incidents"][0]["step"]=="required_ingest_check"
+
+
+def _upload_ready_client(directory):
+    """Portal client with an employee who may upload into one knowledgebase."""
+    root = Path(directory)
+    module = load_app(root)
+    module.SECURE_INGEST.storage.root = (root / "portal-files").resolve()
+    current = {"user": identity("portal", "admin")}
+    module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+    client = TestClient(module.app)
+    assert client.get("/portal/session").status_code == 200
+    current["user"] = identity("employee")
+    assert client.get("/portal/session").status_code == 200
+    created = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+        "portal", "create",
+        payload={"slug": "kahleallgemein", "label": "Allgemeines Wissen", "purpose": "Testwissen"},
+    )
+    module.PORTAL_GOVERNANCE.grant_access(
+        "portal", "employee", created.knowledgebase_id, can_read=True, can_upload=True
+    )
+
+    class Scanner:
+        def scan(self, filename, data):
+            return None
+
+    class Converter:
+        def convert(self, filename, data, title):
+            return "# Wissen\n\nGeprueter und vollstaendig aufbereiteter fachlicher Inhalt.\n"
+
+    module.SECURE_INGEST.scanner = Scanner()
+    module.SECURE_INGEST.converter = Converter()
+    return module, client, created.knowledgebase_id
+
+
+def test_upload_accepts_a_checked_date_instead_of_workdays():
+    from datetime import date
+
+    from document_lifecycle import add_workdays
+
+    with tempfile.TemporaryDirectory() as directory:
+        _, client, knowledgebase_id = _upload_ready_client(directory)
+        valid_until = add_workdays(date.today(), 20)
+        response = client.post(
+            "/portal/documents",
+            data={
+                "knowledgebase_id": knowledgebase_id, "title": "Wissen",
+                "valid_until": valid_until.isoformat(), "confidentiality": "internal",
+            },
+            files={"file": ("wissen.md", b"Original", "text/markdown")},
+        )
+        assert response.status_code == 201, response.text
+
+
+def test_upload_requires_exactly_one_of_workdays_or_date():
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, knowledgebase_id = _upload_ready_client(directory)
+        for data in (
+            {"knowledgebase_id": knowledgebase_id, "title": "Wissen", "confidentiality": "internal"},
+            {"knowledgebase_id": knowledgebase_id, "title": "Wissen", "confidentiality": "internal",
+             "valid_workdays": "20", "valid_until": "2099-01-01"},
+        ):
+            response = client.post(
+                "/portal/documents", data=data,
+                files={"file": ("wissen.md", b"Original", "text/markdown")},
+            )
+            assert response.status_code == 422, response.text
+            assert response.json()["detail"] == "valid_workdays_or_valid_until_required"
+
+
+def test_upload_rejects_a_date_beyond_sixty_workdays():
+    from datetime import date, timedelta
+
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, knowledgebase_id = _upload_ready_client(directory)
+        from document_lifecycle import add_workdays
+        too_far = add_workdays(date.today(), 60) + timedelta(days=7)
+        response = client.post(
+            "/portal/documents",
+            data={
+                "knowledgebase_id": knowledgebase_id, "title": "Wissen",
+                "valid_until": too_far.isoformat(), "confidentiality": "internal",
+            },
+            files={"file": ("wissen.md", b"Original", "text/markdown")},
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == "valid_workdays_out_of_range"

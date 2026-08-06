@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 
@@ -349,3 +349,43 @@ def test_any_prompt_injection_signal_bypasses_employee_and_goes_directly_to_admi
 def test_workday_expiry_uses_dynamic_niedersachsen_holidays_after_2026():
     # 26 March 2027 is Good Friday, 29 March is Easter Monday.
     assert lifecycle_module.add_workdays(date(2027, 3, 25), 1) == date(2027, 3, 30)
+
+
+def test_workdays_until_is_the_inverse_of_add_workdays():
+    start = date(2026, 8, 10)  # Monday
+    for workdays in (1, 5, 22, 60):
+        target = lifecycle_module.add_workdays(start, workdays)
+        assert lifecycle_module.workdays_until(start, target) == workdays
+
+
+def test_workdays_until_skips_weekends_and_niedersachsen_holidays():
+    # 26 March 2027 is Good Friday, 29 March is Easter Monday.
+    assert lifecycle_module.workdays_until(date(2027, 3, 25), date(2027, 3, 30)) == 1
+
+
+def test_workdays_until_shortens_rather_than_extends_on_a_non_workday():
+    # Saturday resolves to the preceding Friday, never beyond it.
+    friday = lifecycle_module.workdays_until(date(2026, 8, 10), date(2026, 8, 14))
+    saturday = lifecycle_module.workdays_until(date(2026, 8, 10), date(2026, 8, 15))
+    assert saturday == friday == 4
+
+
+def test_workdays_until_rejects_past_dates_and_more_than_sixty_workdays():
+    for start, target in (
+        (date(2026, 8, 10), date(2026, 8, 10)),
+        (date(2026, 8, 10), date(2026, 8, 7)),
+    ):
+        try:
+            lifecycle_module.workdays_until(start, target)
+        except lifecycle_module.LifecycleError as error:
+            assert str(error) == "valid_until_not_in_future"
+        else:
+            raise AssertionError("past date was accepted")
+
+    too_far = lifecycle_module.add_workdays(date(2026, 8, 10), 60) + timedelta(days=1)
+    try:
+        lifecycle_module.workdays_until(date(2026, 8, 10), too_far)
+    except lifecycle_module.LifecycleError as error:
+        assert str(error) == "valid_workdays_out_of_range"
+    else:
+        raise AssertionError("more than 60 workdays was accepted")

@@ -52,7 +52,7 @@ except ImportError:  # pragma: no cover
     from step_up_auth import MicrosoftOIDCAdapter, StepUpAuthority, StepUpError
 
 try:
-    from .document_lifecycle import Analysis, DocumentLifecycle, LifecycleError
+    from .document_lifecycle import Analysis, DocumentLifecycle, LifecycleError, workdays_until
     from .audit_export import AuditExporter
     from .maintenance import MaintenanceError, MaintenanceService
     from .quality_cases import QualityCaseError, QualityCaseService
@@ -73,7 +73,7 @@ try:
         QuarantineStorage, SecureFileInspector, SecureIngestPipeline,
     )
 except ImportError:  # pragma: no cover
-    from document_lifecycle import Analysis, DocumentLifecycle, LifecycleError
+    from document_lifecycle import Analysis, DocumentLifecycle, LifecycleError, workdays_until
     from audit_export import AuditExporter
     from maintenance import MaintenanceError, MaintenanceService
     from quality_cases import QualityCaseError, QualityCaseService
@@ -1128,16 +1128,39 @@ def portal_list_documents(
     return {"documents": [dict(row) for row in rows]}
 
 
+def _resolve_valid_workdays(valid_workdays: int | None, valid_until: str | None) -> int:
+    """
+    PRD 17.1 laesst zwei gleichwertige Eingaben zu: Arbeitstage oder ein
+    geprueftes Datum. Genau eine davon muss gesetzt sein; das Datum wird
+    serverseitig umgerechnet, damit die niedersaechsischen Feiertage und die
+    Grenze von 60 Arbeitstagen verbindlich bleiben.
+    """
+    if (valid_workdays is None) == (valid_until is None):
+        raise HTTPException(status_code=422, detail="valid_workdays_or_valid_until_required")
+    if valid_workdays is not None:
+        return valid_workdays
+    try:
+        target = date.fromisoformat(valid_until or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid_valid_until") from exc
+    try:
+        return workdays_until(date.today(), target)
+    except LifecycleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/portal/documents", response_model=PortalUploadResponse, status_code=201)
 async def portal_upload_document(
     file: UploadFile = File(...),
     knowledgebase_id: str = Form(...),
     title: str = Form(..., min_length=2, max_length=300),
-    valid_workdays: int = Form(..., ge=1, le=60),
+    valid_workdays: int | None = Form(None, ge=1, le=60),
+    valid_until: str | None = Form(None),
     confidentiality: str = Form("internal"),
     owner_user_id: str | None = Form(None),
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> PortalUploadResponse:
+    valid_workdays = _resolve_valid_workdays(valid_workdays, valid_until)
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file_too_large")
@@ -1267,11 +1290,13 @@ async def portal_create_upload_job(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...), knowledgebase_id: str = Form(...),
     title: str = Form(..., min_length=2, max_length=300),
-    valid_workdays: int = Form(..., ge=1, le=60),
+    valid_workdays: int | None = Form(None, ge=1, le=60),
+    valid_until: str | None = Form(None),
     confidentiality: str = Form("internal"),
     owner_user_id: str | None = Form(None),
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
+    valid_workdays = _resolve_valid_workdays(valid_workdays, valid_until)
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file_too_large")

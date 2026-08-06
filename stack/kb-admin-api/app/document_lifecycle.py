@@ -79,6 +79,31 @@ def add_workdays(start: date, workdays: int, holidays: set[date] | None = None) 
     return current
 
 
+def workdays_until(start: date, target: date, holidays: set[date] | None = None) -> int:
+    """
+    Zahl der Arbeitstage zwischen ``start`` (ausschliesslich) und ``target``
+    (einschliesslich).
+
+    Umkehrung von :func:`add_workdays` fuer die vom PRD 17.1 zugelassene Auswahl
+    eines geprueften Datums. Faellt ``target`` auf ein Wochenende oder einen
+    Feiertag, ergibt sich die Zahl der Arbeitstage bis zum davorliegenden
+    Arbeitstag; die Gueltigkeit wird dadurch kuerzer, niemals laenger.
+    """
+    if target <= start:
+        raise LifecycleError("valid_until_not_in_future")
+    workdays = 0
+    current = start
+    while current < target:
+        current += timedelta(days=1)
+        if _is_workday(current, holidays):
+            workdays += 1
+    if workdays < 1:
+        raise LifecycleError("valid_until_has_no_workday")
+    if workdays > 60:
+        raise LifecycleError("valid_workdays_out_of_range")
+    return workdays
+
+
 class DocumentLifecycle:
     """
     Deep module owning document workflow state and approval invariants.
