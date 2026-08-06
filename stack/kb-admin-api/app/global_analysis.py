@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -114,22 +115,27 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
 
 
 class IonosEmbeddingProvider:
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60):
-        self.base_url, self.api_key, self.model, self.timeout = base_url.rstrip("/"), api_key, model, timeout
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60, retries: int = 3):
+        self.base_url, self.api_key, self.model, self.timeout, self.retries = base_url.rstrip("/"), api_key, model, timeout, max(1, retries)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        try:
-            response = requests.post(
-                f"{self.base_url}/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": texts},
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            rows = sorted(response.json()["data"], key=lambda row: row["index"])
-            return [row["embedding"] for row in rows]
-        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
-            raise GlobalAnalysisError("embedding_service_unavailable") from exc
+        last_error: Exception | None = None
+        for attempt in range(self.retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/embeddings",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"model": self.model, "input": texts},
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                rows = sorted(response.json()["data"], key=lambda row: row["index"])
+                return [row["embedding"] for row in rows]
+            except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+                last_error = exc
+                if attempt + 1 < self.retries:
+                    time.sleep(0.25 * (2 ** attempt))
+        raise GlobalAnalysisError("embedding_service_unavailable") from last_error
 
 
 class ConservativeContradictionDetector:
@@ -191,13 +197,20 @@ class GlobalCorpus:
                     knowledgebase_ids_json, status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(version_id) DO UPDATE SET
-                    title=excluded.title, markdown=excluded.markdown,
+                    document_id=excluded.document_id, title=excluded.title, markdown=excluded.markdown,
                     normalized_sha256=excluded.normalized_sha256,
                     knowledgebase_ids_json=excluded.knowledgebase_ids_json,
                     status=excluded.status, updated_at=CURRENT_TIMESTAMP
                 """,
                 (document.version_id, document.document_id, document.title, document.markdown,
                  normalized_sha256(document.markdown), json.dumps(document.knowledgebase_ids), document.status),
+            )
+
+    def set_status(self, version_id: str, status: str) -> None:
+        with self.store.connect() as db:
+            db.execute(
+                "UPDATE global_analysis_corpus SET status=?,updated_at=CURRENT_TIMESTAMP WHERE version_id=?",
+                (status, version_id),
             )
 
     def documents(self, exclude_version_id: str | None = None) -> list[CorpusDocument]:

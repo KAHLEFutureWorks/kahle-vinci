@@ -9,6 +9,7 @@ import re
 import socket
 import struct
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,6 +90,8 @@ class SecureFileInspector:
         if extension == "pdf":
             if not data.startswith(b"%PDF-"):
                 raise IngestError("file_type_mismatch")
+            if any(marker in data for marker in (b"/JavaScript", b"/EmbeddedFile", b"/Launch", b"/OpenAction")):
+                raise IngestError("embedded_executable_content_not_allowed")
             try:
                 reader = PdfReader(io.BytesIO(data))
                 if reader.is_encrypted:
@@ -128,6 +131,9 @@ class SecureFileInspector:
                     raise IngestError("file_type_mismatch")
                 if any(name.endswith("vbaproject.bin") for name in names):
                     raise IngestError("macros_not_allowed")
+                executable_extensions = (".exe", ".dll", ".com", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jar")
+                if any("/embeddings/" in name or name.endswith(executable_extensions) for name in names):
+                    raise IngestError("embedded_executable_content_not_allowed")
                 content_types = archive.read("[Content_Types].xml").lower()
                 if b"macroenabled" in content_types or b"vba" in content_types:
                     raise IngestError("macros_not_allowed")
@@ -222,21 +228,29 @@ class QuarantineStorage:
 class ClamAVScanner:
     """ClamAV INSTREAM adapter. Scanner outages fail closed."""
 
-    def __init__(self, host: str = "clamav", port: int = 3310, timeout: float = 30.0):
-        self.host, self.port, self.timeout = host, port, timeout
+    def __init__(self, host: str = "clamav", port: int = 3310, timeout: float = 30.0, retries: int = 3):
+        self.host, self.port, self.timeout, self.retries = host, port, timeout, max(1, retries)
 
     def scan(self, filename: str, data: bytes) -> None:
-        try:
-            with socket.create_connection((self.host, self.port), self.timeout) as connection:
-                connection.settimeout(self.timeout)
-                connection.sendall(b"zINSTREAM\0")
-                for offset in range(0, len(data), 1024 * 1024):
-                    chunk = data[offset : offset + 1024 * 1024]
-                    connection.sendall(struct.pack(">I", len(chunk)) + chunk)
-                connection.sendall(struct.pack(">I", 0))
-                response = connection.recv(4096).decode("utf-8", errors="replace")
-        except OSError as exc:
-            raise IngestError("malware_scanner_unavailable") from exc
+        last_error: OSError | None = None
+        response = ""
+        for attempt in range(self.retries):
+            try:
+                with socket.create_connection((self.host, self.port), self.timeout) as connection:
+                    connection.settimeout(self.timeout)
+                    connection.sendall(b"zINSTREAM\0")
+                    for offset in range(0, len(data), 1024 * 1024):
+                        chunk = data[offset : offset + 1024 * 1024]
+                        connection.sendall(struct.pack(">I", len(chunk)) + chunk)
+                    connection.sendall(struct.pack(">I", 0))
+                    response = connection.recv(4096).decode("utf-8", errors="replace")
+                break
+            except OSError as exc:
+                last_error = exc
+                if attempt + 1 < self.retries:
+                    time.sleep(0.25 * (2 ** attempt))
+        else:
+            raise IngestError("malware_scanner_unavailable") from last_error
         if " FOUND" in response:
             raise IngestError("malware_detected")
         if " OK" not in response:
@@ -244,22 +258,29 @@ class ClamAVScanner:
 
 
 class DocumentWorkerAdapter:
-    def __init__(self, base_url: str, api_key: str = "", timeout: float = 300.0):
-        self.base_url, self.api_key, self.timeout = base_url.rstrip("/"), api_key, timeout
+    def __init__(self, base_url: str, api_key: str = "", timeout: float = 300.0, retries: int = 3):
+        self.base_url, self.api_key, self.timeout, self.retries = base_url.rstrip("/"), api_key, timeout, max(1, retries)
 
     def convert(self, filename: str, data: bytes, title: str) -> str:
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
-        try:
-            response = requests.post(
-                f"{self.base_url}/bundle/to_md",
-                headers=headers,
-                files={"files": (filename, data, "application/octet-stream")},
-                data={"title": title, "mode": "raw"},
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise IngestError("document_conversion_failed") from exc
+        last_error: requests.RequestException | None = None
+        for attempt in range(self.retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/bundle/to_md",
+                    headers=headers,
+                    files={"files": (filename, data, "application/octet-stream")},
+                    data={"title": title, "mode": "raw"},
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt + 1 < self.retries:
+                    time.sleep(0.25 * (2 ** attempt))
+        else:
+            raise IngestError("document_conversion_failed") from last_error
         markdown = response.content.decode("utf-8", errors="strict").strip()
         if not markdown:
             raise IngestError("document_conversion_empty")

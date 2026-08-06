@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.global_analysis import (
-    ComparisonThresholds, CorpusDocument, GlobalCorpus, GlobalDocumentAnalyzer,
+    ComparisonThresholds, CorpusDocument, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
     normalize_markdown,
 )
 from app.portal_governance import SQLiteGovernanceStore
@@ -42,3 +42,28 @@ def test_semantic_and_lexical_signals_are_combined_and_version_is_suggested(tmp_
     assert result.matches[0].version_candidate is True
     assert result.contradiction_document_ids == ("doc-a",)
     assert result.matches[0].conflicting_passages
+
+
+def test_withdrawn_or_rejected_drafts_leave_global_comparison_corpus(tmp_path: Path):
+    store = SQLiteGovernanceStore(tmp_path / "portal.sqlite3")
+    corpus = GlobalCorpus(store)
+    corpus.upsert(CorpusDocument("draft", "version", "Entwurf", "# Inhalt\n\nNicht freigegeben", ("service",), "pending"))
+    assert [item.document_id for item in corpus.documents()] == ["draft"]
+    corpus.set_status("version", "withdrawn")
+    assert corpus.documents() == []
+
+
+def test_ionos_embedding_adapter_retries_transient_outage(monkeypatch):
+    import app.global_analysis as module
+    attempts=[]
+    class Response:
+        def raise_for_status(self): return None
+        def json(self): return {"data":[{"index":0,"embedding":[1.0,0.0]}]}
+    def post(*args, **kwargs):
+        attempts.append(1)
+        if len(attempts)<3: raise module.requests.ConnectionError("temporary")
+        return Response()
+    monkeypatch.setattr(module.requests,"post",post)
+    monkeypatch.setattr(module.time,"sleep",lambda value:None)
+    assert IonosEmbeddingProvider("https://ionos.test","token","model",retries=3).embed(["Text"]) == [[1.0,0.0]]
+    assert len(attempts)==3

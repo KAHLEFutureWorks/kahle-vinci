@@ -6,6 +6,7 @@ import pytest
 
 from app.secure_ingest import (
     ConversionQualityInspector,
+    DocumentWorkerAdapter,
     IngestError,
     PromptInjectionInspector,
     QuarantineStorage,
@@ -100,3 +101,30 @@ def test_office_documents_over_200_pages_are_rejected():
             archive.writestr(f"ppt/slides/slide{number}.xml", b"<slide/>")
     with pytest.raises(IngestError, match="office_page_limit_exceeded"):
         SecureFileInspector().inspect("too-long.pptx", output.getvalue())
+
+
+def test_embedded_executable_content_is_rejected_before_conversion():
+    inspector = SecureFileInspector()
+    embedded = office_bytes("word/document.xml", extra=("word/embeddings/oleObject1.bin", b"payload"))
+    with pytest.raises(IngestError, match="embedded_executable_content_not_allowed"):
+        inspector.inspect("embedded.docx", embedded)
+    with pytest.raises(IngestError, match="embedded_executable_content_not_allowed"):
+        inspector.inspect("active.pdf", b"%PDF-1.7\n/JavaScript /JS (run)")
+
+
+def test_document_worker_retries_transient_outage_before_success(monkeypatch):
+    import app.secure_ingest as module
+    attempts = []
+    class Response:
+        content = "# Ergebnis\n\nErfolgreich konvertierter Inhalt.".encode()
+        def raise_for_status(self): return None
+    def post(*args, **kwargs):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise module.requests.ConnectionError("temporary")
+        return Response()
+    monkeypatch.setattr(module.requests, "post", post)
+    monkeypatch.setattr(module.time, "sleep", lambda value: None)
+    markdown = DocumentWorkerAdapter("http://worker", retries=3).convert("test.docx", b"data", "Test")
+    assert markdown.startswith("# Ergebnis")
+    assert len(attempts) == 3

@@ -399,6 +399,7 @@ class PortalRetrievalScopeRequest(BaseModel):
 
 class PortalCaseActionRequest(BaseModel):
     action: str = Field(..., pattern=r"^(create|replace|publish_existing|discard)$")
+    target_document_id: str | None = Field(None, max_length=100)
 
 
 class PortalCaseDecisionRequest(BaseModel):
@@ -1181,6 +1182,9 @@ async def portal_upload_document(
                 exact_duplicate_document_id=global_result.exact_document_id,
                 same_kb_similarity=same_kb_similarity, cross_kb_matches=cross_kb_matches,
                 contradiction_document_ids=global_result.contradiction_document_ids,
+                version_candidate_document_ids=tuple(
+                    match.document_id for match in material_matches if match.version_candidate
+                ),
                 prompt_injection_risk=result.injection.risk,
                 conversion_quality=result.conversion_quality,
                 notes=result.conversion_issues,
@@ -1189,7 +1193,8 @@ async def portal_upload_document(
         RAG_METADATA.write(submission.version_id, result.markdown_path)
         GLOBAL_CORPUS.upsert(CorpusDocument(
             submission.document_id, submission.version_id, title,
-            result.markdown_path.read_text(encoding="utf-8"), (knowledgebase_id,), "pending",
+            result.markdown_path.read_text(encoding="utf-8"), (knowledgebase_id,),
+            "pending" if submission.status == "pending_employee_decision" else "quarantine",
         ))
         if intended_owner_user_id != identity["user_id"]:
             OWNERSHIP.create_initial_proposal(
@@ -1198,8 +1203,18 @@ async def portal_upload_document(
             submission = DOCUMENT_LIFECYCLE.submission(submission.case_id)
     except GovernanceError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (LifecycleError, IngestError, GlobalAnalysisError) as exc:
+    except LifecycleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IngestError as exc:
+        code = str(exc)
+        if code in {"malware_scanner_unavailable", "malware_scan_failed",
+                    "document_conversion_failed", "document_conversion_empty"}:
+            incident_id = _notify_system_error("required_ingest_check", {"error_code": code})
+            raise HTTPException(status_code=503, detail=f"required_check_unavailable:{incident_id}") from exc
+        raise HTTPException(status_code=422, detail=code) from exc
+    except GlobalAnalysisError as exc:
+        incident_id = _notify_system_error("global_document_analysis", {"error_code": str(exc)})
+        raise HTTPException(status_code=503, detail=f"required_check_unavailable:{incident_id}") from exc
     except Exception as exc:
         incident_id = _notify_system_error("portal_upload", {"error_type": type(exc).__name__})
         print(f"portal_upload_failed incident={incident_id} error={exc}", flush=True)
@@ -1468,6 +1483,29 @@ def _notify_case_status(case: Any) -> None:
         )
 
 
+def _refresh_global_corpus_version(version_id: str, status: str) -> None:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        row = db.execute(
+            """SELECT v.version_id,v.document_id,d.title FROM document_versions v
+               JOIN canonical_documents d ON d.document_id=v.document_id WHERE v.version_id=?""",
+            (version_id,),
+        ).fetchone()
+        if not row:
+            return
+        knowledgebase_ids = tuple(item["knowledgebase_id"] for item in db.execute(
+            "SELECT knowledgebase_id FROM document_publications WHERE document_id=? AND status!='inactive'",
+            (row["document_id"],),
+        ).fetchall())
+    markdown_path = PORTAL_FILES_ROOT / row["document_id"] / version_id / "rag.md"
+    if markdown_path.exists():
+        GLOBAL_CORPUS.upsert(CorpusDocument(
+            row["document_id"], version_id, row["title"],
+            markdown_path.read_text(encoding="utf-8"), knowledgebase_ids, status,
+        ))
+    else:
+        GLOBAL_CORPUS.set_status(version_id, status)
+
+
 def _notify_system_error(step: str, diagnostic: dict[str, Any]) -> str:
     incident_id = QUALITY_CASES.system_incident(step, diagnostic)
     for recipient in _admin_emails():
@@ -1485,11 +1523,54 @@ def portal_case_action(
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
     try:
+        if payload.action == "replace":
+            if not payload.target_document_id:
+                raise LifecycleError("replacement_target_required")
+            before = DOCUMENT_LIFECYCLE.submission(case_id)
+            source_dir = (PORTAL_FILES_ROOT / before.document_id / before.version_id).resolve()
+            target_dir = (PORTAL_FILES_ROOT / payload.target_document_id / before.version_id).resolve()
+            source_dir.relative_to(PORTAL_FILES_ROOT.resolve())
+            target_dir.relative_to(PORTAL_FILES_ROOT.resolve())
+            if not source_dir.is_dir() or target_dir.exists():
+                raise LifecycleError("replacement_storage_not_ready")
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            source_dir.rename(target_dir)
+            bound_complete = False
+            try:
+                bound = DOCUMENT_LIFECYCLE.bind_replacement(
+                    case_id=case_id, target_document_id=payload.target_document_id,
+                    actor_user_id=identity["user_id"],
+                )
+                bound_complete = True
+                RAG_METADATA.write(bound.version_id, target_dir / "rag.md")
+                with PORTAL_GOVERNANCE.store.connect() as db:
+                    kb_ids = tuple(row["knowledgebase_id"] for row in db.execute(
+                        "SELECT knowledgebase_id FROM document_publications WHERE document_id=?",
+                        (bound.document_id,),
+                    ).fetchall())
+                GLOBAL_CORPUS.upsert(CorpusDocument(
+                    bound.document_id, bound.version_id, bound.title,
+                    (target_dir / "rag.md").read_text(encoding="utf-8"), kb_ids, "pending",
+                ))
+                try:
+                    source_dir.parent.rmdir()
+                except OSError:
+                    pass
+            except Exception:
+                if not bound_complete and target_dir.exists() and not source_dir.exists():
+                    source_dir.parent.mkdir(parents=True, exist_ok=True)
+                    target_dir.rename(source_dir)
+                raise
         case = DOCUMENT_LIFECYCLE.choose_action(
             case_id=case_id, actor_user_id=identity["user_id"], action=payload.action,
         )
     except LifecycleError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        incident_id = _notify_system_error("replacement_binding", {"error_type": type(exc).__name__})
+        raise HTTPException(status_code=500, detail=f"system_error:{incident_id}") from exc
+    if case.status == "withdrawn":
+        GLOBAL_CORPUS.set_status(case.version_id, "withdrawn")
     _notify_case_status(case)
     return {"case": asdict(case)}
 
@@ -1504,7 +1585,22 @@ def portal_case_decision(
             case_id=case_id, actor_user_id=identity["user_id"],
             decision=payload.decision, reason=payload.reason,
         )
-        if case.status == "ready_to_activate":
+        if case.status == "ready_to_activate" and case.requested_action == "publish_existing":
+            case, target_version_id, previous_publication_status = DOCUMENT_LIFECYCLE.publish_existing(case_id=case_id)
+            RAG_METADATA.write(target_version_id)
+            indexing = _trigger_hybrid_reindex()
+            if not indexing.get("ok"):
+                case = DOCUMENT_LIFECYCLE.rollback_existing_publication(
+                    case_id=case_id, previous_status=previous_publication_status,
+                    reason=str(indexing.get("error") or "hybrid_reindex_failed"),
+                )
+                _trigger_hybrid_reindex()
+                _refresh_global_corpus_version(case.version_id, "pending")
+                _refresh_global_corpus_version(target_version_id, "active")
+                raise HTTPException(status_code=503, detail="publication_index_failed_previous_scope_restored")
+            _refresh_global_corpus_version(case.version_id, "withdrawn_duplicate")
+            _refresh_global_corpus_version(target_version_id, "active")
+        elif case.status == "ready_to_activate":
             previous_version_id = DOCUMENT_LIFECYCLE.active_version(case.document_id)
             case = DOCUMENT_LIFECYCLE.activate(case_id=case_id)
             RAG_METADATA.write(case.version_id)
@@ -1516,7 +1612,15 @@ def portal_case_decision(
                 )
                 # If the index switch completed but its response was lost, restore the old generation too.
                 _trigger_hybrid_reindex()
+                _refresh_global_corpus_version(case.version_id, "pending")
+                if previous_version_id:
+                    _refresh_global_corpus_version(previous_version_id, "active")
                 raise HTTPException(status_code=503, detail="activation_index_failed_previous_version_restored")
+            _refresh_global_corpus_version(case.version_id, "active")
+            if previous_version_id and previous_version_id != case.version_id:
+                _refresh_global_corpus_version(previous_version_id, "superseded")
+        elif case.status == "rejected":
+            GLOBAL_CORPUS.set_status(case.version_id, "rejected")
     except HTTPException:
         raise
     except (LifecycleError, GovernanceError) as exc:

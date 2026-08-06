@@ -47,34 +47,34 @@ class Analysis:
     same_kb_similarity: str = "none"
     cross_kb_matches: tuple[str, ...] = ()
     contradiction_document_ids: tuple[str, ...] = ()
+    version_candidate_document_ids: tuple[str, ...] = ()
     prompt_injection_risk: str = "none"
     malware_safe: bool = True
     conversion_quality: str = "good"
     notes: tuple[str, ...] = ()
 
 
-NIEDERSACHSEN_HOLIDAYS_2026 = {
-    date(2026, 1, 1),
-    date(2026, 4, 3),
-    date(2026, 4, 6),
-    date(2026, 5, 1),
-    date(2026, 5, 14),
-    date(2026, 5, 25),
-    date(2026, 10, 3),
-    date(2026, 10, 31),
-    date(2026, 12, 25),
-    date(2026, 12, 26),
-}
+
+def _is_workday(value: date, holidays: set[date] | None = None) -> bool:
+    if value.weekday() >= 5:
+        return False
+    if holidays is not None:
+        return value not in holidays
+    try:
+        from .maintenance import niedersachsen_holidays
+    except ImportError:  # pragma: no cover
+        from maintenance import niedersachsen_holidays
+    return value not in niedersachsen_holidays(value.year)
 
 
-def add_workdays(start: date, workdays: int, holidays: set[date]) -> date:
+def add_workdays(start: date, workdays: int, holidays: set[date] | None = None) -> date:
     if workdays < 1 or workdays > 60:
         raise LifecycleError("valid_workdays_out_of_range")
     current = start
     remaining = workdays
     while remaining:
         current += timedelta(days=1)
-        if current.weekday() < 5 and current not in holidays:
+        if _is_workday(current, holidays):
             remaining -= 1
     return current
 
@@ -103,7 +103,7 @@ class DocumentLifecycle:
         self.today = today
         self.now = now
         self.identifier = identifier
-        self.holidays = set(holidays or NIEDERSACHSEN_HOLIDAYS_2026)
+        self.holidays = set(holidays) if holidays is not None else None
         self._initialize()
 
     def _initialize(self) -> None:
@@ -337,7 +337,7 @@ class DocumentLifecycle:
             raise LifecycleError("analysis_not_allowed")
         if not analysis.malware_safe:
             next_status = "security_blocked"
-        elif analysis.prompt_injection_risk == "critical":
+        elif analysis.prompt_injection_risk in {"medium", "high", "critical"}:
             next_status = "pending_admin_approval"
         elif analysis.conversion_quality == "failed":
             next_status = "needs_correction"
@@ -348,7 +348,7 @@ class DocumentLifecycle:
         requires_admin = bool(
             analysis.cross_kb_matches
             or analysis.contradiction_document_ids
-            or analysis.prompt_injection_risk in {"high", "critical"}
+            or analysis.prompt_injection_risk in {"medium", "high", "critical"}
             or analysis.conversion_quality == "low"
         )
         payload = {
@@ -357,6 +357,7 @@ class DocumentLifecycle:
             "same_kb_similarity": analysis.same_kb_similarity,
             "cross_kb_matches": list(analysis.cross_kb_matches),
             "contradiction_document_ids": list(analysis.contradiction_document_ids),
+            "version_candidate_document_ids": list(analysis.version_candidate_document_ids),
             "prompt_injection_risk": analysis.prompt_injection_risk,
             "malware_safe": analysis.malware_safe,
             "conversion_quality": analysis.conversion_quality,
@@ -380,6 +381,50 @@ class DocumentLifecycle:
                 (next_status, int(requires_admin), json.dumps(payload, sort_keys=True), self.now(), case_id),
             )
             self._event(db, case_id, actor_user_id, "analysis_recorded", {"status": next_status, **payload})
+        return self.submission(case_id)
+
+    def bind_replacement(self, *, case_id: str, target_document_id: str,
+                         actor_user_id: str) -> Submission:
+        case = self.submission(case_id)
+        if actor_user_id != case.uploaded_by_user_id or case.status != "pending_employee_decision":
+            raise LifecycleError("replacement_binding_not_allowed")
+        with self.store.connect() as db:
+            row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,)).fetchone()
+            analysis = json.loads(row["analysis_json"] or "{}")
+            if target_document_id not in analysis.get("version_candidate_document_ids", []):
+                raise LifecycleError("replacement_target_not_analyzed")
+            target = db.execute(
+                """SELECT d.active_version_id,u.manager_user_id FROM canonical_documents d
+                   JOIN portal_users u ON u.user_id=d.owner_user_id
+                   JOIN document_versions v ON v.version_id=d.active_version_id AND v.status='active'
+                   WHERE d.document_id=?""", (target_document_id,),
+            ).fetchone()
+            if not target or target_document_id == case.document_id:
+                raise LifecycleError("replacement_target_not_active")
+            existing_publication = db.execute(
+                "SELECT status FROM document_publications WHERE document_id=? AND knowledgebase_id=?",
+                (target_document_id, case.target_knowledgebase_id),
+            ).fetchone()
+            db.execute("DELETE FROM document_publications WHERE document_id=?", (case.document_id,))
+            if not existing_publication:
+                db.execute(
+                    "INSERT INTO document_publications VALUES (?,?,'pending',?,?)",
+                    (target_document_id, case.target_knowledgebase_id, self.now(), self.now()),
+                )
+            db.execute(
+                "UPDATE document_versions SET document_id=?,previous_version_id=?,original_file_id=? WHERE version_id=?",
+                (target_document_id, target["active_version_id"], f"portal://documents/{target_document_id}", case.version_id),
+            )
+            db.execute(
+                "UPDATE document_cases SET document_id=?,manager_user_id=?,updated_at=? WHERE case_id=?",
+                (target_document_id, target["manager_user_id"], self.now(), case_id),
+            )
+            db.execute("DELETE FROM document_metadata WHERE document_id=?", (case.document_id,))
+            db.execute("DELETE FROM canonical_documents WHERE document_id=?", (case.document_id,))
+            self._event(db, case_id, actor_user_id, "replacement_target_bound", {
+                "draft_document_id": case.document_id, "target_document_id": target_document_id,
+                "previous_version_id": target["active_version_id"],
+            })
         return self.submission(case_id)
 
     def choose_action(
@@ -470,6 +515,70 @@ class DocumentLifecycle:
                 (case_id, actor_user_id, actor.role, decision, reason, self.now()),
             )
             self._event(db, case_id, actor_user_id, "decision_recorded", {"decision": decision, "status": next_status})
+        return self.submission(case_id)
+
+    def publish_existing(self, *, case_id: str, actor_user_id: str = "indexer") -> tuple[Submission, str, str | None]:
+        case = self.submission(case_id)
+        if case.status != "ready_to_activate" or case.requested_action != "publish_existing":
+            raise LifecycleError("existing_publication_not_ready")
+        with self.store.connect() as db:
+            row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,)).fetchone()
+            analysis = json.loads(row["analysis_json"] or "{}")
+            target_document_id = analysis.get("exact_duplicate_document_id") or analysis.get("normalized_duplicate_document_id")
+            if not target_document_id or target_document_id == case.document_id:
+                raise LifecycleError("existing_duplicate_target_required")
+            target = db.execute(
+                """SELECT d.active_version_id, v.status FROM canonical_documents d
+                   JOIN document_versions v ON v.version_id=d.active_version_id
+                   WHERE d.document_id=?""", (target_document_id,),
+            ).fetchone()
+            if not target or target["status"] != "active":
+                raise LifecycleError("existing_duplicate_not_active")
+            previous = db.execute(
+                "SELECT status FROM document_publications WHERE document_id=? AND knowledgebase_id=?",
+                (target_document_id, case.target_knowledgebase_id),
+            ).fetchone()
+            previous_status = previous["status"] if previous else None
+            db.execute(
+                """INSERT INTO document_publications(document_id,knowledgebase_id,status,created_at,updated_at)
+                   VALUES (?,?,'active',?,?) ON CONFLICT(document_id,knowledgebase_id)
+                   DO UPDATE SET status='active',updated_at=excluded.updated_at""",
+                (target_document_id, case.target_knowledgebase_id, self.now(), self.now()),
+            )
+            db.execute(
+                "UPDATE document_publications SET status='inactive',updated_at=? WHERE document_id=? AND knowledgebase_id=?",
+                (self.now(), case.document_id, case.target_knowledgebase_id),
+            )
+            db.execute("UPDATE document_versions SET status='withdrawn_duplicate' WHERE version_id=?", (case.version_id,))
+            db.execute("UPDATE document_cases SET status='active',updated_at=? WHERE case_id=?", (self.now(), case_id))
+            self._event(db, case_id, actor_user_id, "existing_document_published", {
+                "target_document_id": target_document_id,
+                "target_version_id": target["active_version_id"],
+                "knowledgebase_id": case.target_knowledgebase_id,
+                "previous_publication_status": previous_status,
+            })
+        return self.submission(case_id), target["active_version_id"], previous_status
+
+    def rollback_existing_publication(self, *, case_id: str, previous_status: str | None,
+                                      reason: str, actor_user_id: str = "indexer") -> Submission:
+        case = self.submission(case_id)
+        with self.store.connect() as db:
+            row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,)).fetchone()
+            analysis = json.loads(row["analysis_json"] or "{}")
+            target_document_id = analysis.get("exact_duplicate_document_id") or analysis.get("normalized_duplicate_document_id")
+            if previous_status is None:
+                db.execute("DELETE FROM document_publications WHERE document_id=? AND knowledgebase_id=?",
+                           (target_document_id, case.target_knowledgebase_id))
+            else:
+                db.execute("UPDATE document_publications SET status=?,updated_at=? WHERE document_id=? AND knowledgebase_id=?",
+                           (previous_status, self.now(), target_document_id, case.target_knowledgebase_id))
+            db.execute("UPDATE document_publications SET status='pending',updated_at=? WHERE document_id=? AND knowledgebase_id=?",
+                       (self.now(), case.document_id, case.target_knowledgebase_id))
+            db.execute("UPDATE document_versions SET status='ready_to_activate' WHERE version_id=?", (case.version_id,))
+            db.execute("UPDATE document_cases SET status='ready_to_activate',updated_at=? WHERE case_id=?", (self.now(), case_id))
+            self._event(db, case_id, actor_user_id, "existing_publication_rolled_back", {
+                "target_document_id": target_document_id, "reason": reason,
+            })
         return self.submission(case_id)
 
     def active_version(self, document_id: str) -> str | None:
@@ -641,7 +750,7 @@ class DocumentLifecycle:
         current, count = started, 0
         while current < self.today():
             current += timedelta(days=1)
-            if current.weekday() < 5 and current not in self.holidays:
+            if _is_workday(current, self.holidays):
                 count += 1
         return count
 
