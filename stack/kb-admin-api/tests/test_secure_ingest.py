@@ -89,4 +89,14 @@ def test_conversion_quality_blocks_mojibake_and_flags_broken_tables():
     assert "character_encoding_corrupted" in issues
     quality, issues = inspector.inspect("# Tabelle\n| A | B |\n| --- | --- |\n| 1 | 2 | 3 |")
     assert quality == "low"
-    assert "table_column_structure_inconsistent" in issues
+    assert any(issue.startswith("table_column_structure_inconsistent:line=4:expected=2:actual=3") for issue in issues)
+
+
+def test_office_documents_over_200_pages_are_rejected():
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("[Content_Types].xml", b"<Types/>")
+        for number in range(1, 202):
+            archive.writestr(f"ppt/slides/slide{number}.xml", b"<slide/>")
+    with pytest.raises(IngestError, match="office_page_limit_exceeded"):
+        SecureFileInspector().inspect("too-long.pptx", output.getvalue())

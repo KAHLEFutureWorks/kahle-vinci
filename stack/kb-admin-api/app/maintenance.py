@@ -377,6 +377,8 @@ class MaintenanceService:
         db.execute("DELETE FROM document_events WHERE case_id IN (SELECT case_id FROM document_cases WHERE document_id = ?)", (document_id,))
         db.execute("DELETE FROM document_cases WHERE document_id = ?", (document_id,))
         db.execute("DELETE FROM document_versions WHERE document_id = ?", (document_id,))
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_authority_relations'").fetchone():
+            db.execute("DELETE FROM document_authority_relations WHERE source_document_id=? OR target_document_id=?", (document_id, document_id))
         db.execute("DELETE FROM document_metadata WHERE document_id = ?", (document_id,))
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_reassignment_tasks'").fetchone():
             db.execute("DELETE FROM owner_reassignment_tasks WHERE document_id = ?", (document_id,))

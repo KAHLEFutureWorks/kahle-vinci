@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import socket
@@ -100,7 +101,9 @@ class SecureFileInspector:
             if pages > self.max_pdf_pages:
                 raise IngestError("pdf_page_limit_exceeded")
         elif extension in self.OFFICE_ROOTS:
-            self._inspect_office(extension, data)
+            pages = self._inspect_office(extension, data)
+            if pages > self.max_pdf_pages:
+                raise IngestError("office_page_limit_exceeded")
         else:
             self._inspect_text(data)
 
@@ -113,7 +116,7 @@ class SecureFileInspector:
             page_count=pages,
         )
 
-    def _inspect_office(self, extension: str, data: bytes) -> None:
+    def _inspect_office(self, extension: str, data: bytes) -> int:
         if data.startswith(bytes.fromhex("D0CF11E0")):
             raise IngestError("encrypted_or_legacy_office_not_allowed")
         try:
@@ -130,10 +133,43 @@ class SecureFileInspector:
                     raise IngestError("macros_not_allowed")
                 if any("encryptedpackage" in name or "encryptioninfo" in name for name in names):
                     raise IngestError("encrypted_file_not_allowed")
+                return self._office_page_count(extension, archive, names)
         except IngestError:
             raise
         except (zipfile.BadZipFile, KeyError) as exc:
             raise IngestError("invalid_office_file") from exc
+
+    @staticmethod
+    def _office_page_count(extension: str, archive: zipfile.ZipFile, names: set[str]) -> int:
+        if extension == "pptx":
+            return max(1, sum(bool(re.fullmatch(r"ppt/slides/slide\d+\.xml", name)) for name in names))
+        if extension == "docx":
+            if "docprops/app.xml" in names:
+                app = archive.read(next(name for name in archive.namelist() if name.lower() == "docprops/app.xml"))
+                match = re.search(rb"<Pages>(\d+)</Pages>", app, re.I)
+                if match:
+                    return max(1, int(match.group(1)))
+            document_name = next(name for name in archive.namelist() if name.lower() == "word/document.xml")
+            document = archive.read(document_name)
+            return max(1, len(re.findall(rb"<w:br\b[^>]*w:type=[\"']page[\"']", document)) + 1)
+        # Spreadsheet print pages are not reliably stored. Estimate conservatively from
+        # used ranges (50 rows x 10 columns per printed page) and explicit page breaks.
+        pages = 0
+        for name in archive.namelist():
+            if not re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name.lower()):
+                continue
+            xml = archive.read(name)
+            dimension = re.search(rb"<dimension\b[^>]*ref=[\"'](?:[A-Z]+\d+:)?([A-Z]+)(\d+)[\"']", xml)
+            if dimension:
+                col_letters, rows = dimension.group(1).decode(), int(dimension.group(2))
+                cols = 0
+                for letter in col_letters:
+                    cols = cols * 26 + ord(letter) - 64
+                pages += max(1, math.ceil(rows / 50) * math.ceil(cols / 10))
+            else:
+                pages += 1
+            pages += len(re.findall(rb"<brk\b", xml))
+        return max(1, pages)
 
     @staticmethod
     def _inspect_text(data: bytes) -> None:
@@ -253,12 +289,21 @@ class ConversionQualityInspector:
             issues.append("conversion_output_too_short")
         if any(marker in (markdown or "") for marker in self.MOJIBAKE):
             issues.append("character_encoding_corrupted")
-        table_rows = [line for line in (markdown or "").splitlines() if line.strip().startswith("|")]
+        table_rows = [(number, line) for number, line in enumerate((markdown or "").splitlines(), 1)
+                      if line.strip().startswith("|")]
         if table_rows:
-            widths = [line.count("|") for line in table_rows if not re.fullmatch(r"[| :\-]+", line.strip())]
-            if widths and max(widths) != min(widths):
-                issues.append("table_column_structure_inconsistent")
-        return ("failed" if "character_encoding_corrupted" in issues or "conversion_output_too_short" in issues
+            content_rows = [(number, line.count("|")) for number, line in table_rows
+                            if not re.fullmatch(r"[| :\-]+", line.strip())]
+            if content_rows:
+                expected = max(set(width for _, width in content_rows),
+                               key=lambda width: sum(item_width == width for _, item_width in content_rows))
+                for number, width in content_rows:
+                    if width != expected:
+                        issues.append(
+                            f"table_column_structure_inconsistent:line={number}:expected={expected - 1}:actual={width - 1}"
+                        )
+        blocking = {"character_encoding_corrupted", "conversion_output_too_short"}
+        return ("failed" if blocking.intersection(issues)
                 else "low" if issues else "good", tuple(issues))
 
 

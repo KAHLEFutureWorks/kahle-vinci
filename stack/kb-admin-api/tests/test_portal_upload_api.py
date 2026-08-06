@@ -32,7 +32,8 @@ def test_portal_upload_uses_account_owner_and_creates_quarantined_case():
 
         class Converter:
             def convert(self, filename, data, title):
-                return "# Wissen\n\nGeprÃ¼fter Inhalt.\n"
+                return "# Wissen\n\nGepr?fter und vollst?ndig aufbereiteter fachlicher Inhalt.\n"
+
 
         module.SECURE_INGEST.scanner = Scanner()
         module.SECURE_INGEST.converter = Converter()

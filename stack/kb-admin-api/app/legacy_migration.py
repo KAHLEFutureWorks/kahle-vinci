@@ -59,8 +59,12 @@ class LegacyMigrationService:
             db.execute("""CREATE TABLE IF NOT EXISTS migration_inventory (
                 path TEXT PRIMARY KEY, knowledgebase_slug TEXT NOT NULL, document_id TEXT NOT NULL,
                 version_id TEXT NOT NULL, status TEXT NOT NULL, missing_json TEXT NOT NULL,
-                prompt_injection_risk TEXT NOT NULL, case_id TEXT, updated_at TEXT NOT NULL
+                prompt_injection_risk TEXT NOT NULL, case_id TEXT, updated_at TEXT NOT NULL,
+                metadata_override_json TEXT
             )""")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(migration_inventory)")}
+            if "metadata_override_json" not in columns:
+                db.execute("ALTER TABLE migration_inventory ADD COLUMN metadata_override_json TEXT")
 
     def inventory(self, root: Path) -> list[MigrationItem]:
         root = root.resolve(); items: list[MigrationItem] = []
@@ -83,13 +87,38 @@ class LegacyMigrationService:
             item = MigrationItem(relative, path.parent.name, document_id, version_id, status, missing, risk)
             items.append(item)
             with self.governance.store.connect() as db:
-                db.execute("""INSERT INTO migration_inventory VALUES (?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))
+                db.execute("""INSERT INTO migration_inventory
+                    (path,knowledgebase_slug,document_id,version_id,status,missing_json,prompt_injection_risk,case_id,updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))
                     ON CONFLICT(path) DO UPDATE SET document_id=excluded.document_id,
                     version_id=excluded.version_id, status=excluded.status, missing_json=excluded.missing_json,
                     prompt_injection_risk=excluded.prompt_injection_risk, updated_at=excluded.updated_at""",
                     (relative, item.knowledgebase_slug, document_id, version_id, status,
                      json.dumps(missing), risk))
         return items
+
+    def resolve_metadata(self, relative_path: str, actor_user_id: str, *, owner_email: str,
+                         confidentiality: str, authority_type: str,
+                         authority_level: int, scope: dict[str, Any]) -> None:
+        actor = self.governance.identity(actor_user_id)
+        if actor.role not in {"admin", "portal_admin"}:
+            raise ValueError("admin_required")
+        owners = self.governance.list_identities(actor_user_id)
+        owner = next((item for item in owners if item.active and item.email.casefold() == owner_email.casefold()), None)
+        if not owner or confidentiality not in {"internal", "restricted", "confidential"}:
+            raise ValueError("valid_owner_and_confidentiality_required")
+        if authority_level not in range(1, 7) or not authority_type.strip():
+            raise ValueError("valid_authority_required")
+        override = {"owner": owner.email, "confidentiality": confidentiality,
+                    "authority_type": authority_type.strip(), "authority_level": authority_level,
+                    "scope": scope}
+        with self.governance.store.connect() as db:
+            row = db.execute("SELECT status,prompt_injection_risk FROM migration_inventory WHERE path=?", (relative_path,)).fetchone()
+            if not row:
+                raise ValueError("migration_item_unknown")
+            status = "quarantine" if row["prompt_injection_risk"] in {"high", "critical"} else "ready_to_stage"
+            db.execute("UPDATE migration_inventory SET metadata_override_json=?, missing_json='[]', status=?, updated_at=datetime('now') WHERE path=?",
+                       (json.dumps(override, ensure_ascii=False, sort_keys=True), status, relative_path))
 
     def stage(self, root: Path, relative_path: str, portal_admin_user_id: str) -> str:
         root = root.resolve(); source = (root / relative_path).resolve(); source.relative_to(root)
@@ -99,6 +128,8 @@ class LegacyMigrationService:
             raise ValueError("migration_item_not_ready")
         markdown = source.read_text(encoding="utf-8-sig", errors="replace")
         metadata, body = parse_frontmatter(markdown)
+        override = json.loads(row["metadata_override_json"] or "{}")
+        metadata = {**metadata, **override}
         owner = next((user for user in self.governance.list_identities(portal_admin_user_id)
                       if user.email.casefold() == metadata["owner"].casefold()), None)
         if not owner:
@@ -116,6 +147,11 @@ class LegacyMigrationService:
             valid_workdays=60, confidentiality=metadata["confidentiality"],
             document_id=row["document_id"], version_id=row["version_id"], case_id=case_id,
         )
+        if override:
+            with self.governance.store.connect() as db:
+                db.execute("UPDATE document_metadata SET authority_type=?,authority_level=?,scope_json=? WHERE document_id=?",
+                           (override["authority_type"], override["authority_level"],
+                            json.dumps(override.get("scope", {}), ensure_ascii=False, sort_keys=True), submission.document_id))
         original = self.storage.store(submission.document_id, submission.version_id, "md", source.read_bytes())
         self.storage.store_markdown(original, body)
         analysis = self.analyzer.analyze(version_id=submission.version_id, title=submission.title, markdown=body)

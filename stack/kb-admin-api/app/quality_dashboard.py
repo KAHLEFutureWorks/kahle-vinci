@@ -35,6 +35,19 @@ class QualityDashboard:
             outbox = db.execute(
                 "SELECT COUNT(*) pending, SUM(CASE WHEN attempts > 0 THEN 1 ELSE 0 END) failed FROM notification_outbox WHERE status='pending'"
             ).fetchone()
+            managers_without_delegate = db.execute(
+                """SELECT COUNT(*) count FROM portal_users u
+                   WHERE u.active=1 AND u.role='manager' AND NOT EXISTS (
+                     SELECT 1 FROM manager_delegates d WHERE d.manager_user_id=u.user_id
+                     AND (d.valid_until IS NULL OR d.valid_until>=?)
+                   )""", (today.isoformat(),)
+            ).fetchone()["count"]
+            documents_without_responsibility = db.execute(
+                """SELECT COUNT(*) count FROM canonical_documents d
+                   LEFT JOIN portal_users o ON o.user_id=d.owner_user_id AND o.active=1
+                   LEFT JOIN portal_users m ON m.user_id=o.manager_user_id AND m.active=1
+                   WHERE d.active_version_id IS NOT NULL AND (o.user_id IS NULL OR m.user_id IS NULL)"""
+            ).fetchone()["count"]
         backup = {}
         try:
             backup = json.loads(self.backup_state_path.read_text(encoding="utf-8"))
@@ -45,5 +58,9 @@ class QualityDashboard:
             "expiring_within_15_workdays": sum(0 <= workdays_until(today, date.fromisoformat(value)) <= 15 for value in expiry_dates),
             "workflow_cases": cases, "open_incidents": incidents, "open_feedback": feedback,
             "migration": migration, "mail": {"pending": outbox["pending"], "failed": outbox["failed"] or 0},
+            "governance": {
+                "managers_without_delegate": managers_without_delegate,
+                "documents_without_active_owner_or_manager": documents_without_responsibility,
+            },
             "backup": backup,
         }

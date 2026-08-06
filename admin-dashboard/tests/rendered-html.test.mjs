@@ -13,7 +13,10 @@ test("renders the role-based KAHLE-Vinci knowledge portal", async () => {
   assert.match(page, /<KnowledgePortal \/>/);
   assert.match(portal, /Dokument bereitstellen/);
   assert.match(portal, /Datei hier ablegen/);
-  assert.match(portal, /Owner: \{session\.email\}/);
+  assert.match(portal, /Dokument-Owner/);
+  assert.match(portal, /portal\/upload-jobs/);
+  assert.match(portal, /Abwesenheiten/);
+  assert.match(portal, /anderen aktiven Owner vorschlagen/);
   assert.match(portal, /Meine Vorgänge/);
   assert.match(portal, /Admin-Aufgaben/);
   assert.match(portal, /Benutzer & Rechte/);

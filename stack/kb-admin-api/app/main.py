@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -20,7 +22,7 @@ from typing import Any, Callable
 
 import requests
 from docx import Document
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response as FastAPIResponse
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
@@ -59,6 +61,8 @@ try:
     from .quality_dashboard import QualityDashboard
     from .document_changes import DocumentChangeError, DocumentChangeService
     from .ownership import OwnershipError, OwnershipService
+    from .upload_jobs import UploadJobError, UploadJobService
+    from .document_authority import AuthorityError, DocumentAuthorityService
     from .rag_metadata import RAGMetadataWriter
     from .content_classification import ContentConfidentialityClassifier
     from .global_analysis import (
@@ -78,6 +82,8 @@ except ImportError:  # pragma: no cover
     from quality_dashboard import QualityDashboard
     from document_changes import DocumentChangeError, DocumentChangeService
     from ownership import OwnershipError, OwnershipService
+    from upload_jobs import UploadJobError, UploadJobService
+    from document_authority import AuthorityError, DocumentAuthorityService
     from rag_metadata import RAGMetadataWriter
     from content_classification import ContentConfidentialityClassifier
     from global_analysis import (
@@ -143,6 +149,8 @@ AUDIT_EXPORTER = AuditExporter(PORTAL_GOVERNANCE.store)
 QUALITY_CASES = QualityCaseService(PORTAL_GOVERNANCE.store)
 DOCUMENT_CHANGES = DocumentChangeService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
 OWNERSHIP = OwnershipService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
+UPLOAD_JOBS = UploadJobService(PORTAL_GOVERNANCE.store)
+DOCUMENT_AUTHORITY = DocumentAuthorityService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
 GLOBAL_CORPUS = GlobalCorpus(PORTAL_GOVERNANCE.store)
 GLOBAL_ANALYZER = GlobalDocumentAnalyzer(
     GLOBAL_CORPUS,
@@ -291,6 +299,15 @@ class PortalMigrationStageRequest(BaseModel):
     path: str = Field(..., min_length=1, max_length=500)
 
 
+class PortalMigrationMetadataRequest(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+    owner_email: str = Field(..., min_length=3, max_length=320)
+    confidentiality: str = Field(..., pattern=r"^(internal|restricted|confidential)$")
+    authority_type: str = Field(..., min_length=3, max_length=80)
+    authority_level: int = Field(..., ge=1, le=6)
+    scope: dict[str, Any] = Field(default_factory=dict)
+
+
 class PortalMarkdownRevisionRequest(BaseModel):
     instruction: str = Field("", max_length=4000)
     replacement_markdown: str = Field("", max_length=2_000_000)
@@ -341,6 +358,23 @@ class PortalOwnershipProposalRequest(BaseModel):
     reason: str = Field(..., min_length=3, max_length=2000)
 
 
+class PortalOwnerPermissionRequest(BaseModel):
+    allowed: bool
+
+
+class PortalAuthorityRequest(BaseModel):
+    authority_type: str = Field(..., min_length=3, max_length=80)
+    scope: dict[str, Any] = Field(default_factory=dict)
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalAuthorityRelationRequest(BaseModel):
+    target_document_id: str = Field(..., min_length=1, max_length=100)
+    relation_type: str = Field(..., pattern=r"^(supersedes|overrides|applies_only_if|related_to)$")
+    condition_text: str = Field("", max_length=2000)
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
 class PortalOwnershipConfirmationRequest(BaseModel):
     accept: bool
     reason: str = Field(..., min_length=3, max_length=2000)
@@ -378,6 +412,9 @@ class PortalUploadResponse(BaseModel):
     confidentiality: str
     confidentiality_reason: str
     requires_admin: bool
+    owner_confirmation_required: bool = False
+    conversion_quality: str = "good"
+    conversion_issues: list[str] = Field(default_factory=list)
     exact_duplicate_document_id: str | None = None
     matches: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -1090,13 +1127,20 @@ async def portal_upload_document(
     title: str = Form(..., min_length=2, max_length=300),
     valid_workdays: int = Form(..., ge=1, le=60),
     confidentiality: str = Form("internal"),
+    owner_user_id: str | None = Form(None),
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> PortalUploadResponse:
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file_too_large")
     filename = file.filename or ""
+    intended_owner_user_id = owner_user_id or identity["user_id"]
     try:
+        if intended_owner_user_id != identity["user_id"]:
+            if not OWNERSHIP.may_propose_other(identity["user_id"]):
+                raise GovernanceError("owner_proposal_permission_required")
+            if not PORTAL_GOVERNANCE.identity(intended_owner_user_id).active:
+                raise GovernanceError("owner_inactive")
         inspected = SECURE_INGEST.inspector.inspect(filename, data)
         document_id = str(uuid.uuid4())
         submission = DOCUMENT_LIFECYCLE.submit(
@@ -1140,6 +1184,11 @@ async def portal_upload_document(
             submission.document_id, submission.version_id, title,
             result.markdown_path.read_text(encoding="utf-8"), (knowledgebase_id,), "pending",
         ))
+        if intended_owner_user_id != identity["user_id"]:
+            OWNERSHIP.create_initial_proposal(
+                submission.document_id, submission.case_id, identity["user_id"], intended_owner_user_id,
+            )
+            submission = DOCUMENT_LIFECYCLE.submission(submission.case_id)
     except GovernanceError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (LifecycleError, IngestError, GlobalAnalysisError) as exc:
@@ -1151,7 +1200,11 @@ async def portal_upload_document(
     return PortalUploadResponse(
         case_id=submission.case_id, document_id=submission.document_id,
         version_id=submission.version_id, status=submission.status,
-        owner_email=identity["email"], prompt_injection_risk=result.injection.risk,
+        owner_email=PORTAL_GOVERNANCE.identity(intended_owner_user_id).email,
+        owner_confirmation_required=intended_owner_user_id != identity["user_id"],
+        prompt_injection_risk=result.injection.risk,
+        conversion_quality=result.conversion_quality,
+        conversion_issues=list(result.conversion_issues),
         confidentiality=DOCUMENT_LIFECYCLE.submission(submission.case_id).confidentiality,
         confidentiality_reason=confidentiality_suggestion.reason,
         requires_admin=submission.requires_admin,
@@ -1162,6 +1215,66 @@ async def portal_upload_document(
             "has_conflict": bool(match.conflicting_passages),
         } for match in material_matches],
     )
+
+
+def _run_portal_upload_job(
+    job_id: str, data: bytes, filename: str, knowledgebase_id: str, title: str,
+    valid_workdays: int, confidentiality: str, owner_user_id: str | None,
+    identity: dict[str, Any],
+) -> None:
+    try:
+        UPLOAD_JOBS.progress(job_id, "security", 20)
+        UPLOAD_JOBS.progress(job_id, "conversion", 45)
+        upload = UploadFile(file=io.BytesIO(data), filename=filename)
+        result = asyncio.run(portal_upload_document(
+            file=upload, knowledgebase_id=knowledgebase_id, title=title,
+            valid_workdays=valid_workdays, confidentiality=confidentiality,
+            owner_user_id=owner_user_id, identity=identity,
+        ))
+        UPLOAD_JOBS.progress(job_id, "comparison", 90)
+        UPLOAD_JOBS.complete(job_id, result.model_dump())
+    except HTTPException as exc:
+        UPLOAD_JOBS.fail(job_id, str(exc.detail))
+    except Exception as exc:  # pragma: no cover - final fail-safe for worker failures
+        incident_id = _notify_system_error("portal_upload_job", {"error_type": type(exc).__name__})
+        UPLOAD_JOBS.fail(job_id, f"system_error:{incident_id}")
+
+
+@app.post("/portal/upload-jobs", status_code=202)
+async def portal_create_upload_job(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...), knowledgebase_id: str = Form(...),
+    title: str = Form(..., min_length=2, max_length=300),
+    valid_workdays: int = Form(..., ge=1, le=60),
+    confidentiality: str = Form("internal"),
+    owner_user_id: str | None = Form(None),
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file_too_large")
+    try:
+        PORTAL_GOVERNANCE.require_access(identity["user_id"], knowledgebase_id, "upload")
+    except GovernanceError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    job_id = UPLOAD_JOBS.create(identity["user_id"])
+    background_tasks.add_task(
+        _run_portal_upload_job, job_id, data, file.filename or "", knowledgebase_id,
+        title, valid_workdays, confidentiality, owner_user_id, identity,
+    )
+    return {"job_id": job_id, "status": "queued", "step": "uploaded", "progress": 5}
+
+
+@app.get("/portal/upload-jobs/{job_id}")
+def portal_get_upload_job(
+    job_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        return UPLOAD_JOBS.get(
+            job_id, identity["user_id"], identity["role"] in {"admin", "portal_admin"}
+        )
+    except UploadJobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/portal/feedback/context")
@@ -1464,11 +1577,88 @@ def portal_step_up_callback(
     )
     return response
 
+@app.get("/portal/documents/{document_id}/authority")
+def portal_document_authority(
+    document_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        return DOCUMENT_AUTHORITY.view(identity["user_id"], document_id)
+    except AuthorityError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/portal/documents/{document_id}/authority")
+def portal_update_document_authority(
+    document_id: str, payload: PortalAuthorityRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        result = DOCUMENT_AUTHORITY.update(
+            identity["user_id"], document_id, payload.authority_type, payload.scope, payload.reason,
+        )
+        with PORTAL_GOVERNANCE.store.connect() as db:
+            version = db.execute(
+                "SELECT version_id FROM document_versions WHERE document_id=? ORDER BY created_at DESC LIMIT 1",
+                (document_id,),
+            ).fetchone()
+        if version:
+            RAG_METADATA.write(version["version_id"])
+        return result
+    except AuthorityError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/portal/documents/{document_id}/authority-relations", status_code=201)
+def portal_create_authority_relation(
+    document_id: str, payload: PortalAuthorityRelationRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        relation_id = DOCUMENT_AUTHORITY.relate(
+            identity["user_id"], document_id, payload.target_document_id,
+            payload.relation_type, payload.condition_text, payload.reason,
+        )
+        return {"relation_id": relation_id}
+    except AuthorityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/portal/ownership-tasks")
 def portal_ownership_tasks(
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
     return {"tasks": OWNERSHIP.tasks_for(identity["user_id"])}
+
+
+@app.get("/portal/owner-candidates")
+def portal_owner_candidates(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    return {
+        "can_propose_other": OWNERSHIP.may_propose_other(identity["user_id"]),
+        "users": OWNERSHIP.active_candidates(identity["user_id"]),
+    }
+
+
+@app.get("/portal/admin/users/{target_user_id}/owner-proposal-permission")
+def portal_admin_owner_permission(
+    target_user_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"allowed": OWNERSHIP.may_propose_other(target_user_id)}
+
+
+@app.put("/portal/admin/users/{target_user_id}/owner-proposal-permission")
+def portal_admin_set_owner_permission(
+    target_user_id: str, payload: PortalOwnerPermissionRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        OWNERSHIP.set_proposal_permission(identity["user_id"], target_user_id, payload.allowed)
+    except OwnershipError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"allowed": payload.allowed}
 
 
 @app.post("/portal/ownership-tasks/{task_id}/proposal")
@@ -1603,6 +1793,22 @@ def portal_admin_migration_inventory(
     if identity["role"] not in {"admin", "portal_admin"}:
         raise HTTPException(status_code=403, detail="admin_required")
     return {"items": [asdict(item) for item in LEGACY_MIGRATION.inventory(KB_ROOT)]}
+
+
+@app.put("/portal/admin/migration/metadata")
+def portal_admin_migration_metadata(
+    payload: PortalMigrationMetadataRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        MIGRATION.resolve_metadata(
+            payload.path, identity["user_id"], owner_email=payload.owner_email,
+            confidentiality=payload.confidentiality, authority_type=payload.authority_type,
+            authority_level=payload.authority_level, scope=payload.scope,
+        )
+    except (GovernanceError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "metadata_resolved"}
 
 
 @app.post("/portal/admin/migration/stage")
