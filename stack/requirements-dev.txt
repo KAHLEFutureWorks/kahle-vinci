@@ -1,0 +1,25 @@
+# Abhaengigkeiten fuer die lokale Abnahme der drei Testsuiten.
+#
+# Die Dienste kb-admin-api und kb-sync laufen in getrennten Containern und
+# pinnen requests und pypdf bewusst unterschiedlich. Ein gemeinsames -r auf
+# beide requirements.txt laesst sich deshalb nicht aufloesen. Diese Datei
+# listet die tatsaechlich gegen alle drei Suiten verifizierte Kombination.
+
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+requests==2.32.4
+python-multipart==0.0.20
+python-docx==1.2.0
+pypdf==6.0.0
+httpx==0.28.1
+PyJWT[crypto]==2.10.1
+cryptography==45.0.7
+reportlab==4.4.3
+watchdog==6.0.0
+
+pytest==9.1.1
+
+# tzdata liefert die IANA-Zeitzonen. Linux-Container bringen sie mit, Windows
+# nicht; ohne das Paket schlaegt ZoneInfo("Europe/Berlin") beim Import des
+# Maintenance-Workers fehl.
+tzdata==2026.3
