@@ -1,17 +1,27 @@
 # Lokale Abnahme des KAHLE-Vinci Wissensportals
 
-Stand: 6. August 2026
+Stand: 7. August 2026
 
 Dieses Protokoll ist die fortlaufende Nachweisakte zur lokalen Umsetzung des PRD. Eine Produktionsfreigabe ist damit ausdrücklich nicht verbunden.
+
+## Testumgebung
+
+Die drei Python-Suiten laufen über einen dokumentierten Befehl:
+
+```
+pwsh ./scripts/run-local-tests.ps1
+```
+
+Die Abhängigkeiten stehen in `stack/requirements-dev.txt`. Die Suiten laufen bewusst in getrennten Prozessen, weil `kb-admin-api` und `kb-sync` jeweils ein eigenes Paket `app` besitzen. Die Modulsuchpfade setzt je eine `conftest.py` im Testverzeichnis; ein `PYTHONPATH` von außen ist nicht nötig.
 
 ## Automatisierte Nachweise
 
 | Bereich | Nachweis | Ergebnis |
 |---|---|---|
-| Portal-Backend | `stack/kb-admin-api/tests` | 81 Tests bestanden |
+| Portal-Backend | `stack/kb-admin-api/tests` | 89 Tests bestanden |
 | Stack, Verträge und Sicherheit | `stack/tests` | 240 Tests bestanden |
 | Hybridindex und Synchronisierung | `stack/kb-sync/tests` | 10 Tests bestanden |
-| Portal-UI | `npm test` in `admin-dashboard` | Build und 2 Rendering-/Sicherheitstests bestanden |
+| Portal-UI | `npm test` in `admin-dashboard` | Build und 3 Rendering-, UX- und Sicherheitstests bestanden |
 | Routing | `caddy validate` mit lokalen Platzhalterwerten | gültig |
 | Orchestrierung | `docker compose config --quiet` mit lokalen Platzhalterwerten | gültig |
 | Backup, Restore und Reindex | `stack/tests/test_portal_restore_reindex_e2e.py` | im Stack-Testlauf bestanden |
@@ -40,15 +50,51 @@ Dieses Protokoll ist die fortlaufende Nachweisakte zur lokalen Umsetzung des PRD
 | Mindestens 90 Prozent richtige Treffer mit den vier KAHLE-Beispieldokumenten | blockiert durch lokalen IONOS-Token | gültigen IONOS-Token im lokalen `kb-sync` hinterlegen und `eval/rag/offline_hybrid_eval.py` ausführen |
 | Mindestens 95 Prozent korrekt verlinkte Originalquellen | gemeinsam mit Retrieval-Evaluation offen | Bericht der Retrieval-Evaluation auswerten |
 | Höchstens 5 Prozent unbelegte Antworten ohne freigegebene Quelle | Laufzeitevaluation offen | Negativfragen mit dem lokalen Vinci-Chat ausführen |
-| 80 Prozent der Testmitarbeiter schaffen den Upload ohne Erklärung | organisatorischer Praxistest offen | kurze moderierte lokale Testrunde durchführen |
-| Führungskräfte entscheiden Normalfälle durchschnittlich unter drei Minuten | organisatorischer Praxistest offen | Zeitmessung in derselben Testrunde durchführen |
-| RPO 24 Stunden und RTO vier Stunden | technischer Restore bestanden, Zeitnachweis offen | vollständigen lokalen Restore mit Zeitmessung protokollieren |
+| 80 Prozent der Testmitarbeiter schaffen den Upload ohne Erklärung | organisatorischer Praxistest offen, Protokoll liegt vor | Testrunde nach `WISSENSPORTAL-UX-TESTPROTOKOLL.md` durchführen |
+| Führungskräfte entscheiden Normalfälle durchschnittlich unter drei Minuten | organisatorischer Praxistest offen, Protokoll liegt vor | Zeitmessung in derselben Testrunde durchführen |
+
+## Benutzeroberfläche und UX
+
+Die Portal-UI wurde am 7. August 2026 gegen die Abschnitte 12.3, 16.1, 21.1, 26.2 und 26.3 des PRD geprüft. Sieben Abweichungen wurden gefunden und behoben:
+
+- `portal.css` besaß keine einzige `:focus-visible`-Regel; Fokuszustände waren nicht erkennbar.
+- Benutzer- und Dokumentauswahl waren klickbare `<article>`-Elemente ohne Tastaturpfad und damit ohne Maus nicht erreichbar.
+- Mitarbeitende sahen den Fachbegriff „RAG-Markdown" sowie die rohen Einstufungscodes `internal`, `restricted` und `confidential`.
+- Die vom PRD geforderte dreistufige Bewertung der Aufbereitung fehlte in der Oberfläche, obwohl das Backend `conversion_quality` bereits lieferte.
+- Technische Fehlercodes wie `kahle_microsoft_tenant_required` erreichten den Nutzer unverändert.
+- Der Uploadfortschritt wurde nur bei geöffneter Seite verfolgt und zeigte vier statt fünf Stufen.
+- Die Gültigkeit war nur als Anzahl Arbeitstage wählbar; die vom PRD gleichrangig vorgesehene Auswahl eines geprüften Datums fehlte.
+
+Alle sieben Punkte sind umgesetzt und durch Zusicherungen im Portaltest gegen Rückschritte gesichert. Die Datumsauswahl rechnet ausschließlich serverseitig um, damit die niedersächsischen Feiertage und die Grenze von 60 Arbeitstagen verbindlich bleiben; ein Datum auf einem Wochenende oder Feiertag verkürzt die Gültigkeit auf den davorliegenden Arbeitstag und verlängert sie nie.
+
+Die Ampel der Aufbereitungsqualität, die Fehlermeldungen und die Begriffe sind damit technisch nachgewiesen. Ob sie für Mitarbeitende tatsächlich verständlich sind, entscheidet ausschließlich der moderierte Praxistest.
+
+## RPO und RTO
+
+**RTO vier Stunden: eingehalten.** Gemessen am 7. August 2026 mit `stack/tests/measure_restore_rto.py` über 500 Dokumente, 1001 Dateien und 392 MB nicht komprimierbarer Originaldaten:
+
+| Schritt | Dauer |
+|---|---|
+| Verschlüsseltes Backup | 22,43 s |
+| Restore | 14,09 s |
+| Validierung | 0,03 s |
+| Inventar laden | 0,09 s |
+| Hybridindex neu aufbauen | 0,20 s |
+| **Wiederherstellung gesamt** | **36,85 s** |
+
+Das entspricht 0,26 Prozent des Vier-Stunden-Budgets. 6000 Chunks wurden neu indexiert.
+
+Einschränkung: Der gemessene Indexneuaufbau verwendet deterministische lokale Embeddings, nicht den IONOS-Endpunkt. Der reale Neuaufbau ist dadurch deutlich langsamer als die gemessenen 0,20 Sekunden. Diese Teilmessung wird nachgezogen, sobald der Embedding-Zugang funktioniert; die übrigen Schritte sind davon unberührt.
+
+**RPO 24 Stunden: eingehalten, ohne Puffer.** `backup_worker.py` prüft stündlich und erzeugt genau eine Sicherung je Kalendertag. Der größtmögliche Abstand zwischen zwei erfolgreichen Sicherungen beträgt damit 24 Stunden, der maximale Datenverlust entsprechend knapp 24 Stunden. Ein einzelner fehlgeschlagener Backupzyklus verletzt den RPO deshalb unmittelbar. Der Worker meldet jeden Fehlschlag sofort als Admin-Incident; ein zeitlicher Puffer besteht nicht.
 
 ## Aktueller externer Prüfblocker
 
-Der im lokalen Container `kb-sync` konfigurierte IONOS-Token wurde am 6. August 2026 vom Embedding-Endpunkt mit HTTP 401 abgelehnt. Der Evaluationscode, der Fragensatz und die vier Beispieldokumente liegen lokal bereit. Zugangsdaten werden weder in diesem Protokoll noch in Evaluationsberichten gespeichert.
+Der im lokalen Container `kb-sync` konfigurierte IONOS-Token wurde vom Embedding-Endpunkt mit HTTP 401 abgelehnt. Der Evaluationscode, der Fragensatz und die vier Beispieldokumente liegen lokal bereit. Zugangsdaten werden weder in diesem Protokoll noch in Evaluationsberichten gespeichert.
 
-Der konfigurierte lokale TEI-Reranker ist im aktuellen Laufzeit-Stack noch nicht gestartet; das Image ghcr.io/huggingface/text-embeddings-inference:cpu-1.9 ist lokal noch nicht vorhanden. Die Offline-Evaluation verwendet jetzt verpflichtend denselben Reranker-Endpunkt wie die Vinci-Laufzeit und bricht bei dessen Ausfall geschlossen ab.
+Der TEI-Reranker ist seit dem 7. August 2026 verfügbar: Das Image `ghcr.io/huggingface/text-embeddings-inference:cpu-1.9` ist geladen, der Dienst läuft mit `Alibaba-NLP/gte-multilingual-reranker-base` in TEI 1.9.3, und der `/rerank`-Endpunkt ist mit einer deutschen Beispielanfrage verifiziert. Die Offline-Evaluation verwendet verpflichtend denselben Reranker-Endpunkt wie die Vinci-Laufzeit und bricht bei dessen Ausfall geschlossen ab.
+
+Damit ist der IONOS-Token der einzige verbliebene technische Blocker des Go-live-Gates.
 
 Das Go-live-Gate bleibt geschlossen, bis alle offenen Nachweise erbracht und in dieser Datei dokumentiert sind.
 
