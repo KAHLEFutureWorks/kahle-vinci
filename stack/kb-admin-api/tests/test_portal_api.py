@@ -137,3 +137,30 @@ def test_non_kahle_identity_is_rejected_even_if_openwebui_knows_it():
         response = TestClient(module.app).get("/portal/session")
         assert response.status_code == 403
         assert response.json()["detail"] == "kahle_microsoft_tenant_required"
+
+def test_migration_metadata_endpoint_uses_initialized_legacy_migration_service():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        captured = {}
+
+        class MigrationSpy:
+            def resolve_metadata(self, path, actor_user_id, **metadata):
+                captured.update(path=path, actor_user_id=actor_user_id, **metadata)
+
+        module.LEGACY_MIGRATION = MigrationSpy()
+        response = client.put("/portal/admin/migration/metadata", json={
+            "path": "kahleallgemein/alt.md",
+            "owner_email": "portal@kahle.de",
+            "confidentiality": "internal",
+            "authority_type": "information_or_training",
+            "authority_level": 6,
+            "scope": {"knowledgebase_ids": ["kahleallgemein"]},
+        })
+        assert response.status_code == 200
+        assert response.json() == {"status": "metadata_resolved"}
+        assert captured["actor_user_id"] == "portal"
+        assert captured["path"] == "kahleallgemein/alt.md"

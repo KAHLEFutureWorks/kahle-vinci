@@ -1934,7 +1934,7 @@ def portal_admin_migration_metadata(
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
     try:
-        MIGRATION.resolve_metadata(
+        LEGACY_MIGRATION.resolve_metadata(
             payload.path, identity["user_id"], owner_email=payload.owner_email,
             confidentiality=payload.confidentiality, authority_type=payload.authority_type,
             authority_level=payload.authority_level, scope=payload.scope,
