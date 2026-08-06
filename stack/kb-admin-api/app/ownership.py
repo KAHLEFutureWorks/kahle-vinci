@@ -80,6 +80,10 @@ class OwnershipService:
                 "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
                 (target_user_id, int(allowed), actor_user_id, self.now()),
             )
+        self.governance.record_audit(
+            actor_user_id, "owner_proposal_permission_changed", "user", target_user_id,
+            {"allowed": allowed},
+        )
 
     def active_candidates(self, actor_user_id: str) -> list[dict]:
         if not self.may_propose_other(actor_user_id):

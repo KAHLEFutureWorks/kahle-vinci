@@ -50,8 +50,20 @@ class DocumentAuthorityService:
             )
 
     def view(self, actor_user_id: str, document_id: str) -> dict[str, Any]:
-        self.governance.identity(actor_user_id)
+        actor = self.governance.identity(actor_user_id)
         with self.store.connect() as db:
+            document = db.execute(
+                "SELECT owner_user_id FROM canonical_documents WHERE document_id=?", (document_id,)
+            ).fetchone()
+            if not document:
+                raise AuthorityError("unknown_document")
+            if actor.role not in {"admin", "portal_admin"} and document["owner_user_id"] != actor_user_id:
+                allowed = set(self.governance.allowed_knowledgebases(actor_user_id, "read"))
+                publications = {row["knowledgebase_id"] for row in db.execute(
+                    "SELECT knowledgebase_id FROM document_publications WHERE document_id=?", (document_id,)
+                ).fetchall()}
+                if not allowed.intersection(publications):
+                    raise AuthorityError("authority_read_access_required")
             metadata = db.execute(
                 "SELECT * FROM document_metadata WHERE document_id=?", (document_id,)
             ).fetchone()

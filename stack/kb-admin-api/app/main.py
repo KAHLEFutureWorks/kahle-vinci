@@ -124,6 +124,10 @@ MAX_UPLOAD_BYTES = int(os.getenv("KB_ADMIN_MAX_UPLOAD_BYTES", str(25 * 1024 * 10
 TRASH_RETENTION_DAYS = max(1, int(os.getenv("KB_ADMIN_TRASH_RETENTION_DAYS", "30")))
 MAINTENANCE_API_KEY = os.getenv("KB_ADMIN_MAINTENANCE_API_KEY", "").strip()
 KB_SYNC_INTERNAL_API_KEY = os.getenv("KB_SYNC_INTERNAL_API_KEY", MAINTENANCE_API_KEY).strip()
+PORTAL_ALLOWED_EMAIL_DOMAINS = {
+    item.strip().casefold() for item in os.getenv("PORTAL_ALLOWED_EMAIL_DOMAINS", "kahle.de").split(",")
+    if item.strip()
+}
 UNLOCK_CODE_HASH = os.getenv("KB_ADMIN_UNLOCK_CODE_HASH", "").strip()
 UNLOCK_SESSION_SECRET = os.getenv("KB_ADMIN_UNLOCK_SESSION_SECRET", "").strip()
 UNLOCK_TTL_SECONDS = max(300, int(os.getenv("KB_ADMIN_UNLOCK_TTL_SECONDS", "28800")))
@@ -738,6 +742,9 @@ def require_portal_identity(
     display_name = str(user.get("name") or user.get("display_name") or email).strip()
     if not user_id or not email:
         raise HTTPException(status_code=502, detail="openwebui_identity_incomplete")
+    email_domain = email.rsplit("@", 1)[-1].casefold() if "@" in email else ""
+    if not DEV_AUTH_BYPASS and email_domain not in PORTAL_ALLOWED_EMAIL_DOMAINS:
+        raise HTTPException(status_code=403, detail="kahle_microsoft_tenant_required")
     try:
         identity = PORTAL_GOVERNANCE.sync_identity(
             user_id=user_id,
@@ -1603,7 +1610,13 @@ def portal_update_document_authority(
             ).fetchone()
         if version:
             RAG_METADATA.write(version["version_id"])
-        return result
+            indexing = _trigger_hybrid_reindex()
+            if not indexing.get("ok"):
+                incident_id = _notify_system_error(
+                    "authority_reindex", {"document_id": document_id, "error": indexing.get("error")}
+                )
+                raise HTTPException(status_code=503, detail=f"authority_reindex_failed:{incident_id}")
+        return {**result, "reindex": {"ok": True}}
     except AuthorityError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -1680,6 +1693,22 @@ def portal_confirm_owner(
 ) -> dict[str, Any]:
     try:
         status = OWNERSHIP.confirm(task_id, identity["user_id"], payload.accept, payload.reason)
+        if status == "completed" and payload.accept:
+            with PORTAL_GOVERNANCE.store.connect() as db:
+                version = db.execute(
+                    """SELECT v.version_id FROM owner_reassignment_tasks t
+                       JOIN canonical_documents d ON d.document_id=t.document_id
+                       JOIN document_versions v ON v.document_id=d.document_id
+                       WHERE t.task_id=? ORDER BY v.created_at DESC LIMIT 1""", (task_id,),
+                ).fetchone()
+            if version:
+                RAG_METADATA.write(version["version_id"])
+                indexing = _trigger_hybrid_reindex()
+                if not indexing.get("ok"):
+                    incident_id = _notify_system_error(
+                        "owner_reindex", {"task_id": task_id, "error": indexing.get("error")}
+                    )
+                    raise HTTPException(status_code=503, detail=f"owner_reindex_failed:{incident_id}")
     except OwnershipError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": status}
@@ -1850,10 +1879,45 @@ def portal_admin_audit_export(
     raise HTTPException(status_code=404, detail="unknown_audit_format")
 
 
+def _sync_openwebui_user_directory(request: Request) -> None:
+    if DEV_AUTH_BYPASS:
+        return
+    headers: dict[str, str] = {}
+    if request.headers.get("Authorization"):
+        headers["Authorization"] = request.headers["Authorization"]
+    if request.headers.get("Cookie"):
+        headers["Cookie"] = request.headers["Cookie"]
+    try:
+        response = requests.get(f"{OPENWEBUI_URL}/api/v1/users/", headers=headers, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        users = payload.get("users", payload) if isinstance(payload, dict) else payload
+        if not isinstance(users, list):
+            raise ValueError("invalid_openwebui_user_directory")
+        for item in users:
+            user_id = str(item.get("id") or "").strip()
+            email = str(item.get("email") or "").strip()
+            email_domain = email.rsplit("@", 1)[-1].casefold() if "@" in email else ""
+            if not user_id or not email or email_domain not in PORTAL_ALLOWED_EMAIL_DOMAINS:
+                continue
+            PORTAL_GOVERNANCE.sync_identity(
+                user_id=user_id, email=email,
+                display_name=str(item.get("name") or item.get("display_name") or email).strip(),
+                active=True, bootstrap_portal_admin=False,
+            )
+    except Exception as exc:
+        incident_id = _notify_system_error(
+            "openwebui_user_directory_sync", {"error_type": type(exc).__name__}
+        )
+        raise HTTPException(status_code=503, detail=f"user_directory_sync_failed:{incident_id}") from exc
+
+
 @app.get("/portal/admin/users")
 def portal_admin_users(
-    identity: dict[str, Any] = Depends(require_portal_identity),
+    request: Request, identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
+    if str(identity.get("openwebui_role") or "").lower() == "admin":
+        _sync_openwebui_user_directory(request)
     users = _portal_call(lambda: PORTAL_GOVERNANCE.list_identities(identity["user_id"]))
     return {"users": serialize_governance(users)}
 

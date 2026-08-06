@@ -105,3 +105,35 @@ if __name__ == "__main__":
     test_portal_http_contract_bootstraps_identity_and_enforces_roles()
     test_portal_admin_knowledgebase_mutation_requires_fresh_microsoft_authentication()
     print("portal api tests passed")
+
+
+def test_openwebui_directory_sync_imports_all_accounts(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module.DEV_AUTH_BYPASS = False
+
+        class Response:
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {"users": [
+                    {"id": "employee-2", "email": "employee2@kahle.de", "name": "Zweite Person"},
+                    {"id": "employee-3", "email": "employee3@kahle.de", "name": "Dritte Person"},
+                ]}
+
+        monkeypatch.setattr(module.requests, "get", lambda *args, **kwargs: Response())
+        request = type("Request", (), {"headers": {"Cookie": "session=safe"}})()
+        module._sync_openwebui_user_directory(request)
+        assert module.PORTAL_GOVERNANCE.identity("employee-2").email == "employee2@kahle.de"
+        assert module.PORTAL_GOVERNANCE.identity("employee-3").display_name == "Dritte Person"
+
+
+def test_non_kahle_identity_is_rejected_even_if_openwebui_knows_it():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: {
+            "id": "external", "email": "external@example.org", "name": "Extern", "role": "user"
+        }
+        response = TestClient(module.app).get("/portal/session")
+        assert response.status_code == 403
+        assert response.json()["detail"] == "kahle_microsoft_tenant_required"
