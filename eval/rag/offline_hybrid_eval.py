@@ -9,6 +9,7 @@ import statistics
 import time
 from pathlib import Path
 
+import requests
 import yaml
 
 try:
@@ -42,16 +43,32 @@ def rrf(dense: list[float], sparse: list[float], k: int = 60) -> list[float]:
     return [1 / (k + dense_ranks[index]) + 1 / (k + sparse_ranks[index]) for index in range(len(dense))]
 
 
-def rerank(query: str, chunks: list[dict], fused: list[float]) -> list[float]:
-    query_terms = set(german_tokens(query))
-    values = []
-    for chunk, score in zip(chunks, fused):
-        terms = set(german_tokens(chunk["content"]))
-        coverage = len(query_terms & terms) / max(len(query_terms), 1)
-        exact = 1.0 if query.casefold() in chunk["content"].casefold() else 0.0
-        values.append(score + coverage * 0.05 + exact * 0.1)
-    return values
-
+def tei_rerank(query: str, chunks: list[dict], fused: list[float], base_url: str,
+               *, candidate_limit: int = 50, timeout: float = 60) -> list[float]:
+    """Use the same fail-closed multilingual TEI reranker as the Vinci runtime."""
+    candidate_order = sorted(range(len(chunks)), key=lambda index: fused[index], reverse=True)[:candidate_limit]
+    documents = [chunks[index]["content"] for index in candidate_order]
+    try:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/rerank",
+            json={"query": query, "texts": documents, "truncate": True},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if isinstance(rows, dict):
+            rows = rows.get("results") or []
+        scores = [float("-inf")] * len(chunks)
+        for row in rows:
+            local_index = int(row["index"])
+            if local_index < 0 or local_index >= len(candidate_order):
+                raise ValueError("reranker_index_out_of_range")
+            scores[candidate_order[local_index]] = float(row.get("score", row.get("relevance_score")))
+        if not rows:
+            raise ValueError("reranker_returned_no_results")
+        return scores
+    except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("required_reranker_unavailable") from exc
 
 def load_definitions(path: Path) -> list[dict]:
     payload = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
@@ -69,6 +86,7 @@ def main() -> int:
     parser.add_argument("--base-url", default="https://openai.inference.de-txl.ionos.com/v1")
     parser.add_argument("--api-key", default=os.getenv("IONOS_API_KEY", ""))
     parser.add_argument("--model", default="BAAI/bge-m3")
+    parser.add_argument("--reranker-url", default=os.getenv("RERANKER_URL", "http://127.0.0.1:8080"))
     args = parser.parse_args()
     if not args.api_key:
         parser.error("--api-key or IONOS_API_KEY is required")
@@ -97,7 +115,7 @@ def main() -> int:
         sparse_query = corpus.query_vector(query)
         sparse_scores = [sparse_dot(sparse_query, corpus.document_vector(chunk["content"])) for chunk in chunks]
         fused_scores = rrf(dense_scores, sparse_scores)
-        reranked_scores = rerank(query, chunks, fused_scores)
+        reranked_scores = tei_rerank(query, chunks, fused_scores, args.reranker_url)
         configurations = {
             "dense_only": dense_scores, "sparse_only": sparse_scores,
             "hybrid_rrf": fused_scores, "hybrid_reranked": reranked_scores,

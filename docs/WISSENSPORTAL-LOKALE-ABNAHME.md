@@ -46,6 +46,8 @@ Dieses Protokoll ist die fortlaufende Nachweisakte zur lokalen Umsetzung des PRD
 
 Der im lokalen Container `kb-sync` konfigurierte IONOS-Token wurde am 6. August 2026 vom Embedding-Endpunkt mit HTTP 401 abgelehnt. Der Evaluationscode, der Fragensatz und die vier Beispieldokumente liegen lokal bereit. Zugangsdaten werden weder in diesem Protokoll noch in Evaluationsberichten gespeichert.
 
+Der konfigurierte lokale TEI-Reranker ist im aktuellen Laufzeit-Stack noch nicht gestartet; das Image ghcr.io/huggingface/text-embeddings-inference:cpu-1.9 ist lokal noch nicht vorhanden. Die Offline-Evaluation verwendet jetzt verpflichtend denselben Reranker-Endpunkt wie die Vinci-Laufzeit und bricht bei dessen Ausfall geschlossen ab.
+
 Das Go-live-Gate bleibt geschlossen, bis alle offenen Nachweise erbracht und in dieser Datei dokumentiert sind.
 
 ## Nachweismatrix der 20 PRD-Abnahmeszenarien
