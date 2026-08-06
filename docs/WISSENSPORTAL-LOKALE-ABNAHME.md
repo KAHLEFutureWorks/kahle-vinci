@@ -9,7 +9,7 @@ Dieses Protokoll ist die fortlaufende Nachweisakte zur lokalen Umsetzung des PRD
 | Bereich | Nachweis | Ergebnis |
 |---|---|---|
 | Portal-Backend | `stack/kb-admin-api/tests` | 81 Tests bestanden |
-| Stack, Verträge und Sicherheit | `stack/tests` | 239 Tests bestanden |
+| Stack, Verträge und Sicherheit | `stack/tests` | 240 Tests bestanden |
 | Hybridindex und Synchronisierung | `stack/kb-sync/tests` | 10 Tests bestanden |
 | Portal-UI | `npm test` in `admin-dashboard` | Build und 2 Rendering-/Sicherheitstests bestanden |
 | Routing | `caddy validate` mit lokalen Platzhalterwerten | gültig |
@@ -30,6 +30,7 @@ Dieses Protokoll ist die fortlaufende Nachweisakte zur lokalen Umsetzung des PRD
 - Autorität und strukturierte Beziehungen wie `supersedes` und `overrides` können ausschließlich administrativ mit Begründung gepflegt werden.
 - Abgelaufene, zurückgezogene, gelöschte oder nicht aktive Versionen werden nicht an das Retrieval freigegeben.
 - Erinnerungen, Papierkorb, Legal Hold, physische Löschung, Audit und verschlüsseltes Backup sind automatisiert abgedeckt.
+- Der Produktionsstart aktiviert das verschlüsselte Backup-Profil zwingend und verweigert den Start ohne Schlüssel oder absolutes zweites Backup-Ziel.
 - Ablauf-Sammelmails werden werktäglich ab 10:30 Uhr Europe/Berlin erzeugt; Produktion verlangt eine vollständige Microsoft-Graph-Mailkonfiguration und einen KAHLE-Absender.
 
 ## Noch offene Go-live-Nachweise

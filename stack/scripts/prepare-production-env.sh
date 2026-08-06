@@ -76,6 +76,9 @@ upsert_env KB_MAIL_CLIENT_ID ""
 upsert_env KB_MAIL_CLIENT_SECRET ""
 upsert_env KB_MAIL_SENDER vinci@kahle.de
 
+upsert_env KB_BACKUP_ENCRYPTION_KEY ""
+upsert_env KAHLE_BACKUP_SECONDARY_ROOT /mnt/kahle-vinci-backups
+
 upsert_env ENABLE_LOGIN_FORM False
 upsert_env ENABLE_PASSWORD_AUTH False
 
@@ -89,5 +92,5 @@ trap - ERR
 
 echo "Prepared: ${TARGET_ENV}"
 echo "Permissions: $(stat -c '%U:%G %a' "${TARGET_ENV}")"
-echo "Pending values: OPENID_PROVIDER_URL, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_CLIENT_TENANT_ID, KB_MAIL_TENANT_ID, KB_MAIL_CLIENT_ID, KB_MAIL_CLIENT_SECRET"
+echo "Pending values: OPENID_PROVIDER_URL, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_CLIENT_TENANT_ID, KB_MAIL_TENANT_ID, KB_MAIL_CLIENT_ID, KB_MAIL_CLIENT_SECRET, KB_BACKUP_ENCRYPTION_KEY"
 echo "No service was restarted and production was not exposed."

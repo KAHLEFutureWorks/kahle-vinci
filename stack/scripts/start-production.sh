@@ -32,6 +32,7 @@ required=(
   OWUI_FILE_PROXY_API_KEY DOC_WORKER_API_KEY
   OAUTH_SESSION_TOKEN_ENCRYPTION_KEY OAUTH_CLIENT_INFO_ENCRYPTION_KEY
   KB_MAIL_TENANT_ID KB_MAIL_CLIENT_ID KB_MAIL_CLIENT_SECRET KB_MAIL_SENDER
+  KB_BACKUP_ENCRYPTION_KEY KAHLE_BACKUP_SECONDARY_ROOT
 )
 
 for name in "${required[@]}"; do
@@ -52,8 +53,13 @@ if grep -Eq '(<[^>]+>|example\.com|changeme)' "${ENV_FILE}"; then
 fi
 
 root_dir="$(sed -n 's/^KAHLE_ROOT=//p' "${ENV_FILE}" | tail -n 1)"
+backup_secondary_root="$(env_value KAHLE_BACKUP_SECONDARY_ROOT)"
 if [[ -z "${root_dir}" || "${root_dir}" != /* ]]; then
   echo "ERROR: KAHLE_ROOT must be an absolute Linux path." >&2
+  exit 1
+fi
+if [[ -z "${backup_secondary_root}" || "${backup_secondary_root}" != /* ]]; then
+  echo "ERROR: KAHLE_BACKUP_SECONDARY_ROOT must be an absolute Linux path." >&2
   exit 1
 fi
 
@@ -135,6 +141,7 @@ mkdir -p \
 
 compose=(
   sudo docker compose
+  --profile operations
   --env-file "${ENV_FILE}"
   -f "${STACK_DIR}/docker-compose.yml"
   -f "${STACK_DIR}/docker-compose.prod.yml"

@@ -60,6 +60,13 @@ services:
       KB_MAIL_CLIENT_SECRET: ${KB_MAIL_CLIENT_SECRET:?KB_MAIL_CLIENT_SECRET is required}
       KB_MAIL_SENDER: ${KB_MAIL_SENDER:?KB_MAIL_SENDER is required}
 
+  kb-backup:
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 128
+    environment:
+      KB_BACKUP_ENCRYPTION_KEY: ${KB_BACKUP_ENCRYPTION_KEY:?KB_BACKUP_ENCRYPTION_KEY is required}
+
   clamav:
     mem_limit: 4g
     cpus: 2.0

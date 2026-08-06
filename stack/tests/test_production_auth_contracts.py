@@ -198,3 +198,13 @@ def test_production_requires_microsoft_graph_mail_delivery_configuration():
         assert name in production_template
     assert "Microsoft Graph mail tenant and client IDs must be valid UUIDs" in START_SCRIPT
     assert "KB_MAIL_SENDER must be a kahle.de mailbox" in START_SCRIPT
+
+def test_production_always_starts_encrypted_portal_backup_profile():
+    production_template = (STACK_DIR / "env.production.template").read_text(encoding="utf-8")
+    assert "--profile operations" in START_SCRIPT
+    assert "KB_BACKUP_ENCRYPTION_KEY KAHLE_BACKUP_SECONDARY_ROOT" in START_SCRIPT
+    assert "KAHLE_BACKUP_SECONDARY_ROOT must be an absolute Linux path" in START_SCRIPT
+    assert "KB_BACKUP_ENCRYPTION_KEY: ${KB_BACKUP_ENCRYPTION_KEY:?" in PROD_COMPOSE
+    assert "KAHLE_BACKUP_SECONDARY_ROOT=/mnt/kahle-vinci-backups" in production_template
+    assert "upsert_env KB_BACKUP_ENCRYPTION_KEY \"\"" in PREPARE_SCRIPT
+    assert "upsert_env KAHLE_BACKUP_SECONDARY_ROOT /mnt/kahle-vinci-backups" in PREPARE_SCRIPT
