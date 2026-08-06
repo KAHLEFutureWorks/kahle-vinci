@@ -52,10 +52,10 @@ def test_deactivated_owner_creates_task_and_new_owner_must_confirm():
         assert created == ["task"]
         assert ownership.tasks_for("manager")[0]["document_id"] == submitted.document_id
 
-        ownership.propose("task", "admin", "new-owner", "Neue fachliche ZustÃ¤ndigkeit")
+        ownership.propose("task", "admin", "new-owner", "Neue fachliche Zuständigkeit")
         assert ownership.tasks_for("new-owner")[0]["status"] == "pending_owner_confirmation"
         assert governance.identity("new-owner").active
-        assert ownership.confirm("task", "new-owner", True, "Ich Ã¼bernehme die Verantwortung") == "completed"
+        assert ownership.confirm("task", "new-owner", True, "Ich übernehme die Verantwortung") == "completed"
         with store.connect() as db:
             owner = db.execute("SELECT owner_user_id FROM canonical_documents WHERE document_id=?", (submitted.document_id,)).fetchone()
         assert owner["owner_user_id"] == "new-owner"
@@ -78,7 +78,7 @@ def test_unrelated_manager_cannot_change_another_owners_document():
         changes_module = load("document_changes")
         changes = changes_module.DocumentChangeService(store, governance)
         try:
-            changes.request_renewal("doc", "other-manager", "Nicht zustÃ¤ndig", True)
+            changes.request_renewal("doc", "other-manager", "Nicht zuständig", True)
             raise AssertionError("unrelated manager must be rejected")
         except changes_module.DocumentChangeError as exc:
             assert str(exc) == "renewal_forbidden"
