@@ -31,6 +31,7 @@ required=(
   N8N_ENCRYPTION_KEY SEARXNG_SECRET_KEY FILE_LINK_SECRET
   OWUI_FILE_PROXY_API_KEY DOC_WORKER_API_KEY
   OAUTH_SESSION_TOKEN_ENCRYPTION_KEY OAUTH_CLIENT_INFO_ENCRYPTION_KEY
+  KB_MAIL_TENANT_ID KB_MAIL_CLIENT_ID KB_MAIL_CLIENT_SECRET KB_MAIL_SENDER
 )
 
 for name in "${required[@]}"; do
@@ -65,6 +66,9 @@ provider_url="$(env_value OPENID_PROVIDER_URL)"
 allowed_domains="$(env_value OAUTH_ALLOWED_DOMAINS)"
 session_key="$(env_value OAUTH_SESSION_TOKEN_ENCRYPTION_KEY)"
 client_info_key="$(env_value OAUTH_CLIENT_INFO_ENCRYPTION_KEY)"
+mail_tenant_id="$(env_value KB_MAIL_TENANT_ID)"
+mail_client_id="$(env_value KB_MAIL_CLIENT_ID)"
+mail_sender="$(env_value KB_MAIL_SENDER)"
 
 if [[ "${public_hostname}" != "vinci.kahle.de" || "${webui_url}" != "https://vinci.kahle.de" ]]; then
   echo "ERROR: production identity must be vinci.kahle.de over HTTPS." >&2
@@ -84,6 +88,15 @@ fi
 
 if [[ ! "${client_id}" =~ ${uuid_pattern} ]]; then
   echo "ERROR: MICROSOFT_CLIENT_ID is not a valid UUID." >&2
+  exit 1
+fi
+if [[ ! "${mail_tenant_id}" =~ ${uuid_pattern} || ! "${mail_client_id}" =~ ${uuid_pattern} ]]; then
+  echo "ERROR: Microsoft Graph mail tenant and client IDs must be valid UUIDs." >&2
+  exit 1
+fi
+
+if [[ ! "${mail_sender}" =~ ^[A-Za-z0-9._%+-]+@kahle\.de$ ]]; then
+  echo "ERROR: KB_MAIL_SENDER must be a kahle.de mailbox." >&2
   exit 1
 fi
 

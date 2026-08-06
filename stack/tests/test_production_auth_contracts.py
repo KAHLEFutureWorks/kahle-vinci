@@ -185,3 +185,16 @@ def test_sharepoint_embedding_uses_cross_site_secure_oauth_cookies():
     assert 'WEBUI_AUTH_COOKIE_SAME_SITE: "none"' in PROD_COMPOSE
     assert 'WEBUI_SESSION_COOKIE_SECURE: "True"' in PROD_COMPOSE
     assert 'WEBUI_AUTH_COOKIE_SECURE: "True"' in PROD_COMPOSE
+
+def test_production_requires_microsoft_graph_mail_delivery_configuration():
+    env_example = (STACK_DIR / ".env.example").read_text(encoding="utf-8")
+    production_template = (STACK_DIR / "env.production.template").read_text(encoding="utf-8")
+    required = ("KB_MAIL_TENANT_ID", "KB_MAIL_CLIENT_ID", "KB_MAIL_CLIENT_SECRET", "KB_MAIL_SENDER")
+    for name in required:
+        assert f"{name}: ${{{name}:?" in PROD_COMPOSE
+        assert name in START_SCRIPT
+        assert name in PREPARE_SCRIPT
+        assert name in env_example
+        assert name in production_template
+    assert "Microsoft Graph mail tenant and client IDs must be valid UUIDs" in START_SCRIPT
+    assert "KB_MAIL_SENDER must be a kahle.de mailbox" in START_SCRIPT

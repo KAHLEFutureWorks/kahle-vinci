@@ -10,12 +10,12 @@ import requests
 
 try:
     from .mail_delivery import MicrosoftGraphMailTransport, OutboxDispatcher
-    from .maintenance import MaintenanceService
+    from .maintenance import MaintenanceService, is_workday
     from .portal_governance import SQLiteGovernanceStore
     from .quality_cases import QualityCaseService
 except ImportError:  # pragma: no cover
     from mail_delivery import MicrosoftGraphMailTransport, OutboxDispatcher
-    from maintenance import MaintenanceService
+    from maintenance import MaintenanceService, is_workday
     from portal_governance import SQLiteGovernanceStore
     from quality_cases import QualityCaseService
 
@@ -34,8 +34,19 @@ def reindex() -> None:
     response.raise_for_status()
 
 
-def run_once(service: MaintenanceService, dispatcher: OutboxDispatcher | None) -> None:
-    service.generate_expiry_digest()
+def expiry_digest_due(now: datetime, last_digest_date: date | None) -> bool:
+    local = now.astimezone(BERLIN)
+    return (
+        is_workday(local.date())
+        and (local.hour, local.minute) >= (10, 30)
+        and last_digest_date != local.date()
+    )
+
+
+def run_once(service: MaintenanceService, dispatcher: OutboxDispatcher | None,
+             *, generate_expiry_digest: bool = True) -> None:
+    if generate_expiry_digest:
+        service.generate_expiry_digest()
     service.process_pending_approvals()
     changed = service.expire_due_versions()
     trash = service.process_trash(FILES_ROOT)
@@ -57,9 +68,14 @@ def main() -> None:
     )
     if all(graph):
         dispatcher = OutboxDispatcher(service, MicrosoftGraphMailTransport(*graph))
+    last_expiry_digest: date | None = None
     while True:
+        now = datetime.now(BERLIN)
+        digest_due = expiry_digest_due(now, last_expiry_digest)
         try:
-            run_once(service, dispatcher)
+            run_once(service, dispatcher, generate_expiry_digest=digest_due)
+            if digest_due:
+                last_expiry_digest = now.date()
         except Exception as exc:
             print(f"maintenance_cycle_failed error={exc}", flush=True)
         time.sleep(max(60, int(os.getenv("KB_MAINTENANCE_INTERVAL_SECONDS", "300"))))
