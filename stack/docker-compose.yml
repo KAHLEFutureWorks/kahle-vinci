@@ -59,13 +59,21 @@ services:
        {"tool_calls":[{"name":"<tool>","parameters":{...}}]}
        RULES:
        - For every follow-up asking for more detail from KAHLE-internal knowledge, call rag_chat again. Make query standalone and carry forward the prior document/product identifier, e.g. "A1a Assessment-Framework 5 Readiness-Dimensionen". Never answer such follow-ups only from chat history.
+       - create_calendar_event is a two-step write operation. Never call it on the first request. First require an explicit title/topic, date and time, show a complete summary and ask for confirmation.
+       - Call create_calendar_event only when the current user message explicitly confirms the immediately preceding calendar summary. Never invent a title, date or time. The calendar is internal to OpenWebUI and the current tool cannot manage attendees or invitations.
        - For safe_webcaller/safe_websearch, set query to a concise search-engine query, not to the full conversational user sentence. Include main entity, aspect, region/language, and timeframe when present.
        - For current/news/latest web searches, include 2026 or the explicit date/range from the user. Do not add unrelated years.
        - Do not include chat filler in search queries, e.g. "bitte", "recherchiere", "kannst du".
        - Set lang="de-DE" and maxResults=5 when present.
        - Current year: 2026 (Europe/Berlin). Do not add any year unless the user wrote it.
-       - For file editing/conversion tasks, prefer *_save tools from the proxy.
-       - If the user asks to edit/convert/summarize an uploaded/attached file, perform one matching *_save tool call ONLY when exact filename(s) are known from the current message context.
+       - For explicit file editing/conversion tasks, prefer *_save tools from the proxy.
+       - Word/DOCX -> Markdown: file_to_md_save. Never use file_to_docx_save for a Markdown request.
+       - Word/DOCX -> PDF: docx_to_pdf_save.
+       - Uploaded-file conversion takes precedence over kahle_workflow. Do not research, summarize, rewrite or enrich the document unless explicitly requested.
+       - kahle_workflow is only for a newly generated document, not for converting an attached file.
+       - files_extract_text is the read-only tool for reading, analyzing, reviewing, checking, extracting, summarizing or comparing attached files in chat. Call it once with all exact relevant filenames. It never edits files and never creates a download.
+       - If two or more files are attached and the user asks for a comparison, differences, changes, a review, or an old/new version analysis, call files_extract_text once with all relevant file_paths. Never call file_to_md_save, file_to_docx_save, bundle_to_md_save or another *_save tool for the comparison itself.
+       - Use an *_save tool only when the user explicitly requests a converted, edited, merged, or downloadable output file and exact filename(s) are known from the current message context.
        - Exact filenames are listed in the user query block under: "Attached files in this message (use exact names for any file tool call):"
        - Use those names verbatim for file_path/file_paths.
        - If the user asks for "the attached file" and exactly one attached filename is present in the current message context, use that filename directly; do not ask for confirmation.
@@ -76,8 +84,8 @@ services:
        - Never use wildcards, placeholders, or "latest" for file_path/file_paths.
        - Never invent or guess filenames; use only real uploaded filenames from context.
        - Routing hints for attached files:
-       - convert PDF/DOCX/TXT/MD/XLSX/CSV -> markdown: file_to_md_save
-       - convert PDF/DOCX/TXT/MD/XLSX/CSV -> Word/DOCX: file_to_docx_save
+       - explicit conversion of PDF/DOCX/TXT/MD/XLSX/CSV -> downloadable markdown: file_to_md_save
+       - explicit conversion of PDF/DOCX/TXT/MD/XLSX/CSV -> downloadable Word/DOCX: file_to_docx_save
        - generated research/text -> markdown/txt/csv download: text_create_save
        - generated research/text -> Word/DOCX download: docx_create_save
        - generated research/text -> PDF download: pdf_create_save
@@ -99,6 +107,10 @@ services:
        - If a tool result contains download_url, do not reconstruct file content; return only download_url and metadata.
        If no tool: {"tool_calls":[]}
 
+      AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST: "8"
+      IONOS_MODEL_LIST_RETRIES: "3"
+      IONOS_MODEL_LIST_RETRY_DELAY_SECONDS: "0.5"
+      IONOS_MODEL_FALLBACK_IDS: "mistralai/Mistral-Small-24B-Instruct,openai/gpt-oss-120b,Qwen/Qwen3.5-397B-A17B"
       ENABLE_DIRECT_CONNECTIONS: "True"
       TOOL_SERVER_CONNECTIONS: >-
         [{"type":"openapi","url":"http://owui-file-proxy:8091","spec_type":"url","spec":"","path":"openapi.json","auth_type":"bearer","key":"${OWUI_FILE_PROXY_API_KEY}","config":{"enable":true},"info":{"id":"doc-worker","name":"Document Worker","description":"Local DOCX/XLSX/PDF file editing tools"}}]
@@ -108,10 +120,16 @@ services:
       KB_ROOT: /knowledgebases
       KB_STATE_PATH: /kb-sync-state/kb-sync-state.json
       KB_SYNC_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
+      KB_ADMIN_API_URL: http://kb-admin-api:8092
+      KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      KB_SYNC_URL: http://kb-sync:8093
+      RERANKER_URL: http://reranker:80
+      HYBRID_COLLECTION_ALIAS: vinci_knowledge
     volumes:
       - open-webui:/app/backend/data
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/kb-sync-state:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/routers/openai.py:/app/backend/open_webui/routers/openai.py:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/middleware.py:/app/backend/open_webui/utils/middleware.py:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/misc.py:/app/backend/open_webui/utils/misc.py:ro"
     depends_on:
@@ -120,6 +138,8 @@ services:
       owui-file-proxy:
         condition: service_healthy
       qdrant:
+        condition: service_started
+      reranker:
         condition: service_started
     networks:
       - appnet
@@ -193,11 +213,22 @@ services:
       QDRANT_URL: http://qdrant:6333
       OPENWEBUI_URL: http://open-webui:8080
       KB_SYNC_URL: http://kb-sync:8093
+      DOCUMENT_WORKER_URL: http://document-worker:8090
+      DOCUMENT_WORKER_API_KEY: ${DOC_WORKER_API_KEY:?DOC_WORKER_API_KEY is required}
+      KB_CLAMAV_HOST: clamav
+      KB_CLAMAV_PORT: "3310"
       IONOS_OPENAI_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
       IONOS_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
       IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
+      IONOS_CHAT_MODEL_DEFAULT: ${IONOS_CHAT_MODEL_DEFAULT:-mistralai/Mistral-Small-24B-Instruct}
       KB_ADMIN_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
-      KB_ADMIN_MAX_UPLOAD_BYTES: "26214400"
+      KB_ADMIN_MAX_UPLOAD_BYTES: "52428800"
+      KB_PORTAL_DB_PATH: /portal-data/wissensportal.sqlite3
+      KB_PORTAL_STEP_UP_SECRET: ${KB_PORTAL_STEP_UP_SECRET:-}
+      KB_PORTAL_ENTRA_TENANT_ID: ${MICROSOFT_CLIENT_TENANT_ID:-}
+      KB_PORTAL_ENTRA_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      KB_PORTAL_ENTRA_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      KB_PORTAL_ENTRA_REDIRECT_URI: ${KB_PORTAL_ENTRA_REDIRECT_URI:-}
       KB_ADMIN_TRASH_RETENTION_DAYS: "30"
       KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
       KB_ADMIN_UNLOCK_CODE_HASH: ${KB_ADMIN_UNLOCK_CODE_HASH:-}
@@ -208,6 +239,7 @@ services:
     volumes:
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/state:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-portal-data:/portal-data"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=5).getcode()==200 else 1)"]
       interval: 20s
@@ -221,6 +253,98 @@ services:
         condition: service_started
       kb-sync:
         condition: service_started
+      document-worker:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    networks:
+      - appnet
+
+  kb-maintenance:
+    build:
+      context: ./kb-admin-api
+      dockerfile: Dockerfile
+    container_name: kb-maintenance
+    restart: unless-stopped
+    command: ["python", "-m", "app.maintenance_worker"]
+    environment:
+      KB_PORTAL_DB_PATH: /portal-data/wissensportal.sqlite3
+      KB_PORTAL_FILES_ROOT: /portal-data/files
+      KB_SYNC_URL: http://kb-sync:8093
+      KB_SYNC_INTERNAL_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      KB_MAINTENANCE_INTERVAL_SECONDS: "300"
+      KB_MAIL_TENANT_ID: ${KB_MAIL_TENANT_ID:-}
+      KB_MAIL_CLIENT_ID: ${KB_MAIL_CLIENT_ID:-}
+      KB_MAIL_CLIENT_SECRET: ${KB_MAIL_CLIENT_SECRET:-}
+      KB_MAIL_SENDER: ${KB_MAIL_SENDER:-}
+    volumes:
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-portal-data:/portal-data"
+    depends_on:
+      kb-admin-api:
+        condition: service_healthy
+      kb-sync:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - appnet
+
+  kb-backup:
+    profiles: ["operations"]
+    build:
+      context: ./kb-admin-api
+      dockerfile: Dockerfile
+    container_name: kb-backup
+    restart: unless-stopped
+    command: ["python", "-m", "app.backup_worker"]
+    environment:
+      KB_PORTAL_ROOT: /portal-data
+      KB_SYNC_STATE_ROOT: /kb-sync-state
+      KB_BACKUP_PRIMARY_ROOT: /backups/primary
+      KB_BACKUP_SECONDARY_ROOT: /backups-secondary
+      KB_BACKUP_ENCRYPTION_KEY: ${KB_BACKUP_ENCRYPTION_KEY:-}
+    volumes:
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-portal-data:/portal-data:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/kb-sync-state:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/backups:/backups"
+      - "${KAHLE_BACKUP_SECONDARY_ROOT:-C:/kahle-vinci-backups}:/backups-secondary"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - appnet
+
+  clamav:
+    image: clamav/clamav:1.5.3-debian13-slim
+    container_name: clamav
+    restart: unless-stopped
+    expose:
+      - "3310"
+    volumes:
+      - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    networks:
+      - appnet
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: reranker
+    restart: unless-stopped
+    command: ["--model-id", "Alibaba-NLP/gte-multilingual-reranker-base", "--auto-truncate"]
+    environment:
+      HUGGINGFACE_HUB_CACHE: /data
+    volumes:
+      - reranker_data:/data
+    expose:
+      - "80"
     networks:
       - appnet
 
@@ -254,7 +378,7 @@ services:
     environment:
       STORAGE_DIR: /data
       TTL_HOURS: "24"
-      MAX_FILE_MB: "30"
+      MAX_FILE_MB: "50"
       TOOL_API_KEY: ${DOC_WORKER_API_KEY:?DOC_WORKER_API_KEY is required}
     volumes:
       - document_worker_data:/data
@@ -333,14 +457,24 @@ services:
       IONOS_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
       IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
       KB_SYNC_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
+      KB_ADMIN_API_URL: http://kb-admin-api:8092
+      KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      KB_SYNC_URL: http://kb-sync:8093
+      RERANKER_URL: http://reranker:80
+      HYBRID_COLLECTION_ALIAS: vinci_knowledge
       KB_SYNC_DEBOUNCE_SECONDS: "2"
       KB_SYNC_RECONCILE_INTERVAL_SECONDS: "300"
       KB_SYNC_CONTROL_PORT: "8093"
+      KB_HYBRID_SNAPSHOT_PATH: /state/hybrid-bm25.json
+      KB_SYNC_INTERNAL_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      PORTAL_DB_PATH: /portal-data/wissensportal.sqlite3
+      PORTAL_FILES_ROOT: /portal-data/files
     expose:
       - "8093"
     volumes:
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/state"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-portal-data:/portal-data:ro"
     depends_on:
       qdrant:
         condition: service_started
@@ -369,6 +503,8 @@ volumes:
     name: open-webui
   qdrant_data: {}
   document_worker_data: {}
+  clamav_data: {}
+  reranker_data: {}
 
 networks:
   appnet:

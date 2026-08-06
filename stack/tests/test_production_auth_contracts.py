@@ -31,8 +31,8 @@ def test_open_webui_is_sso_only_and_uses_secure_oauth_cookies():
         'OAUTH_AUTO_REDIRECT: "True"',
         'WEBUI_SESSION_COOKIE_SECURE: "True"',
         'WEBUI_AUTH_COOKIE_SECURE: "True"',
-        'WEBUI_SESSION_COOKIE_SAME_SITE: "lax"',
-        'WEBUI_AUTH_COOKIE_SAME_SITE: "lax"',
+        'WEBUI_SESSION_COOKIE_SAME_SITE: "none"',
+        'WEBUI_AUTH_COOKIE_SAME_SITE: "none"',
         'OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "False"',
         'CORS_ALLOW_ORIGIN: ${WEBUI_URL:?WEBUI_URL is required}',
     )
@@ -154,8 +154,34 @@ def test_vector_dashboard_second_gate_is_required_in_production():
 
 def test_vector_dashboard_static_and_page_routes_require_admin_session():
     assert CADDYFILE.count("forward_auth kb-admin-api:8092") == 2
-    assert CADDYFILE.count("uri /session") == 2
+    assert CADDYFILE.count("uri /portal/session") == 2
     static_position = CADDYFILE.index("handle @vector_static")
-    page_position = CADDYFILE.index("handle /admin/vector/*")
+    page_position = CADDYFILE.index("handle /wissen/*")
     assert CADDYFILE.index("forward_auth kb-admin-api:8092", static_position) < page_position
     assert CADDYFILE.index("forward_auth kb-admin-api:8092", page_position) > page_position
+
+
+def test_sharepoint_embedding_is_narrow_and_sensitive_routes_remain_blocked():
+    assert "Content-Security-Policy \"frame-ancestors 'self' https://kahlekg.sharepoint.com\"" in CADDYFILE
+    assert "-X-Frame-Options" in CADDYFILE
+    assert CADDYFILE.count("Content-Security-Policy \"frame-ancestors 'none'\"") == 4
+    assert CADDYFILE.count('X-Frame-Options "DENY"') == 4
+    for route in (
+        "handle /files/*",
+        "handle_path /wissen/api/*",
+        "handle @vector_static",
+        "handle /wissen/*",
+    ):
+        route_position = CADDYFILE.index(route)
+        next_handle = CADDYFILE.find("\n\thandle", route_position + len(route))
+        route_block = CADDYFILE[route_position : next_handle if next_handle != -1 else len(CADDYFILE)]
+        assert "frame-ancestors 'none'" in route_block
+        assert 'X-Frame-Options "DENY"' in route_block
+
+
+def test_sharepoint_embedding_uses_cross_site_secure_oauth_cookies():
+    """OAuth state and auth cookies must survive the SharePoint iframe boundary."""
+    assert 'WEBUI_SESSION_COOKIE_SAME_SITE: "none"' in PROD_COMPOSE
+    assert 'WEBUI_AUTH_COOKIE_SAME_SITE: "none"' in PROD_COMPOSE
+    assert 'WEBUI_SESSION_COOKIE_SECURE: "True"' in PROD_COMPOSE
+    assert 'WEBUI_AUTH_COOKIE_SECURE: "True"' in PROD_COMPOSE

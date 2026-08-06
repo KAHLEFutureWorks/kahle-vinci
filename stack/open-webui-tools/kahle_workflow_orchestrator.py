@@ -971,12 +971,15 @@ def create_dynamic_form(filename: str, output_format: str, schema: dict[str, Any
 class Tools:
     class Valves(BaseModel):
         QDRANT_URL: str = Field(default="http://qdrant:6333", description="Interne Qdrant URL.")
+        PORTAL_API_URL: str = Field(default="http://kb-admin-api:8092")
+        KB_SYNC_URL: str = Field(default="http://kb-sync:8093")
+        INTERNAL_API_KEY: str = Field(default="")
+        RERANKER_URL: str = Field(default="http://reranker:80")
+        HYBRID_COLLECTION_ALIAS: str = Field(default="vinci_knowledge")
         IONOS_OPENAI_BASE_URL: str = Field(default="", description="Leer nutzt RAG_OPENAI_API_BASE_URL.")
         IONOS_API_KEY: str = Field(default="", description="Leer nutzt RAG_OPENAI_API_KEY/OPENAI_API_KEY.")
         IONOS_EMBEDDING_MODEL: str = Field(default="", description="Leer nutzt RAG_EMBEDDING_MODEL oder BAAI/bge-m3.")
-        COLLECTIONS_CSV: str = Field(default="kahleallgemein,kahlekontext,kahlerichtlinien")
         RAG_MAX_CHUNKS: int = Field(default=6)
-        RAG_THRESHOLD: float = Field(default=0.45)
         N8N_SAFE_WEBSEARCH_WEBHOOK_URL: str = Field(default="", description="Leer nutzt Env N8N_SAFE_WEBSEARCH_WEBHOOK_URL.")
         N8N_SAFE_WEBSEARCH_API_KEY: str = Field(default="", description="Leer nutzt Env N8N_SAFE_WEBSEARCH_API_KEY.")
         TIMEOUT_S: int = Field(default=60)
@@ -1027,7 +1030,7 @@ class Tools:
         download_format = resolve_explicit_download_format(auftrag, output_format)
         if _looks_like_interactive_form_request(auftrag, download_format):
             rag_query=f"{auftrag} zentrale Inhalte Regeln Pflichten Ausnahmen Prozesse Prüfkriterien"
-            rag_result=parse_rag_result(self._run_internal_rag(rag_query))
+            rag_result=parse_rag_result(self._run_internal_rag(rag_query, __user__))
             if not rag_result.get("found") or rag_result.get("error"):
                 return _json({"workflow":"kahle_workflow_execute","auftrag":auftrag,"intent":"interactive_dynamic_form","status":"blocked","error":rag_result.get("error") or "Keine belastbare interne Wissensgrundlage gefunden.","answer_instruction":"Gib ausschließlich kurz aus, dass ohne passenden internen Kontext kein belastbares Formular erzeugt wurde."})
             form_context=self._expand_form_source_context(str(rag_result.get("context") or ""))
@@ -1156,7 +1159,7 @@ class Tools:
 
         if intent in {"internal", "mixed"}:
             await mark_task("1", "in_progress")
-            rag_raw = self._run_internal_rag(auftrag)
+            rag_raw = self._run_internal_rag(auftrag, __user__)
             rag_result = parse_rag_result(rag_raw)
             if rag_result.get("found") and not rag_result.get("error"):
                 await mark_task("1", "completed")
@@ -1283,106 +1286,44 @@ class Tools:
             return
 
     def _expand_form_source_context(self, context: str) -> str:
-        """Expand the best semantic hit to the complete source document for comprehensive forms."""
-        match=re.search(r"\[#\d+\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*chunk",str(context or ""))
-        if not match: return context
-        collection=match.group(1).strip(); source_path=match.group(2).strip()
-        if not collection or not source_path: return context
-        qdrant_url=self.valves.QDRANT_URL or _env("QDRANT_URI",default="http://qdrant:6333")
-        try:
-            result=_post_json(f"{qdrant_url.rstrip('/')}/collections/{collection}/points/scroll",{"filter":{"must":[{"key":"source_path","match":{"value":source_path}}]},"limit":100,"with_payload":True,"with_vector":False},timeout=int(self.valves.TIMEOUT_S)).get("result") or {}
-            points=result.get("points") or []
-            chunks=[]
-            for point in points:
-                payload=point.get("payload") or {}; value=str(payload.get("text") or payload.get("content") or "").strip()
-                if value: chunks.append((int(payload.get("chunk_index") or 0),value))
-            chunks.sort(key=lambda item:item[0]); expanded="\n\n".join(value for _,value in chunks)
-            return expanded[:30000] if len(expanded)>=500 else context
-        except Exception:
-            return context
+        return str(context or "")[:30000]
 
-    def _run_internal_rag(self, query: str) -> str:
+    def _run_internal_rag(self, query: str, user: dict | None) -> str:
         base_url = self.valves.IONOS_OPENAI_BASE_URL or _env(
-            "RAG_OPENAI_API_BASE_URL",
-            "OPENAI_API_BASE_URL",
+            "RAG_OPENAI_API_BASE_URL", "OPENAI_API_BASE_URL",
             default="https://openai.inference.de-txl.ionos.com/v1",
         )
         api_key = self.valves.IONOS_API_KEY or _env("RAG_OPENAI_API_KEY", "OPENAI_API_KEY")
+        internal_key = self.valves.INTERNAL_API_KEY or _env("KB_ADMIN_MAINTENANCE_API_KEY")
         model = self.valves.IONOS_EMBEDDING_MODEL or _env("RAG_EMBEDDING_MODEL", default="BAAI/bge-m3")
-        qdrant_url = self.valves.QDRANT_URL or _env("QDRANT_URI", default="http://qdrant:6333")
-        timeout = int(self.valves.TIMEOUT_S)
-
-        if not api_key:
-            return "KAHLE_RAG_RESULT\nFOUND: false\nERROR: IONOS API Key fehlt."
-
+        user_id = str((user or {}).get("id") or ((user or {}).get("user") or {}).get("id") or "").strip()
+        if not api_key or not internal_key or not user_id:
+            return "KAHLE_RAG_RESULT\nFOUND: false\nERROR: Autorisierter Hybrid-Retrieval-Kontext fehlt."
         try:
-            body = _post_json(
-                f"{base_url.rstrip('/')}/embeddings",
-                {"model": model, "input": query},
+            embedding = _post_json(
+                f"{base_url.rstrip('/')}/embeddings", {"model": model, "input": query},
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                timeout=timeout,
+                timeout=int(self.valves.TIMEOUT_S),
             )
-            vector = ((body.get("data") or [{}])[0]).get("embedding")
-            if not isinstance(vector, list):
-                raise ValueError("Embedding API returned no vector")
-
-            chunks: list[dict[str, Any]] = []
-            for collection in [c.strip() for c in self.valves.COLLECTIONS_CSV.split(",") if c.strip()]:
-                result = _post_json(
-                    f"{qdrant_url.rstrip('/')}/collections/{collection}/points/search",
-                    {
-                        "vector": vector,
-                        "limit": max(int(self.valves.RAG_MAX_CHUNKS), 3),
-                        "with_payload": True,
-                        "with_vector": False,
-                    },
-                    timeout=timeout,
-                ).get("result") or []
-                for item in result:
-                    payload = item.get("payload") or {}
-                    text = payload.get("text") or payload.get("content") or ""
-                    if not text:
-                        continue
-                    chunks.append(
-                        {
-                            "collection": payload.get("kb") or collection,
-                            "source_path": payload.get("source_path") or "",
-                            "chunk_index": payload.get("chunk_index"),
-                            "score": float(item.get("score") or 0.0),
-                            "text": str(text),
-                        }
-                    )
+            vector = ((embedding.get("data") or [{}])[0]).get("embedding")
+            scope = PortalScopeClient(self.valves.PORTAL_API_URL, internal_key).resolve(user_id)
+            retriever = QdrantHybridRetriever(
+                self.valves.QDRANT_URL, self.valves.HYBRID_COLLECTION_ALIAS,
+                RemoteSparseQueryEncoder(self.valves.KB_SYNC_URL, internal_key),
+                TeiReranker(self.valves.RERANKER_URL), timeout=int(self.valves.TIMEOUT_S),
+            )
+            chunks = retriever.retrieve(query, vector, scope, result_limit=min(8, max(5, int(self.valves.RAG_MAX_CHUNKS))))
         except Exception as exc:
-            return f"KAHLE_RAG_RESULT\nFOUND: false\nERROR: {exc}"
-
-        chunks.sort(key=lambda item: item["score"], reverse=True)
-        top = chunks[: int(self.valves.RAG_MAX_CHUNKS)]
-        top_score = top[0]["score"] if top else 0.0
-        threshold = float(self.valves.RAG_THRESHOLD)
-        if not top or top_score < threshold:
-            return (
-                "KAHLE_RAG_RESULT\n"
-                "FOUND: false\n"
-                f"QUERY: {query}\n"
-                f"META: top1_score={top_score:.3f} threshold={threshold:.2f}"
-            )
-
+            return f"KAHLE_RAG_RESULT\nFOUND: false\nERROR: {type(exc).__name__}"
+        if not chunks:
+            return "KAHLE_RAG_RESULT\nFOUND: false\nERROR: Keine verl?ssliche freigegebene Information gefunden."
         parts = []
-        for index, chunk in enumerate(top, start=1):
-            header = (
-                f"[#{index} | {chunk['collection']} | {chunk['source_path']} "
-                f"| chunk {chunk['chunk_index']} | score {chunk['score']:.3f}]"
+        for index, chunk in enumerate(chunks, 1):
+            parts.append(
+                f"[#{index} | {chunk.title} | {chunk.source_url} | Version {chunk.version_id} | Rerank {chunk.rerank_score:.3f}]\n"
+                f"{chunk.parent_content}"
             )
-            parts.append(f"{header}\n{chunk['text'][:1800]}".strip())
-
-        return (
-            "KAHLE_RAG_RESULT\n"
-            "FOUND: true\n"
-            f"QUERY: {query}\n"
-            f"META: top1_score={top_score:.3f} threshold={threshold:.2f} model={model}\n\n"
-            "KONTEXT (zitierbar mit [#]):\n"
-            f"{chr(10).join(parts)}"
-        )
+        return "KAHLE_RAG_RESULT\nFOUND: true\nKONTEXT (zitierbar mit [#]):\n" + "\n\n".join(parts)
 
     def _run_external_websearch(self, query: str, max_results: int, user: dict | None) -> str:
         import requests

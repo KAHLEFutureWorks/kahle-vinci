@@ -12,16 +12,81 @@ import tempfile
 import threading
 import time
 import unicodedata
+import uuid
+from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 import requests
 from docx import Document
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse, Response as FastAPIResponse
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
+
+try:
+    from .portal_governance import (
+        GovernanceError,
+        PortalGovernance,
+        SQLiteGovernanceStore,
+        serialize as serialize_governance,
+    )
+except ImportError:  # pragma: no cover - supports the existing file-based contract harness
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from portal_governance import (  # type: ignore[no-redef]
+        GovernanceError,
+        PortalGovernance,
+        SQLiteGovernanceStore,
+        serialize as serialize_governance,
+    )
+
+try:
+    from .step_up_auth import MicrosoftOIDCAdapter, StepUpAuthority, StepUpError
+except ImportError:  # pragma: no cover
+    from step_up_auth import MicrosoftOIDCAdapter, StepUpAuthority, StepUpError
+
+try:
+    from .document_lifecycle import Analysis, DocumentLifecycle, LifecycleError
+    from .audit_export import AuditExporter
+    from .maintenance import MaintenanceError, MaintenanceService
+    from .quality_cases import QualityCaseError, QualityCaseService
+    from .legacy_migration import LegacyMigrationService
+    from .markdown_correction import IonosMarkdownCorrector, MarkdownCorrectionError, MarkdownCorrectionService
+    from .quality_dashboard import QualityDashboard
+    from .document_changes import DocumentChangeError, DocumentChangeService
+    from .ownership import OwnershipError, OwnershipService
+    from .rag_metadata import RAGMetadataWriter
+    from .content_classification import ContentConfidentialityClassifier
+    from .global_analysis import (
+        CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
+    )
+    from .secure_ingest import (
+        ClamAVScanner, DocumentWorkerAdapter, IngestError, PromptInjectionInspector,
+        QuarantineStorage, SecureFileInspector, SecureIngestPipeline,
+    )
+except ImportError:  # pragma: no cover
+    from document_lifecycle import Analysis, DocumentLifecycle, LifecycleError
+    from audit_export import AuditExporter
+    from maintenance import MaintenanceError, MaintenanceService
+    from quality_cases import QualityCaseError, QualityCaseService
+    from legacy_migration import LegacyMigrationService
+    from markdown_correction import IonosMarkdownCorrector, MarkdownCorrectionError, MarkdownCorrectionService
+    from quality_dashboard import QualityDashboard
+    from document_changes import DocumentChangeError, DocumentChangeService
+    from ownership import OwnershipError, OwnershipService
+    from rag_metadata import RAGMetadataWriter
+    from content_classification import ContentConfidentialityClassifier
+    from global_analysis import (
+        CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
+    )
+    from secure_ingest import (
+        ClamAVScanner, DocumentWorkerAdapter, IngestError, PromptInjectionInspector,
+        QuarantineStorage, SecureFileInspector, SecureIngestPipeline,
+    )
 
 APP_VERSION = "0.2.0"
 SUPPORTED_EXTENSIONS = {".md", ".txt", ".csv", ".pdf", ".docx"}
@@ -52,6 +117,7 @@ DEV_AUTH_BYPASS = os.getenv("KB_ADMIN_DEV_AUTH_BYPASS", "false").lower() == "tru
 MAX_UPLOAD_BYTES = int(os.getenv("KB_ADMIN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 TRASH_RETENTION_DAYS = max(1, int(os.getenv("KB_ADMIN_TRASH_RETENTION_DAYS", "30")))
 MAINTENANCE_API_KEY = os.getenv("KB_ADMIN_MAINTENANCE_API_KEY", "").strip()
+KB_SYNC_INTERNAL_API_KEY = os.getenv("KB_SYNC_INTERNAL_API_KEY", MAINTENANCE_API_KEY).strip()
 UNLOCK_CODE_HASH = os.getenv("KB_ADMIN_UNLOCK_CODE_HASH", "").strip()
 UNLOCK_SESSION_SECRET = os.getenv("KB_ADMIN_UNLOCK_SESSION_SECRET", "").strip()
 UNLOCK_TTL_SECONDS = max(300, int(os.getenv("KB_ADMIN_UNLOCK_TTL_SECONDS", "28800")))
@@ -67,6 +133,69 @@ VERSIONS_ROOT = KB_ROOT / ".versions"
 TRASH_ROOT = KB_ROOT / ".trash"
 AUDIT_ROOT = KB_ROOT / ".admin"
 AUDIT_PATH = AUDIT_ROOT / "audit.jsonl"
+PORTAL_DB_PATH = Path(
+    os.getenv("KB_PORTAL_DB_PATH", "/portal-data/wissensportal.sqlite3")
+).resolve()
+PORTAL_GOVERNANCE = PortalGovernance(SQLiteGovernanceStore(PORTAL_DB_PATH))
+DOCUMENT_LIFECYCLE = DocumentLifecycle(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
+MAINTENANCE = MaintenanceService(PORTAL_GOVERNANCE.store)
+AUDIT_EXPORTER = AuditExporter(PORTAL_GOVERNANCE.store)
+QUALITY_CASES = QualityCaseService(PORTAL_GOVERNANCE.store)
+DOCUMENT_CHANGES = DocumentChangeService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
+OWNERSHIP = OwnershipService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
+GLOBAL_CORPUS = GlobalCorpus(PORTAL_GOVERNANCE.store)
+GLOBAL_ANALYZER = GlobalDocumentAnalyzer(
+    GLOBAL_CORPUS,
+    IonosEmbeddingProvider(IONOS_BASE_URL, IONOS_API_KEY, EMBEDDING_MODEL) if IONOS_API_KEY else None,
+)
+PORTAL_FILES_ROOT = Path(os.getenv("KB_PORTAL_FILES_ROOT", "/portal-data/files"))
+RAG_METADATA = RAGMetadataWriter(PORTAL_GOVERNANCE.store, PORTAL_FILES_ROOT)
+CONFIDENTIALITY_CLASSIFIER = ContentConfidentialityClassifier()
+SECURE_INGEST = SecureIngestPipeline(
+    SecureFileInspector(max_bytes=MAX_UPLOAD_BYTES),
+    ClamAVScanner(host=os.getenv("KB_CLAMAV_HOST", "clamav"), port=int(os.getenv("KB_CLAMAV_PORT", "3310"))),
+    DocumentWorkerAdapter(os.getenv("DOCUMENT_WORKER_URL", "http://document-worker:8090"), os.getenv("DOCUMENT_WORKER_API_KEY", "")),
+    QuarantineStorage(PORTAL_FILES_ROOT),
+    PromptInjectionInspector(),
+)
+LEGACY_MIGRATION = LegacyMigrationService(
+    PORTAL_GOVERNANCE, DOCUMENT_LIFECYCLE, GLOBAL_ANALYZER, GLOBAL_CORPUS,
+    QuarantineStorage(PORTAL_FILES_ROOT),
+)
+MARKDOWN_CORRECTION = MarkdownCorrectionService(
+    PORTAL_GOVERNANCE, DOCUMENT_LIFECYCLE, GLOBAL_ANALYZER, GLOBAL_CORPUS,
+    QuarantineStorage(PORTAL_FILES_ROOT),
+    IonosMarkdownCorrector(
+        IONOS_BASE_URL, IONOS_API_KEY,
+        os.getenv("IONOS_CHAT_MODEL_DEFAULT", "mistralai/Mistral-Small-24B-Instruct"),
+    ) if IONOS_API_KEY else None,
+)
+QUALITY_DASHBOARD = QualityDashboard(PORTAL_GOVERNANCE.store, Path(os.getenv("KB_BACKUP_STATE_PATH", "/backups/primary/backup-state.json")))
+STEP_UP_AUTHORITY: StepUpAuthority | None = None
+_STEP_UP_SECRET = os.getenv("KB_PORTAL_STEP_UP_SECRET", "").strip()
+_ENTRA_TENANT_ID = os.getenv("KB_PORTAL_ENTRA_TENANT_ID", "").strip()
+_ENTRA_CLIENT_ID = os.getenv("KB_PORTAL_ENTRA_CLIENT_ID", "").strip()
+_ENTRA_CLIENT_SECRET = os.getenv("KB_PORTAL_ENTRA_CLIENT_SECRET", "").strip()
+_ENTRA_REDIRECT_URI = os.getenv("KB_PORTAL_ENTRA_REDIRECT_URI", "").strip()
+if all(
+    (
+        _STEP_UP_SECRET,
+        _ENTRA_TENANT_ID,
+        _ENTRA_CLIENT_ID,
+        _ENTRA_CLIENT_SECRET,
+        _ENTRA_REDIRECT_URI,
+    )
+):
+    STEP_UP_AUTHORITY = StepUpAuthority(
+        PORTAL_GOVERNANCE.store,
+        MicrosoftOIDCAdapter(
+            tenant_id=_ENTRA_TENANT_ID,
+            client_id=_ENTRA_CLIENT_ID,
+            client_secret=_ENTRA_CLIENT_SECRET,
+            redirect_uri=_ENTRA_REDIRECT_URI,
+        ),
+        signing_secret=_STEP_UP_SECRET,
+    )
 
 
 app = FastAPI(
@@ -109,6 +238,148 @@ class PurgeCollectionRequest(BaseModel):
 
 class UnlockRequest(BaseModel):
     code: str = Field(..., min_length=8, max_length=256)
+
+
+class PortalRoleRequest(BaseModel):
+    role: str = Field(..., pattern=r"^(employee|manager|admin|portal_admin)$")
+
+
+class PortalActivationRequest(BaseModel):
+    active: bool
+
+
+class PortalManagerRequest(BaseModel):
+    manager_user_id: str | None = None
+
+
+class PortalDelegationRequest(BaseModel):
+    manager_user_id: str = Field(..., min_length=1, max_length=100)
+    delegate_user_id: str = Field(..., min_length=1, max_length=100)
+    valid_from: str | None = None
+    valid_until: str | None = None
+
+
+class PortalAbsenceRequest(BaseModel):
+    manager_user_id: str = Field(..., min_length=1, max_length=100)
+    absent_from: str | None = None
+    absent_until: str | None = None
+    reason: str = Field(..., max_length=1000)
+
+
+class PortalAccessRequest(BaseModel):
+    knowledgebase_id: str = Field(..., min_length=1, max_length=100)
+    can_read: bool
+    can_upload: bool
+
+
+class PortalRagFeedbackRequest(BaseModel):
+    reason: str = Field(..., max_length=60)
+    comment: str = Field("", max_length=2000)
+    question: str = Field(..., max_length=8000)
+    answer: str = Field(..., max_length=16000)
+    sources: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
+    passages: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    request_id: str = Field(..., min_length=1, max_length=200)
+
+
+class PortalIncidentCommentRequest(BaseModel):
+    comment: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalMigrationStageRequest(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+
+
+class PortalMarkdownRevisionRequest(BaseModel):
+    instruction: str = Field("", max_length=4000)
+    replacement_markdown: str = Field("", max_length=2_000_000)
+    reason: str = Field(..., min_length=3, max_length=2000)
+    confirmed: bool
+
+
+class PortalRemovalRequest(BaseModel):
+    document_id: str = Field(..., min_length=1, max_length=100)
+    kind: str = Field(..., pattern=r"^(deactivate|delete)$")
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalRemovalDecisionRequest(BaseModel):
+    approve: bool
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalRestoreRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalLegalHoldRequest(BaseModel):
+    enabled: bool
+    reason: str = Field(..., min_length=3, max_length=2000)
+    review_at: str | None = None
+
+
+class PortalRenewalRequest(BaseModel):
+    document_id: str = Field(..., min_length=1, max_length=100)
+    reason: str = Field(..., min_length=3, max_length=2000)
+    confirmed: bool
+
+
+class PortalConfidentialityRequest(BaseModel):
+    document_id: str = Field(..., min_length=1, max_length=100)
+    desired: str = Field(..., pattern=r"^(internal|restricted|confidential)$")
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalDocumentChangeDecisionRequest(BaseModel):
+    approve: bool
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalOwnershipProposalRequest(BaseModel):
+    proposed_owner_user_id: str = Field(..., min_length=1, max_length=200)
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalOwnershipConfirmationRequest(BaseModel):
+    accept: bool
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalKnowledgebaseChangeRequest(BaseModel):
+    kind: str = Field(..., pattern=r"^(create|rename|archive|delete)$")
+    knowledgebase_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+class PortalKnowledgebaseDecisionRequest(BaseModel):
+    approve: bool
+    reason: str = Field(..., min_length=3, max_length=1000)
+
+class PortalRetrievalScopeRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=200)
+
+
+class PortalCaseActionRequest(BaseModel):
+    action: str = Field(..., pattern=r"^(create|replace|publish_existing|discard)$")
+
+
+class PortalCaseDecisionRequest(BaseModel):
+    decision: str = Field(..., pattern=r"^(approve|reject|escalate)$")
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalUploadResponse(BaseModel):
+    case_id: str
+    document_id: str
+    version_id: str
+    status: str
+    owner_email: str
+    prompt_injection_risk: str
+    confidentiality: str
+    confidentiality_reason: str
+    requires_admin: bool
+    exact_duplicate_document_id: str | None = None
+    matches: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _collection_names() -> tuple[str, ...]:
@@ -389,7 +660,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def require_admin(request: Request) -> dict[str, Any]:
+def require_openwebui_user(request: Request) -> dict[str, Any]:
     if DEV_AUTH_BYPASS:
         return {"id": "local-admin", "name": "Lokale Vorschau", "email": "admin@local", "role": "admin"}
     forwarded: dict[str, str] = {}
@@ -412,10 +683,63 @@ def require_admin(request: Request) -> dict[str, Any]:
         user = response.json()
     except ValueError as exc:
         raise HTTPException(status_code=502, detail="invalid_auth_response") from exc
+    return user
+
+
+def require_admin(request: Request) -> dict[str, Any]:
+    user = require_openwebui_user(request)
     if str(user.get("role") or "").lower() != "admin":
         raise HTTPException(status_code=403, detail="admin_role_required")
     return user
 
+
+def require_portal_identity(
+    user: dict[str, Any] = Depends(require_openwebui_user),
+) -> dict[str, Any]:
+    user_id = str(user.get("id") or "").strip()
+    email = str(user.get("email") or "").strip()
+    display_name = str(user.get("name") or user.get("display_name") or email).strip()
+    if not user_id or not email:
+        raise HTTPException(status_code=502, detail="openwebui_identity_incomplete")
+    try:
+        identity = PORTAL_GOVERNANCE.sync_identity(
+            user_id=user_id,
+            email=email,
+            display_name=display_name,
+            active=True,
+            bootstrap_portal_admin=str(user.get("role") or "").lower() == "admin",
+        )
+    except GovernanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not identity.active:
+        raise HTTPException(status_code=403, detail="portal_user_inactive")
+    return {**serialize_governance(identity), "openwebui_role": user.get("role")}
+
+
+def require_fresh_step_up(request: Request, identity: dict[str, Any]) -> None:
+    if DEV_AUTH_BYPASS:
+        return
+    if STEP_UP_AUTHORITY is None:
+        raise HTTPException(status_code=503, detail="microsoft_step_up_not_configured")
+    proof = request.cookies.get(StepUpAuthority.COOKIE_NAME, "")
+    try:
+        STEP_UP_AUTHORITY.verify(proof, user_id=identity["user_id"])
+    except StepUpError as exc:
+        raise HTTPException(
+            status_code=428,
+            detail="fresh_microsoft_authentication_required",
+        ) from exc
+    PORTAL_GOVERNANCE.record_audit(
+        identity["user_id"], "step_up_verified", "user", identity["user_id"], {}
+    )
+
+def _portal_call(call: Callable[[], Any], *, forbidden_status: int = 403) -> Any:
+    try:
+        return call()
+    except GovernanceError as exc:
+        detail = str(exc)
+        status = 404 if detail.startswith("unknown_") else 409 if detail.endswith("_required") else forbidden_status
+        raise HTTPException(status_code=status, detail=detail) from exc
 
 def _b64url_encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
@@ -525,7 +849,23 @@ def _trigger_reindex(collection: str, relative_path: str = "") -> dict[str, Any]
         response = requests.post(
             f"{KB_SYNC_URL}/reindex",
             json={"collection": collection, "path": relative_path},
+            headers={"X-API-Key": KB_SYNC_INTERNAL_API_KEY},
             timeout=180,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "error": f"kb_sync_http_{response.status_code}"}
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"ok": True}
+    except (requests.RequestException, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _trigger_hybrid_reindex() -> dict[str, Any]:
+    try:
+        response = requests.post(
+            f"{KB_SYNC_URL}/reindex-all",
+            headers={"X-API-Key": KB_SYNC_INTERNAL_API_KEY},
+            timeout=300,
         )
         if response.status_code >= 400:
             return {"ok": False, "error": f"kb_sync_http_{response.status_code}"}
@@ -668,6 +1008,801 @@ def session(admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
         "role": admin.get("role"),
     }
 
+
+
+@app.post("/portal/internal/retrieval-scope")
+def portal_internal_retrieval_scope(
+    payload: PortalRetrievalScopeRequest,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+) -> dict[str, Any]:
+    if not MAINTENANCE_API_KEY or not hmac.compare_digest(x_api_key, MAINTENANCE_API_KEY):
+        raise HTTPException(status_code=401, detail="internal_api_key_required")
+    try:
+        identity = PORTAL_GOVERNANCE.identity(payload.user_id)
+        if not identity.active:
+            raise GovernanceError("portal_user_inactive")
+        knowledgebase_ids = PORTAL_GOVERNANCE.allowed_knowledgebases(payload.user_id, "read")
+    except GovernanceError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not knowledgebase_ids:
+        raise HTTPException(status_code=403, detail="no_readable_knowledgebases")
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        placeholders = ",".join("?" for _ in knowledgebase_ids)
+        active_version_ids = [row["active_version_id"] for row in db.execute(
+            f"""SELECT DISTINCT d.active_version_id FROM canonical_documents d
+                 JOIN document_versions v ON v.version_id=d.active_version_id AND v.status='active'
+                 JOIN document_publications p ON p.document_id=d.document_id AND p.status='active'
+                 WHERE p.knowledgebase_id IN ({placeholders}) AND v.valid_from <= ? AND v.valid_until >= ?""",
+            (*knowledgebase_ids, date.today().isoformat(), date.today().isoformat()),
+        ).fetchall()]
+    if not active_version_ids:
+        raise HTTPException(status_code=403, detail="no_active_readable_versions")
+    return {"user_id": identity.user_id, "knowledgebase_ids": knowledgebase_ids,
+            "active_version_ids": active_version_ids}
+
+
+@app.get("/portal/session")
+def portal_session(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    return identity
+
+
+@app.get("/portal/knowledgebases")
+def portal_knowledgebases(
+    access: str = "read",
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if access not in {"read", "upload"}:
+        raise HTTPException(status_code=400, detail="invalid_access_kind")
+    try:
+        knowledgebases = PORTAL_GOVERNANCE.list_knowledgebases(identity["user_id"], access)
+    except GovernanceError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {
+        "access": access,
+        "knowledgebases": serialize_governance(knowledgebases),
+    }
+
+@app.get("/portal/documents")
+def portal_list_documents(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    readable = PORTAL_GOVERNANCE.allowed_knowledgebases(identity["user_id"], "read")
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        rows = db.execute(
+            """SELECT DISTINCT d.document_id, d.title, d.owner_user_id, d.active_version_id,
+                              v.status, v.valid_until, p.knowledgebase_id
+               FROM canonical_documents d
+               LEFT JOIN document_versions v ON v.version_id=d.active_version_id
+               LEFT JOIN document_publications p ON p.document_id=d.document_id
+               WHERE d.owner_user_id=? OR p.knowledgebase_id IN ({})
+               ORDER BY d.updated_at DESC""".format(",".join("?" for _ in readable) or "NULL"),
+            (identity["user_id"], *readable),
+        ).fetchall()
+    return {"documents": [dict(row) for row in rows]}
+
+
+@app.post("/portal/documents", response_model=PortalUploadResponse, status_code=201)
+async def portal_upload_document(
+    file: UploadFile = File(...),
+    knowledgebase_id: str = Form(...),
+    title: str = Form(..., min_length=2, max_length=300),
+    valid_workdays: int = Form(..., ge=1, le=60),
+    confidentiality: str = Form("internal"),
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> PortalUploadResponse:
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file_too_large")
+    filename = file.filename or ""
+    try:
+        inspected = SECURE_INGEST.inspector.inspect(filename, data)
+        document_id = str(uuid.uuid4())
+        submission = DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id=identity["user_id"], owner_user_id=identity["user_id"],
+            target_knowledgebase_id=knowledgebase_id, title=title, original_filename=filename,
+            original_file_id=f"portal://documents/{document_id}", original_sha256=inspected.sha256,
+            valid_workdays=valid_workdays, confidentiality=confidentiality, document_id=document_id,
+        )
+        result = SECURE_INGEST.ingest(submission.document_id, submission.version_id, filename, data, title)
+        confidentiality_suggestion = CONFIDENTIALITY_CLASSIFIER.classify(
+            result.markdown_path.read_text(encoding="utf-8")
+        )
+        submission = DOCUMENT_LIFECYCLE.apply_automatic_confidentiality(
+            case_id=submission.case_id, level=confidentiality_suggestion.level,
+            reason=confidentiality_suggestion.reason, signals=confidentiality_suggestion.signals,
+        )
+        global_result = GLOBAL_ANALYZER.analyze(
+            version_id=submission.version_id, title=title,
+            markdown=result.markdown_path.read_text(encoding="utf-8"),
+        )
+        material_matches = tuple(match for match in global_result.matches if match.level in {"identical", "very_high", "medium"})
+        cross_kb_matches = tuple(
+            match.document_id for match in material_matches if knowledgebase_id not in match.knowledgebase_ids
+        )
+        same_kb_levels = [match.level for match in material_matches if knowledgebase_id in match.knowledgebase_ids]
+        same_kb_similarity = next((level for level in ("very_high", "medium") if level in same_kb_levels), "none")
+        submission = DOCUMENT_LIFECYCLE.record_analysis(
+            case_id=submission.case_id, normalized_sha256=global_result.normalized_sha256,
+            markdown_sha256=result.markdown_sha256,
+            analysis=Analysis(
+                exact_duplicate_document_id=global_result.exact_document_id,
+                same_kb_similarity=same_kb_similarity, cross_kb_matches=cross_kb_matches,
+                contradiction_document_ids=global_result.contradiction_document_ids,
+                prompt_injection_risk=result.injection.risk,
+                conversion_quality=result.conversion_quality,
+                notes=result.conversion_issues,
+            ),
+        )
+        RAG_METADATA.write(submission.version_id, result.markdown_path)
+        GLOBAL_CORPUS.upsert(CorpusDocument(
+            submission.document_id, submission.version_id, title,
+            result.markdown_path.read_text(encoding="utf-8"), (knowledgebase_id,), "pending",
+        ))
+    except GovernanceError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (LifecycleError, IngestError, GlobalAnalysisError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        incident_id = _notify_system_error("portal_upload", {"error_type": type(exc).__name__})
+        print(f"portal_upload_failed incident={incident_id} error={exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"system_error:{incident_id}") from exc
+    return PortalUploadResponse(
+        case_id=submission.case_id, document_id=submission.document_id,
+        version_id=submission.version_id, status=submission.status,
+        owner_email=identity["email"], prompt_injection_risk=result.injection.risk,
+        confidentiality=DOCUMENT_LIFECYCLE.submission(submission.case_id).confidentiality,
+        confidentiality_reason=confidentiality_suggestion.reason,
+        requires_admin=submission.requires_admin,
+        exact_duplicate_document_id=global_result.exact_document_id,
+        matches=[{
+            "document_id": match.document_id, "title": match.title, "level": match.level,
+            "knowledgebase_ids": list(match.knowledgebase_ids), "version_candidate": match.version_candidate,
+            "has_conflict": bool(match.conflicting_passages),
+        } for match in material_matches],
+    )
+
+
+@app.get("/portal/feedback/context")
+def portal_feedback_context(
+    chat_id: str, message_id: str, request: Request,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    del identity
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", chat_id) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", message_id):
+        raise HTTPException(status_code=400, detail="invalid_feedback_reference")
+    headers = {}
+    if request.headers.get("Authorization"):
+        headers["Authorization"] = request.headers["Authorization"]
+    if request.headers.get("Cookie"):
+        headers["Cookie"] = request.headers["Cookie"]
+    try:
+        response = requests.get(f"{OPENWEBUI_URL}/api/v1/chats/{chat_id}", headers=headers, timeout=20)
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail="chat_context_unavailable") from exc
+    if response.status_code != 200:
+        raise HTTPException(status_code=404, detail="chat_context_not_available")
+    chat = response.json().get("chat") or response.json()
+    messages = chat.get("messages") or {}
+    if isinstance(messages, list):
+        messages = {str(item.get("id")): item for item in messages}
+    answer = messages.get(message_id) or {}
+    parent = messages.get(str(answer.get("parentId") or "")) or {}
+    return {
+        "question": str(parent.get("content") or "")[:8000],
+        "answer": str(answer.get("content") or "")[:16000],
+        "sources": (answer.get("sources") or [])[:30],
+        "passages": (answer.get("metadata") or {}).get("sources", [])[:30],
+        "runtime": {
+            "model": answer.get("model"), "model_id": answer.get("modelId"),
+            "prompt_version": "kahle-vinci-current", "retrieval_version": "hybrid-v2",
+            "chat_id": chat_id, "message_id": message_id,
+        },
+        "request_id": str((answer.get("metadata") or {}).get("request_id") or message_id),
+    }
+
+
+@app.post("/portal/feedback/rag", status_code=201)
+def portal_report_rag_feedback(
+    payload: PortalRagFeedbackRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    rights = PORTAL_GOVERNANCE.allowed_knowledgebases(identity["user_id"], "read")
+    try:
+        feedback_id = QUALITY_CASES.report_rag(
+            user_id=identity["user_id"], reason=payload.reason, comment=payload.comment,
+            question=payload.question, answer=payload.answer, sources=payload.sources,
+            passages=payload.passages, rights=rights, runtime=payload.runtime, request_id=payload.request_id,
+        )
+    except QualityCaseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    recipients = _admin_emails() if payload.reason == "suspected_permission_issue" else []
+    for recipient in recipients:
+        MAINTENANCE.enqueue_notification(
+            recipient, "critical_rag_feedback", "KAHLE-Vinci: M?glicher Berechtigungsfehler",
+            f"Ein kritischer Wissensfehler wurde gemeldet. Referenz: {feedback_id}", dedupe_key=feedback_id,
+        )
+    return {"feedback_id": feedback_id, "status": "open"}
+
+
+@app.post("/portal/incidents/{incident_id}/comment")
+def portal_comment_incident(
+    incident_id: str, payload: PortalIncidentCommentRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    del identity
+    try:
+        QUALITY_CASES.add_incident_comment(incident_id, payload.comment)
+    except QualityCaseError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/portal/admin/quality-cases")
+def portal_admin_quality_cases(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return QUALITY_CASES.open_cases()
+
+
+@app.get("/portal/sources/{version_id}")
+def portal_source(
+    version_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> FileResponse:
+    try:
+        record = DOCUMENT_LIFECYCLE.source_record(version_id, identity["user_id"])
+    except (LifecycleError, GovernanceError) as exc:
+        raise HTTPException(status_code=404, detail="source_not_available") from exc
+    version_root = (PORTAL_FILES_ROOT / record["document_id"] / version_id).resolve()
+    try:
+        version_root.relative_to(PORTAL_FILES_ROOT.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="source_not_available") from exc
+    originals = list(version_root.glob("original.*"))
+    if len(originals) != 1 or not originals[0].is_file():
+        raise HTTPException(status_code=404, detail="source_not_available")
+    inline_extensions = {".pdf", ".txt", ".md"}
+    disposition = "inline" if originals[0].suffix.lower() in inline_extensions else "attachment"
+    return FileResponse(
+        originals[0], filename=record["original_filename"],
+        content_disposition_type=disposition,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/portal/cases/{case_id}/review")
+def portal_case_review(
+    case_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        review = MARKDOWN_CORRECTION.review(case_id, identity["user_id"])
+    except MarkdownCorrectionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"case": asdict(review["case"]), "markdown": review["markdown"],
+            "original_url": review["original_url"]}
+
+
+@app.get("/portal/cases/{case_id}/original")
+def portal_case_original(
+    case_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> FileResponse:
+    try:
+        review = MARKDOWN_CORRECTION.review(case_id, identity["user_id"])
+    except MarkdownCorrectionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    case = review["case"]; originals = list((PORTAL_FILES_ROOT / case.document_id / case.version_id).glob("original.*"))
+    if len(originals) != 1:
+        raise HTTPException(status_code=404, detail="original_not_available")
+    return FileResponse(originals[0], filename=case.original_filename, content_disposition_type="inline",
+                        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@app.post("/portal/cases/{case_id}/revision", status_code=201)
+def portal_case_revision(
+    case_id: str, payload: PortalMarkdownRevisionRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        revised = MARKDOWN_CORRECTION.revise(
+            case_id, identity["user_id"], instruction=payload.instruction,
+            replacement_markdown=payload.replacement_markdown, reason=payload.reason,
+            confirmed=payload.confirmed,
+        )
+    except (MarkdownCorrectionError, LifecycleError, requests.RequestException) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    RAG_METADATA.write(revised.version_id)
+    return {"case": asdict(revised)}
+
+
+@app.get("/portal/tasks")
+def portal_tasks(identity: dict[str, Any] = Depends(require_portal_identity)) -> dict[str, Any]:
+    try:
+        tasks = DOCUMENT_LIFECYCLE.tasks_for(identity["user_id"])
+    except (LifecycleError, GovernanceError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"tasks": [asdict(task) for task in tasks]}
+
+
+def _admin_emails() -> list[str]:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        return [row["email"] for row in db.execute(
+            "SELECT email FROM portal_users WHERE active = 1 AND role IN ('admin','portal_admin')"
+        ).fetchall()]
+
+
+def _notify_case_status(case: Any) -> None:
+    recipients: list[str] = []
+    if case.status == "pending_manager_approval" and case.manager_user_id:
+        recipients.append(PORTAL_GOVERNANCE.identity(case.manager_user_id).email)
+    elif case.status == "pending_admin_approval":
+        recipients.extend(_admin_emails())
+    if not recipients:
+        return
+    subject = "KAHLE-Vinci: Neue Freigabeaufgabe"
+    body = f"F?r den Vorgang '{case.title}' ist eine Entscheidung erforderlich.\n/wissen/?case={case.case_id}"
+    for recipient in dict.fromkeys(recipients):
+        MAINTENANCE.enqueue_notification(
+            recipient, "approval_task", subject, body, dedupe_key=f"{case.case_id}:{case.status}",
+        )
+
+
+def _notify_system_error(step: str, diagnostic: dict[str, Any]) -> str:
+    incident_id = QUALITY_CASES.system_incident(step, diagnostic)
+    for recipient in _admin_emails():
+        MAINTENANCE.enqueue_notification(
+            recipient, "system_error", "KAHLE-Vinci: Systemfehler",
+            f"Ein Systemfehler ist aufgetreten. Referenz: {incident_id}",
+            dedupe_key=incident_id,
+        )
+    return incident_id
+
+
+@app.post("/portal/cases/{case_id}/action")
+def portal_case_action(
+    case_id: str, payload: PortalCaseActionRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        case = DOCUMENT_LIFECYCLE.choose_action(
+            case_id=case_id, actor_user_id=identity["user_id"], action=payload.action,
+        )
+    except LifecycleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _notify_case_status(case)
+    return {"case": asdict(case)}
+
+
+@app.post("/portal/cases/{case_id}/decision")
+def portal_case_decision(
+    case_id: str, payload: PortalCaseDecisionRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        case = DOCUMENT_LIFECYCLE.decide(
+            case_id=case_id, actor_user_id=identity["user_id"],
+            decision=payload.decision, reason=payload.reason,
+        )
+        if case.status == "ready_to_activate":
+            previous_version_id = DOCUMENT_LIFECYCLE.active_version(case.document_id)
+            case = DOCUMENT_LIFECYCLE.activate(case_id=case_id)
+            RAG_METADATA.write(case.version_id)
+            indexing = _trigger_hybrid_reindex()
+            if not indexing.get("ok"):
+                case = DOCUMENT_LIFECYCLE.rollback_activation(
+                    case_id=case_id, previous_version_id=previous_version_id,
+                    reason=str(indexing.get("error") or "hybrid_reindex_failed"),
+                )
+                # If the index switch completed but its response was lost, restore the old generation too.
+                _trigger_hybrid_reindex()
+                raise HTTPException(status_code=503, detail="activation_index_failed_previous_version_restored")
+    except HTTPException:
+        raise
+    except (LifecycleError, GovernanceError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _notify_case_status(case)
+    return {"case": asdict(case)}
+
+
+@app.get("/portal/auth/step-up/start")
+def portal_step_up_start(
+    return_to: str = "/wissen/",
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if STEP_UP_AUTHORITY is None:
+        raise HTTPException(status_code=503, detail="microsoft_step_up_not_configured")
+    try:
+        started = STEP_UP_AUTHORITY.begin(
+            user_id=identity["user_id"],
+            email=identity["email"],
+            return_to=return_to,
+        )
+    except StepUpError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    PORTAL_GOVERNANCE.record_audit(
+        identity["user_id"], "step_up_started", "user", identity["user_id"],
+        {"return_to": return_to},
+    )
+    return {
+        "authorization_url": started.authorization_url,
+        "expires_in": started.expires_in,
+    }
+
+
+@app.get("/portal/auth/step-up/callback")
+def portal_step_up_callback(
+    state: str,
+    code: str,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> RedirectResponse:
+    if STEP_UP_AUTHORITY is None:
+        raise HTTPException(status_code=503, detail="microsoft_step_up_not_configured")
+    try:
+        proof, return_to = STEP_UP_AUTHORITY.complete(
+            current_user_id=identity["user_id"], state=state, code=code
+        )
+    except StepUpError as exc:
+        PORTAL_GOVERNANCE.record_audit(
+            identity["user_id"], "step_up_failed", "user", identity["user_id"],
+            {"reason": str(exc)},
+        )
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    PORTAL_GOVERNANCE.record_audit(
+        identity["user_id"], "step_up_completed", "user", identity["user_id"],
+        {"return_to": return_to},
+    )
+    response = RedirectResponse(return_to, status_code=303)
+    response.set_cookie(
+        key=StepUpAuthority.COOKIE_NAME,
+        value=proof,
+        max_age=STEP_UP_AUTHORITY.proof_ttl_seconds,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+@app.get("/portal/ownership-tasks")
+def portal_ownership_tasks(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    return {"tasks": OWNERSHIP.tasks_for(identity["user_id"])}
+
+
+@app.post("/portal/ownership-tasks/{task_id}/proposal")
+def portal_propose_owner(
+    task_id: str, payload: PortalOwnershipProposalRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        OWNERSHIP.propose(task_id, identity["user_id"], payload.proposed_owner_user_id, payload.reason)
+    except OwnershipError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "pending_owner_confirmation"}
+
+
+@app.post("/portal/ownership-tasks/{task_id}/confirmation")
+def portal_confirm_owner(
+    task_id: str, payload: PortalOwnershipConfirmationRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        status = OWNERSHIP.confirm(task_id, identity["user_id"], payload.accept, payload.reason)
+    except OwnershipError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": status}
+
+
+@app.post("/portal/document-changes/renewal", status_code=201)
+def portal_request_renewal(
+    payload: PortalRenewalRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try: request_id=DOCUMENT_CHANGES.request_renewal(payload.document_id,identity["user_id"],payload.reason,payload.confirmed)
+    except DocumentChangeError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+    return {"request_id":request_id}
+
+
+@app.post("/portal/document-changes/confidentiality", status_code=201)
+def portal_request_confidentiality(
+    payload: PortalConfidentialityRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try: request_id=DOCUMENT_CHANGES.request_confidentiality(payload.document_id,identity["user_id"],payload.desired,payload.reason)
+    except DocumentChangeError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+    return {"request_id":request_id}
+
+
+@app.get("/portal/document-changes")
+def portal_document_changes(identity: dict[str, Any] = Depends(require_portal_identity)) -> dict[str, Any]:
+    return {"changes":DOCUMENT_CHANGES.pending_for(identity["user_id"])}
+
+
+@app.post("/portal/document-changes/{request_id}/decision")
+def portal_decide_document_change(
+    request_id: str,payload: PortalDocumentChangeDecisionRequest,identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try: status=DOCUMENT_CHANGES.decide(request_id,identity["user_id"],payload.approve,payload.reason)
+    except DocumentChangeError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+    if status=="approved": _trigger_hybrid_reindex()
+    return {"status":status}
+
+
+@app.post("/portal/removal-requests", status_code=201)
+def portal_request_removal(
+    payload: PortalRemovalRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        request_id = MAINTENANCE.request_removal(payload.document_id, identity["user_id"], payload.kind, payload.reason)
+    except MaintenanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if identity["role"] in {"admin", "portal_admin"}:
+        indexing = _trigger_hybrid_reindex()
+        if not indexing.get("ok"): raise HTTPException(status_code=503, detail="removal_reindex_failed")
+    return {"request_id": request_id}
+
+
+@app.get("/portal/admin/removals")
+def portal_admin_removals(identity: dict[str, Any] = Depends(require_portal_identity)) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}: raise HTTPException(status_code=403, detail="admin_required")
+    return MAINTENANCE.list_removals()
+
+
+@app.post("/portal/admin/removal-requests/{request_id}/decision")
+def portal_admin_decide_removal(
+    request_id: str, payload: PortalRemovalDecisionRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try: MAINTENANCE.decide_removal(request_id, identity["user_id"], payload.approve, payload.reason)
+    except MaintenanceError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if payload.approve:
+        indexing = _trigger_hybrid_reindex()
+        if not indexing.get("ok"): raise HTTPException(status_code=503, detail="removal_reindex_failed")
+    return {"ok": True}
+
+
+@app.post("/portal/admin/trash/{document_id}/restore")
+def portal_admin_restore_trash(
+    document_id: str, payload: PortalRestoreRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try: MAINTENANCE.restore_from_trash(document_id, identity["user_id"], payload.reason)
+    except MaintenanceError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+    indexing = _trigger_hybrid_reindex()
+    if not indexing.get("ok"): raise HTTPException(status_code=503, detail="restore_reindex_failed")
+    return {"ok": True}
+
+
+@app.put("/portal/admin/trash/{document_id}/legal-hold")
+def portal_admin_legal_hold(
+    document_id: str, payload: PortalLegalHoldRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try: MAINTENANCE.set_legal_hold(document_id, identity["user_id"], payload.enabled, payload.reason, payload.review_at)
+    except MaintenanceError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/portal/admin/dashboard")
+def portal_admin_dashboard(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    result = QUALITY_DASHBOARD.snapshot()
+    try:
+        response = requests.get(f"{KB_SYNC_URL}/health", timeout=10)
+        result["index"] = response.json() if response.status_code == 200 else {"ok": False}
+    except requests.RequestException:
+        result["index"] = {"ok": False, "error": "unavailable"}
+    return result
+
+
+@app.post("/portal/admin/migration/inventory")
+def portal_admin_migration_inventory(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"items": [asdict(item) for item in LEGACY_MIGRATION.inventory(KB_ROOT)]}
+
+
+@app.post("/portal/admin/migration/stage")
+def portal_admin_migration_stage(
+    payload: PortalMigrationStageRequest, request: Request,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] != "portal_admin":
+        raise HTTPException(status_code=403, detail="portal_admin_required")
+    require_fresh_step_up(request, identity)
+    try:
+        case_id = LEGACY_MIGRATION.stage(KB_ROOT, payload.path, identity["user_id"])
+    except (ValueError, LifecycleError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"case_id": case_id, "status": "staged"}
+
+
+@app.get("/portal/admin/audit")
+def portal_admin_audit(
+    limit: int = 250, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"entries": [asdict(item) for item in AUDIT_EXPORTER.entries(limit)]}
+
+
+@app.get("/portal/admin/audit/export.{format}")
+def portal_admin_audit_export(
+    format: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> FastAPIResponse:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    if format == "csv":
+        return FastAPIResponse(AUDIT_EXPORTER.csv_bytes(), media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="kahle-vinci-audit.csv"'})
+    if format == "pdf":
+        return FastAPIResponse(AUDIT_EXPORTER.pdf_bytes(), media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="kahle-vinci-audit.pdf"'})
+    raise HTTPException(status_code=404, detail="unknown_audit_format")
+
+
+@app.get("/portal/admin/users")
+def portal_admin_users(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    users = _portal_call(lambda: PORTAL_GOVERNANCE.list_identities(identity["user_id"]))
+    return {"users": serialize_governance(users)}
+
+
+@app.patch("/portal/admin/users/{target_user_id}/role")
+def portal_admin_set_role(
+    target_user_id: str,
+    payload: PortalRoleRequest,
+    request: Request,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    require_fresh_step_up(request, identity)
+    user = _portal_call(
+        lambda: PORTAL_GOVERNANCE.set_role(identity["user_id"], target_user_id, payload.role)
+    )
+    return {"user": serialize_governance(user)}
+
+
+@app.patch("/portal/admin/users/{target_user_id}/activation")
+def portal_admin_set_activation(
+    target_user_id: str,
+    payload: PortalActivationRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    user = _portal_call(
+        lambda: PORTAL_GOVERNANCE.set_active(identity["user_id"], target_user_id, payload.active)
+    )
+    reassignment_tasks = [] if payload.active else OWNERSHIP.create_for_deactivated_owner(
+        target_user_id, identity["user_id"]
+    )
+    return {"user": serialize_governance(user), "owner_reassignment_task_ids": reassignment_tasks}
+
+
+@app.patch("/portal/admin/users/{target_user_id}/manager")
+def portal_admin_assign_manager(
+    target_user_id: str,
+    payload: PortalManagerRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    user = _portal_call(
+        lambda: PORTAL_GOVERNANCE.assign_manager(
+            identity["user_id"], target_user_id, payload.manager_user_id
+        )
+    )
+    return {"user": serialize_governance(user)}
+
+
+@app.get("/portal/admin/absences")
+def portal_admin_absences(identity: dict[str, Any] = Depends(require_portal_identity)) -> dict[str, Any]:
+    return {"absences": _portal_call(lambda: PORTAL_GOVERNANCE.list_absences(identity["user_id"]))}
+
+
+@app.put("/portal/admin/absences")
+def portal_admin_set_absence(
+    payload: PortalAbsenceRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    _portal_call(lambda: PORTAL_GOVERNANCE.set_absence(
+        identity["user_id"], payload.manager_user_id, payload.absent_from,
+        payload.absent_until, payload.reason,
+    ))
+    return {"ok": True}
+
+
+@app.get("/portal/admin/delegations")
+def portal_admin_delegations(identity: dict[str, Any] = Depends(require_portal_identity)) -> dict[str, Any]:
+    return {"delegations": _portal_call(lambda: PORTAL_GOVERNANCE.list_delegations(identity["user_id"]))}
+
+
+@app.put("/portal/admin/delegations")
+def portal_admin_set_delegation(
+    payload: PortalDelegationRequest, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    _portal_call(lambda: PORTAL_GOVERNANCE.assign_delegate(identity["user_id"],payload.manager_user_id,payload.delegate_user_id,valid_from=payload.valid_from,valid_until=payload.valid_until))
+    return {"ok":True}
+
+
+@app.delete("/portal/admin/delegations")
+def portal_admin_remove_delegation(
+    manager_user_id: str, delegate_user_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    _portal_call(lambda: PORTAL_GOVERNANCE.remove_delegate(identity["user_id"],manager_user_id,delegate_user_id))
+    return {"ok":True}
+
+
+@app.get("/portal/admin/users/{target_user_id}/knowledgebase-access")
+def portal_admin_user_access(
+    target_user_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    access = _portal_call(
+        lambda: PORTAL_GOVERNANCE.access_for_user(identity["user_id"], target_user_id)
+    )
+    return {"access": access}
+
+
+@app.put("/portal/admin/users/{target_user_id}/knowledgebase-access")
+def portal_admin_grant_access(
+    target_user_id: str,
+    payload: PortalAccessRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    _portal_call(
+        lambda: PORTAL_GOVERNANCE.grant_access(
+            identity["user_id"],
+            target_user_id,
+            payload.knowledgebase_id,
+            can_read=payload.can_read,
+            can_upload=payload.can_upload,
+        )
+    )
+    return {"ok": True}
+
+
+@app.get("/portal/admin/knowledgebase-changes")
+def portal_admin_list_knowledgebase_changes(
+    status: str | None = None, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    changes = _portal_call(lambda: PORTAL_GOVERNANCE.list_change_requests(identity["user_id"], status))
+    return {"changes": serialize_governance(changes)}
+
+
+@app.post("/portal/admin/knowledgebase-changes", status_code=201)
+def portal_admin_request_knowledgebase_change(
+    payload: PortalKnowledgebaseChangeRequest,
+    request: Request,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] == "portal_admin":
+        require_fresh_step_up(request, identity)
+    change = _portal_call(
+        lambda: PORTAL_GOVERNANCE.request_knowledgebase_change(
+            identity["user_id"],
+            payload.kind,
+            knowledgebase_id=payload.knowledgebase_id,
+            payload=payload.payload,
+        )
+    )
+    return {"change": serialize_governance(change)}
+
+@app.post("/portal/admin/knowledgebase-changes/{request_id}/decision")
+def portal_admin_decide_knowledgebase_change(
+    request_id: str,
+    payload: PortalKnowledgebaseDecisionRequest,
+    request: Request,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    require_fresh_step_up(request, identity)
+    change = _portal_call(
+        lambda: PORTAL_GOVERNANCE.decide_knowledgebase_change(
+            identity["user_id"],
+            request_id,
+            approve=payload.approve,
+            reason=payload.reason,
+        )
+    )
+    return {"change": serialize_governance(change)}
 
 @app.get("/unlock/status")
 def unlock_status(

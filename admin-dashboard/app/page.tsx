@@ -1,6 +1,6 @@
-import VectorAdmin from "../components/VectorAdmin";
-import "./vector.css";
+import KnowledgePortal from "../components/KnowledgePortal";
+import "./portal.css";
 
 export default function Home() {
-  return <VectorAdmin />;
+  return <KnowledgePortal />;
 }

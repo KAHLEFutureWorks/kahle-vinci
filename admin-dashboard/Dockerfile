@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-ENV DASHBOARD_BASE_PATH=/admin/vector
+ENV DASHBOARD_BASE_PATH=/wissen
 RUN npm run build
 
 ENV HOST=0.0.0.0

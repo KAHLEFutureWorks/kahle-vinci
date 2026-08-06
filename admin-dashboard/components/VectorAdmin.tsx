@@ -107,7 +107,7 @@ class ApiError extends Error {
   }
 }
 
-const API_BASE = "/admin/vector/api";
+const API_BASE = "/wissen/api";
 
 const demoCollections: Collection[] = [
   {

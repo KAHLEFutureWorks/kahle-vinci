@@ -259,6 +259,104 @@ def _ascii_fold(text: str) -> str:
     )
 
 
+def _kahle_document_comparison_block_reason(tool_function_name: str, user_text: str) -> str:
+    name = str(tool_function_name or '').strip().lower()
+    is_document_write_tool = name.endswith('_save') and name.startswith(
+        ('file_', 'docx_', 'pdf_', 'xlsx_', 'pptx_', 'text_', 'bundle_')
+    )
+    if not is_document_write_tool:
+        return ''
+
+    folded = _ascii_fold(str(user_text or '').lower())
+    comparison_markers = (
+        'vergleich',
+        'compare',
+        'gegenueberstell',
+        'unterschied',
+        'difference',
+        'abweich',
+        'was wurde geaendert',
+        'was hat sich geaendert',
+        'welche aenderungen',
+        'aenderungen zwischen',
+        'geaendert worden',
+        'ueberarbeitet worden',
+        'was wurde ueberarbeitet',
+        'what changed',
+        'changes between',
+        'changed between',
+        'alte und neue',
+        'alt und neu',
+        'old and new',
+        'versionspruefung',
+        'versionsvergleich',
+    )
+    has_comparison_intent = any(marker in folded for marker in comparison_markers) or bool(
+        re.search(r'\bwas wurde\b.{0,120}\b(?:geaendert|ueberarbeitet)\b', folded)
+    )
+    if not has_comparison_intent:
+        return ''
+
+    return (
+        'DATEIVERGLEICH_TOOLCALL_BLOCKIERT: Das schreibende oder konvertierende Dokumenttool '
+        f'{name} wurde nicht ausgefuehrt. Der Nutzer moechte Dokumente inhaltlich vergleichen, '
+        'nicht bearbeiten, konvertieren oder herunterladen. Verwende keine weiteren *_save-Tools. '
+        'Rufe stattdessen files_extract_text genau einmal mit allen exakt relevanten Upload-Dateien auf. '
+        'Fuehre den Vergleich danach anhand der zurueckgegebenen Dokumenttexte aus und antworte im Chat.'
+    )
+
+def _kahle_uploaded_conversion_block_reason(tool_function_name: str, user_text: str) -> str:
+    name = str(tool_function_name or '').strip().lower()
+    folded = _ascii_fold(str(user_text or ''))
+    mentions_word = bool(re.search(r'\b(?:word|docx|worddatei|word-datei|worddokument)\b', folded))
+    conversion_intent = any(
+        marker in folded
+        for marker in (
+            'umwandel',
+            'wandle',
+            'konvertier',
+            'als markdown',
+            'in markdown',
+            'als md',
+            'als pdf',
+            'in pdf',
+            'zu pdf',
+            'daraus eine pdf',
+            'daraus ein pdf',
+            'ausgeben',
+        )
+    )
+    if not mentions_word or not conversion_intent:
+        return ''
+
+    wants_markdown = 'markdown' in folded or bool(re.search(r'\bals\s+md\b', folded))
+    if wants_markdown and name != 'file_to_md_save' and name in {
+        'file_to_docx_save',
+        'docx_create_save',
+        'kahle_workflow_execute',
+    }:
+        return (
+            'DATEIKONVERTIERUNG_TOOLCALL_BLOCKIERT: Der Nutzer moechte eine angehaengte Word/DOCX-Datei '
+            'unveraendert nach Markdown konvertieren. Das ausgewaehlte Tool '
+            f'{name} wurde nicht ausgefuehrt. Rufe ausschliesslich file_to_md_save mit dem exakten Uploadpfad auf. '
+            'Fuehre keine Recherche, Zusammenfassung, Umschreibung oder inhaltliche Anreicherung aus.'
+        )
+
+    wants_pdf = bool(re.search(r'\bpdf\b', folded))
+    if wants_pdf and name != 'docx_to_pdf_save' and name in {
+        'kahle_workflow_execute',
+        'pdf_create_save',
+        'file_to_docx_save',
+    }:
+        return (
+            'DATEIKONVERTIERUNG_TOOLCALL_BLOCKIERT: Der Nutzer moechte eine angehaengte Word/DOCX-Datei '
+            'unveraendert als PDF konvertieren. Das ausgewaehlte Tool '
+            f'{name} wurde nicht ausgefuehrt. Rufe ausschliesslich docx_to_pdf_save mit dem exakten Uploadpfad auf. '
+            'Fuehre keine Recherche, Zusammenfassung, Umschreibung oder inhaltliche Anreicherung aus.'
+        )
+
+    return ''
+
 def _contains_token(folded: str, token: str) -> bool:
     if token == 'intern':
         return re.search(r'\bintern(e|en|es|er)?\b', folded) is not None
@@ -1808,6 +1906,70 @@ async def chat_completion_tools_handler(
             for token in ('_save', 'docx_', 'pdf_', 'xlsx_', 'bundle_to_md', 'file_to_md', 'text_apply_ops')
         )
 
+    def _document_comparison_file_tool_validation_error(tool_function_name: str) -> str:
+        current_user = str(get_last_user_message(body.get('messages', []) or []) or '')
+        comparison_reason = _kahle_document_comparison_block_reason(tool_function_name, current_user)
+        if comparison_reason:
+            return comparison_reason
+        return _kahle_uploaded_conversion_block_reason(tool_function_name, current_user)
+
+    def _calendar_create_validation_error(
+        tool_function_name: str,
+        tool_function_params: dict[str, Any],
+    ) -> str:
+        if tool_function_name != 'create_calendar_event':
+            return ''
+
+        messages = body.get('messages', []) or []
+        current_user = str(get_last_user_message(messages) or '').strip()
+        previous_assistant = ''
+        for item in reversed(messages[:-1]):
+            if item.get('role') == 'assistant':
+                previous_assistant = str(get_content_from_message(item) or '').strip()
+                if previous_assistant:
+                    break
+
+        current_folded = _ascii_fold(unicodedata.normalize('NFKC', current_user).lower())
+        previous_folded = _ascii_fold(unicodedata.normalize('NFKC', previous_assistant).lower())
+        is_confirmation = bool(
+            re.fullmatch(
+                r'\s*(?:ja|ja bitte|bestaetigt|bestaetige|ich bestaetige|bitte erstellen|jetzt erstellen|so erstellen|passt|genau so)\s*[.!]?\s*',
+                current_folded,
+            )
+        )
+        has_confirmation_request = bool(
+            'internen openwebui-kalender' in previous_folded
+            and any(token in previous_folded for token in ('soll ich', 'bestaetig', 'jetzt erstellen'))
+        )
+
+        title = str(tool_function_params.get('title') or '').strip()
+        start = str(tool_function_params.get('start') or '').strip()
+        if is_confirmation and has_confirmation_request and title and start:
+            return ''
+
+        missing: list[str] = []
+        if not title or title.lower() in {'termin', 'kalendereintrag', 'event'}:
+            missing.append('Thema/Titel')
+        if not start:
+            missing.extend(['Datum', 'Uhrzeit'])
+
+        if missing:
+            return (
+                'KALENDER_TOOLCALL_BLOCKIERT: Es wurde kein Termin erstellt. '
+                f"Fehlende Pflichtangaben: {', '.join(dict.fromkeys(missing))}. "
+                'Frage den Nutzer in genau einer kurzen Rueckfrage nach allen fehlenden Angaben. '
+                'Erfinde keine Werte.'
+            )
+
+        return (
+            'KALENDER_BESTAETIGUNG_ERFORDERLICH: Es wurde noch kein Termin erstellt. '
+            'Zeige dem Nutzer zuerst Titel, Datum, Startzeit, Endzeit oder Dauer, Zeitzone Europe/Berlin, '
+            'Ort und Erinnerung. Erklaere, dass dies der interne OpenWebUI-Kalender ist und dass das '
+            'aktuelle Werkzeug keine Teilnehmer oder Einladungen verwaltet. Frage anschliessend exakt: '
+            '"Soll ich diesen Termin jetzt im internen OpenWebUI-Kalender erstellen?" '
+            'Rufe das Werkzeug erst nach der Bestaetigung in der folgenden Nutzernachricht erneut auf.'
+        )
+
     def get_tools_function_calling_payload(
         messages, task_model_id, content, attached_file_names: Optional[list[str]] = None
     ):
@@ -2018,10 +2180,19 @@ async def chat_completion_tools_handler(
                         name_to_exact,
                     )
 
-                    if _is_file_tool_call(tool_function_name, tool_function_params):
-                        skip_files = True
-
-                    if tool.get('direct', False):
+                    document_comparison_validation_error = (
+                        _document_comparison_file_tool_validation_error(tool_function_name)
+                    )
+                    calendar_validation_error = _calendar_create_validation_error(
+                        tool_function_name, tool_function_params
+                    )
+                    if document_comparison_validation_error:
+                        tool_result = document_comparison_validation_error
+                    elif calendar_validation_error:
+                        tool_result = calendar_validation_error
+                    elif tool.get('direct', False):
+                        if _is_file_tool_call(tool_function_name, tool_function_params):
+                            skip_files = True
                         tool_result = await event_caller(
                             {
                                 'type': 'execute:tool',
@@ -2035,6 +2206,8 @@ async def chat_completion_tools_handler(
                             }
                         )
                     else:
+                        if _is_file_tool_call(tool_function_name, tool_function_params):
+                            skip_files = True
                         tool_function = tool['callable']
                         tool_result = await tool_function(**tool_function_params)
 
@@ -2154,10 +2327,19 @@ async def chat_completion_tools_handler(
                         name_to_exact,
                     )
 
-                    if _is_file_tool_call(tool_function_name, tool_function_params):
-                        skip_files = True
-
-                    if direct_tool:
+                    document_comparison_validation_error = (
+                        _document_comparison_file_tool_validation_error(tool_function_name)
+                    )
+                    calendar_validation_error = _calendar_create_validation_error(
+                        tool_function_name, tool_function_params
+                    )
+                    if document_comparison_validation_error:
+                        tool_result = document_comparison_validation_error
+                    elif calendar_validation_error:
+                        tool_result = calendar_validation_error
+                    elif direct_tool:
+                        if _is_file_tool_call(tool_function_name, tool_function_params):
+                            skip_files = True
                         tool_result = await event_caller(
                             {
                                 'type': 'execute:tool',
@@ -2171,6 +2353,8 @@ async def chat_completion_tools_handler(
                             }
                         )
                     else:
+                        if _is_file_tool_call(tool_function_name, tool_function_params):
+                            skip_files = True
                         tool_result = await tool['callable'](**tool_function_params)
 
                     file_saved_payload = _extract_file_saved_payload(tool_result)
@@ -5734,7 +5918,17 @@ async def streaming_chat_response_handler(response, ctx):
                                     k: v for k, v in tool_function_params.items() if k in allowed_params
                                 }
 
-                                if direct_tool:
+                                document_comparison_block_reason = (
+                                    _kahle_document_comparison_block_reason(
+                                        tool_function_name, user_message or ''
+                                    )
+                                    or _kahle_uploaded_conversion_block_reason(
+                                        tool_function_name, user_message or ''
+                                    )
+                                )
+                                if document_comparison_block_reason:
+                                    tool_result = document_comparison_block_reason
+                                elif direct_tool:
                                     tool_result = await event_caller(
                                         {
                                             'type': 'execute:tool',

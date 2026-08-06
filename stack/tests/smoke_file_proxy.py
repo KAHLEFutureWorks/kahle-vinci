@@ -105,6 +105,7 @@ def main() -> int:
     if status == 200:
         paths = set((spec.get("paths") or {}).keys())
         expected = {
+            "/files/extract_text",
             "/docx/replace_one_save",
             "/docx/delete_last_paragraphs_save",
             "/text/apply_ops_save",
@@ -119,6 +120,40 @@ def main() -> int:
         expect(paths == expected, "openapi paths expose upload/transform tools only")
         hidden_create_paths = {"/text/create_save", "/docx/create_save", "/pdf/create_save", "/pptx/create_save"}
         expect(not (paths & hidden_create_paths), "generated-file create endpoints are hidden from model schema")
+
+    if auth_required:
+        s_read_missing, _ = http_json(
+            "POST",
+            f"{base}/files/extract_text",
+            {"file_paths": [args.docx_file]},
+            timeout=300,
+        )
+        expect(s_read_missing == 401, "files_extract_text rejects missing API key")
+        s_read_wrong, _ = http_json(
+            "POST",
+            f"{base}/files/extract_text",
+            {"file_paths": [args.docx_file]},
+            timeout=300,
+            headers=auth_headers("wrong-key"),
+        )
+        expect(s_read_wrong == 401, "files_extract_text rejects wrong API key")
+
+    s_read, b_read = http_json(
+        "POST",
+        f"{base}/files/extract_text",
+        {"file_paths": [args.docx_file, args.txt_file]},
+        timeout=300,
+        headers=headers,
+    )
+    expect(s_read == 200, "files_extract_text reads multiple uploaded files")
+    if s_read == 200:
+        extracted_files = b_read.get("files") or []
+        expect(len(extracted_files) == 2, "files_extract_text returns one result per input file")
+        expect(
+            all(item.get("filename") and isinstance(item.get("text"), str) for item in extracted_files),
+            "files_extract_text returns filenames and extracted text",
+        )
+        expect("download_url" not in b_read, "files_extract_text never returns a download")
 
     s_wild, b_wild = http_json(
         "POST",

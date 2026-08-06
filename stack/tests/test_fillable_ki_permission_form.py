@@ -37,7 +37,7 @@ def test_form_contains_real_word_controls_and_required_sections(tmp_path):
     assert xml.count("<w:dropDownList>") >= 5
     for required in (
         "Antrag auf Freigabe einer KI-Nutzung", "Grund der Genehmigungspflicht",
-        "Datenschutzpr?fung", "Gemeinsame Entscheidung", "KI-Beauftragter", "Gesch?ftsf?hrung",
+        "Datenschutzprüfung", "Gemeinsame Entscheidung", "KI-Beauftragter", "Geschäftsführung",
         'w:val="valid_until"', 'w:val="decision_approved"', 'w:val="ai_officer_signature"',
     ):
         assert required in xml

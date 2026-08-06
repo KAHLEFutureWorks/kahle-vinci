@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import signal
@@ -19,6 +20,18 @@ from docx import Document
 from pypdf import PdfReader
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+
+try:
+    from .bm25_snapshot import BM25Snapshot
+except ImportError:  # pragma: no cover
+    from bm25_snapshot import BM25Snapshot
+
+try:
+    from .canonical_inventory import CanonicalInventory, load_canonical_inventory, load_portal_inventory, write_inventory_report
+    from .hybrid_sync import HybridIndexBuilder, QdrantHybridClient
+except ImportError:  # pragma: no cover
+    from canonical_inventory import CanonicalInventory, load_canonical_inventory, load_portal_inventory, write_inventory_report
+    from hybrid_sync import HybridIndexBuilder, QdrantHybridClient
 
 
 EMBEDDING_DIMENSION = 1024
@@ -39,6 +52,10 @@ class Config:
     reconcile_interval_seconds: int
     supported_extensions: tuple[str, ...]
     control_port: int
+    hybrid_snapshot_path: Path
+    internal_api_key: str
+    portal_db_path: Path
+    portal_files_root: Path
 
 
 def env(name: str, default: str = "") -> str:
@@ -76,6 +93,10 @@ def load_config() -> Config:
         reconcile_interval_seconds=int(env("KB_SYNC_RECONCILE_INTERVAL_SECONDS", "300")),
         supported_extensions=extensions,
         control_port=int(env("KB_SYNC_CONTROL_PORT", "8093")),
+        hybrid_snapshot_path=Path(env("KB_HYBRID_SNAPSHOT_PATH", "/state/hybrid-bm25.json")),
+        internal_api_key=env("KB_SYNC_INTERNAL_API_KEY"),
+        portal_db_path=Path(env("PORTAL_DB_PATH", "/portal-data/wissensportal.sqlite3")),
+        portal_files_root=Path(env("PORTAL_FILES_ROOT", "/portal-data/files")),
     )
 
 
@@ -336,10 +357,48 @@ class KnowledgebaseSync:
         self.qdrant = QdrantClient(config.qdrant_url)
         self.embeddings = IonosEmbeddings(config.ionos_base_url, config.ionos_api_key, config.embedding_model)
         self.reconcile_lock = threading.Lock()
+        self.hybrid_lock = threading.Lock()
+        self.hybrid_builder = HybridIndexBuilder(
+            QdrantHybridClient(config.qdrant_url, EMBEDDING_DIMENSION), self.embeddings,
+            snapshot_path=config.hybrid_snapshot_path,
+        )
 
     def reconcile_all(self) -> None:
         for collection in discover_collections(self.config):
             self.reconcile_collection(collection)
+        self.reconcile_hybrid()
+
+    def reconcile_hybrid(self, *, force: bool = False) -> None:
+        with self.hybrid_lock:
+            inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
+            legacy = load_canonical_inventory(self.config.kb_root)
+            report_path = self.config.state_path.parent / "hybrid-migration-inventory.json"
+            write_inventory_report(CanonicalInventory(
+                inventory.documents, legacy.migration_candidates, inventory.digest,
+            ), report_path)
+            hybrid_state = self.state.data.setdefault("hybrid", {})
+            if not inventory.documents:
+                hybrid_state["status"] = "awaiting_canonical_documents"
+                hybrid_state["migration_candidates"] = len(legacy.migration_candidates)
+                self.state.save()
+                return
+            if not force and hybrid_state.get("digest") == inventory.digest:
+                return
+            report = self.hybrid_builder.rebuild(list(inventory.documents))
+            hybrid_state.update({
+                "digest": inventory.digest,
+                "status": "active",
+                "collection": report["collection"],
+                "documents": report["documents"],
+                "chunks": report["chunks"],
+                "migration_candidates": len(legacy.migration_candidates),
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+            self.state.save()
+            print(
+                f"hybrid_index_activated collection={report['collection']} "
+                f"documents={report['documents']} chunks={report['chunks']}", flush=True,
+            )
 
     def reconcile_collection(self, collection: str) -> None:
         with self.reconcile_lock:
@@ -439,9 +498,53 @@ class ReindexRequestHandler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self._json_response(404, {"ok": False, "error": "not_found"})
             return
-        self._json_response(200, {"ok": True, "collections": list(discover_collections(self.sync_service.config))})
+        self._json_response(200, {"ok": True, "collections": list(discover_collections(self.sync_service.config)), "hybrid": self.sync_service.state.data.get("hybrid", {})})
+
+    def _handle_sparse_query(self) -> None:
+        expected = self.sync_service.config.internal_api_key
+        supplied = self.headers.get("X-API-Key", "")
+        if not expected or not hmac.compare_digest(supplied, expected):
+            self._json_response(401, {"error": "internal_api_key_required"})
+            return
+        try:
+            length = min(int(self.headers.get("Content-Length", "0")), 8192)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            query = str(payload.get("query") or "").strip()
+            if not query or len(query) > 2000:
+                self._json_response(422, {"error": "invalid_query"})
+                return
+            snapshot = BM25Snapshot.load(self.sync_service.config.hybrid_snapshot_path)
+            self._json_response(200, snapshot.encode_query(query))
+        except FileNotFoundError:
+            self._json_response(503, {"error": "hybrid_snapshot_unavailable"})
+        except Exception as exc:
+            print(f"sparse_query_failed error={exc}", flush=True)
+            self._json_response(500, {"error": "sparse_query_failed"})
+
+    def _is_authorized(self) -> bool:
+        expected = self.sync_service.config.internal_api_key
+        supplied = self.headers.get("X-API-Key", "")
+        return bool(expected and hmac.compare_digest(supplied, expected))
 
     def do_POST(self) -> None:
+        if self.path == "/hybrid/sparse-query":
+            self._handle_sparse_query()
+            return
+        if not self._is_authorized():
+            self._json_response(401, {"ok": False, "error": "internal_api_key_required"})
+            return
+        if self.path == "/reindex-all":
+            try:
+                started = time.monotonic()
+                self.sync_service.reconcile_hybrid(force=True)
+                self._json_response(200, {
+                    "ok": True, "scope": "hybrid",
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                })
+            except Exception as exc:
+                print(f"hybrid_reindex_request_failed error={exc}", flush=True)
+                self._json_response(500, {"ok": False, "error": "hybrid_reindex_failed"})
+            return
         if self.path != "/reindex":
             self._json_response(404, {"ok": False, "error": "not_found"})
             return

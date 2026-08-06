@@ -21,7 +21,16 @@ TOOLS_DIR = ROOT / "stack" / "open-webui-tools"
 FUNCTIONS_DIR = ROOT / "stack" / "open-webui-functions"
 PROMPTS_DIR = ROOT / "stack" / "open-webui-prompts"
 
-KAHLE_VINCI_MODEL_IDS = ["vinci-2-clone-clone-clone", "kahle-vinci-thinking"]
+KAHLE_VINCI_MODEL_IDS = [
+    "vinci-2-clone-clone-clone",
+    "kahle-vinci-thinking",
+    "kahle-vinci-max-thinking",
+]
+KAHLE_VINCI_MODEL_NAMES = {
+    "kahle-vinci",
+    "kahle-vinci-thinking",
+    "kahle-vinci-max-thinking",
+}
 KAHLE_VINCI_BASE_MODEL_IDS = ["mistralai/Mistral-Small-24B-Instruct", "openai/gpt-oss-120b"]
 PUBLIC_MODEL_IDS = KAHLE_VINCI_MODEL_IDS + KAHLE_VINCI_BASE_MODEL_IDS
 PUBLIC_TOOL_IDS = [
@@ -48,17 +57,25 @@ Hard rules:
 - If no tool is needed or required information is missing, return exactly {"tool_calls":[]}.
 
 Routing:
+- Word/DOCX -> Markdown: file_to_md_save. Never use file_to_docx_save for a Markdown request.
+- Word/DOCX -> PDF: docx_to_pdf_save.
+- Uploaded-file conversion takes precedence over kahle_workflow. Do not research, summarize, rewrite or enrich the document unless explicitly requested.
+- kahle_workflow is only for a newly generated document, not for converting an attached file.
 - Generated research/analysis/chat result -> downloadable PDF/DOCX/MD: use kahle_workflow_execute.
 - Research/Web search AND downloadable PDF/DOCX/MD in one request: use kahle_workflow_execute once, with auftrag as the full user request and output_format set to pdf/docx/md.
 - Interactive/fillable questionnaires, knowledge tests, assessments, checklists, applications and forms: use kahle_workflow_execute exactly once with the full request. Do not call rag_chat separately; the workflow retrieves and validates internal context itself.
 - PowerPoint/PPTX output is disabled. If the user asks for PowerPoint/PPTX, do not call a document creation tool; offer PDF, DOCX or Markdown instead.
 - "aus dem Ergebnis", "daraus", "aus der vorherigen Antwort" or similar -> use kahle_workflow_execute with auftrag as the full user request and output_format set to the requested file type.
 - Do not use pdf_create_save/docx_create_save/text_create_save for generated content when kahle_workflow_execute is available.
-- For uploaded file editing/conversion only: use the matching *_save file proxy tool and exact attached filename(s). Never guess upload filenames.
+- files_extract_text is the read-only tool for reading, analyzing, reviewing, checking, extracting, summarizing or comparing uploaded files in chat. Call it once with all exact relevant filenames. It never edits files and never creates a download.
+- If two or more files are attached and the user asks for a comparison, differences, changes, a review, or an old/new version analysis, call files_extract_text once with all relevant file_paths. Never call file_to_md_save, file_to_docx_save, bundle_to_md_save or another *_save tool for the comparison itself.
+- For explicit uploaded file editing/conversion or a requested downloadable output only: use the matching *_save file proxy tool and exact attached filename(s). Never guess upload filenames.
 - For external/current web research without file output: use safe_websearch with a search-engine style query.
 - For KAHLE-internal knowledge without web/file output: use RAG_Chat/rag_chat where available.
 - For every follow-up asking for more detail from internal knowledge, call rag_chat again. Make query standalone and carry forward the prior document/product identifier (for example: "A1a Assessment-Framework 5 Readiness-Dimensionen"). Never answer such follow-ups only from chat history.
 - For listing, updating, completing or deleting personal tasks: always use kahle_tasks tools. Never answer task lists from memory.
+- create_calendar_event is a two-step write operation. Never call it on the first request. First require an explicit title/topic, date and time, show a complete summary and ask for confirmation.
+- Call create_calendar_event only when the current user message explicitly confirms the immediately preceding calendar summary. Never invent a title, date or time. The calendar is internal to OpenWebUI and the current tool cannot manage attendees or invitations.
 
 Parameter rules:
 - kahle_workflow_execute: include auftrag whenever possible. Set output_format to pdf/docx/md when the user asks for a downloadable file.
@@ -323,7 +340,11 @@ KAHLE_TASK_ADMIN_SPECS = [
 TOOL_DEFINITIONS = {
     "rag_chat": {
         "name": "RAG Chat KAHLE",
-        "path": TOOLS_DIR / "rag_chat_direct_qdrant.py",
+        "path": TOOLS_DIR / "rag_chat_hybrid_tool.py",
+        "dependencies": [
+            TOOLS_DIR / "hybrid_retrieval.py",
+            TOOLS_DIR / "hybrid_retrieval_adapters.py",
+        ],
         "specs": [
             {
                 "name": "rag_chat",
@@ -336,7 +357,7 @@ TOOL_DEFINITIONS = {
             }
         ],
         "description": "Dynamische RAG-Suche mit semantischem und strukturbezogenem Retrieval über alle aktiven Bases.",
-        "version": "0.6.1",
+        "version": "1.0.0",
     },
     "safe_webcaller": {
         "name": "Safe Webcaller",
@@ -348,6 +369,7 @@ TOOL_DEFINITIONS = {
     "kahle_workflow": {
         "name": "KAHLE Workflow",
         "path": TOOLS_DIR / "kahle_workflow_orchestrator.py",
+        "dependencies": [TOOLS_DIR / "hybrid_retrieval.py", TOOLS_DIR / "hybrid_retrieval_adapters.py"],
         "specs": KAHLE_WORKFLOW_SPECS,
         "description": "Deterministischer KAHLE Workflow-Orchestrator fuer Tasks, RAG/Web und strukturierte Ausgaben.",
         "version": "0.1.0",
@@ -400,7 +422,10 @@ def register_tool(con: sqlite3.Connection, tool_id: str, definition: dict[str, A
     path = definition["path"]
     if not path.exists():
         raise FileNotFoundError(f"tool file not found: {path}")
-    content = path.read_text(encoding="utf-8")
+    dependencies = definition.get("dependencies") or []
+    pieces = [dependency.read_text(encoding="utf-8") for dependency in dependencies] + [path.read_text(encoding="utf-8")]
+    pieces = [piece.replace("from __future__ import annotations\n", "") for piece in pieces]
+    content = "from __future__ import annotations\n\n" + "\n\n".join(pieces)
     existing = con.execute("select created_at from tool where id = ?", (tool_id,)).fetchone()
     created_at = int(existing["created_at"]) if existing else now
     meta = {
@@ -508,6 +533,14 @@ def set_model_tools(con: sqlite3.Connection, model_id: str, tool_ids: list[str],
     meta = load_json(row["meta"], {})
     existing_tool_ids = [item for item in list(meta.get("toolIds") or []) if item not in tool_ids]
     meta["toolIds"] = tool_ids + existing_tool_ids
+    capabilities = meta.setdefault("capabilities", {})
+    capabilities["image_generation"] = False
+    capabilities["code_interpreter"] = False
+    capabilities["terminal"] = False
+    capabilities["builtin_tools"] = True
+    builtin_tools = meta.setdefault("builtinTools", {})
+    builtin_tools["image_generation"] = False
+    builtin_tools["code_interpreter"] = False
     params = load_json(row["params"], {})
     if prompt_path and prompt_path.exists():
         params["system"] = prompt_path.read_text(encoding="utf-8")
@@ -517,6 +550,19 @@ def set_model_tools(con: sqlite3.Connection, model_id: str, tool_ids: list[str],
         (json.dumps(meta, ensure_ascii=False), json.dumps(params, ensure_ascii=False), now, model_id),
     )
     return True
+
+
+def resolve_vinci_model_ids(con: sqlite3.Connection) -> list[str]:
+    rows = con.execute("select id, name from model").fetchall()
+    resolved: list[str] = []
+    configured_ids = set(KAHLE_VINCI_MODEL_IDS)
+    for row in rows:
+        model_id = str(row["id"] or "")
+        model_name = str(row["name"] or "").strip().lower()
+        if model_id in configured_ids or model_name in KAHLE_VINCI_MODEL_NAMES:
+            if model_id not in resolved:
+                resolved.append(model_id)
+    return resolved
 
 
 def ensure_admin_model(con: sqlite3.Connection, now: int) -> None:
@@ -646,9 +692,23 @@ def main() -> int:
         prompts = {
             "vinci-2-clone-clone-clone": PROMPTS_DIR / "kahle-vinci-systemprompt.md",
             "kahle-vinci-thinking": PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md",
+            "kahle-vinci-max-thinking": PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md",
         }
+        resolved_vinci_model_ids = resolve_vinci_model_ids(con)
+        for model_id in resolved_vinci_model_ids:
+            prompt_path = prompts.get(model_id)
+            if prompt_path is None:
+                name_row = con.execute("select name from model where id = ?", (model_id,)).fetchone()
+                model_name = str(name_row["name"] or "").strip().lower() if name_row else ""
+                prompt_path = (
+                    PROMPTS_DIR / "kahle-vinci-systemprompt.md"
+                    if model_name == "kahle-vinci"
+                    else PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md"
+                )
+            set_model_tools(con, model_id, ["kahle_tasks", "kahle_workflow"], now, prompt_path)
+
         for model_id in KAHLE_VINCI_MODEL_IDS:
-            if not set_model_tools(con, model_id, ["kahle_tasks", "kahle_workflow"], now, prompts.get(model_id)):
+            if model_id not in resolved_vinci_model_ids:
                 print(f"WARN: model not found: {model_id}")
 
         ensure_admin_model(con, now)
@@ -672,7 +732,7 @@ def main() -> int:
 
     print("Registered KAHLE tools: " + ", ".join(TOOL_DEFINITIONS))
     print("Registered KAHLE functions: " + ", ".join(FUNCTION_DEFINITIONS))
-    print(f"Attached kahle_tasks/kahle_workflow to {', '.join(KAHLE_VINCI_MODEL_IDS)}")
+    print(f"Attached kahle_tasks/kahle_workflow to {', '.join(resolved_vinci_model_ids)}")
     print(f"Ensured admin model: {ADMIN_MODEL_ID}")
     if tools_prompt_updated:
         print("Updated global tools function-calling prompt")

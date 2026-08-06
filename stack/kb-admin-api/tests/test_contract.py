@@ -18,6 +18,7 @@ def load_module(root: Path):
     os.environ["KB_ADMIN_DEV_AUTH_BYPASS"] = "true"
     os.environ["KB_ADMIN_MAINTENANCE_API_KEY"] = "test-maintenance-key"
     os.environ["KB_ADMIN_TRASH_RETENTION_DAYS"] = "30"
+    os.environ["KB_PORTAL_DB_PATH"] = str(root / "portal.sqlite3")
     module_path = Path(__file__).resolve().parents[1] / "app" / "main.py"
     spec = importlib.util.spec_from_file_location("kb_admin_api", module_path)
     module = importlib.util.module_from_spec(spec)

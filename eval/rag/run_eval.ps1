@@ -158,11 +158,14 @@ foreach ($q in $questions) {
     $started = Get-Date
     $status = "ok"
     $answer = ""
+    $sources = @()
     $errorMessage = ""
 
     try {
         $response = Invoke-RagQuestion -Url $chatUrl -ModelName $Model -Question $q -Token $token -Timeout $TimeoutSec
         $answer = [string]$response.choices[0].message.content
+        if ($response.PSObject.Properties.Name -contains "sources") { $sources = @($response.sources) }
+        elseif ($response.choices[0].message.PSObject.Properties.Name -contains "sources") { $sources = @($response.choices[0].message.sources) }
     }
     catch {
         $status = "error"
@@ -177,6 +180,7 @@ foreach ($q in $questions) {
         expected_topic = $q.expected_topic
         must_have_terms = $q.must_have_terms
         answer = $answer
+        sources = $sources
         error = $errorMessage
     }
 

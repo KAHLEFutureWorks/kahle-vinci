@@ -1,0 +1,32 @@
+documents:
+  - file: KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md
+    questions:
+      - Warum ist KI gerade jetzt für Autohäuser relevant?
+      - Welche Entlastung kann KI im Autohaus schaffen?
+      - Was erwarten Kunden laut Strategie von digitalen Services?
+      - Welche Rolle spielen Zeitvorteil und Kundenbindung?
+      - Was bedeutet der Satz, dass KI jetzt entschieden wird?
+  - file: KI_Anwendeungsuebersicht_KAHLE.md
+    questions:
+      - Welche Aufgabe übernimmt der Voicebot Kahla?
+      - Welche Datenarten verarbeitet KAHLE-Speak?
+      - Welchen Status hat KAHLE-Vinci in der Anwendungsübersicht?
+      - Welche Technik und Modelle nutzt KAHLE-Vinci?
+      - Für welche Bereiche wird Microsoft 365 Copilot eingesetzt?
+  - file: KAHLE_KI-Compliance_v1.2 (1).md
+    questions:
+      - Welche Datenschutzvoraussetzungen gelten für personenbezogene Daten in KI-Tools?
+      - Welche technischen und organisatorischen Maßnahmen werden genannt?
+      - Wie lange werden Logfiles mindestens aufbewahrt?
+      - Wer trägt die Gesamtverantwortung für die KI-Strategie?
+      - Wie werden neue KI-Projekte geprüft und freigegeben?
+  - file: KAHLE_KI_Policy_v1.4 (2).md
+    questions:
+      - Welche Dos and Don'ts gelten bei der Nutzung von KI?
+      - Wie läuft der Eskalationsprozess bei einem KI-Vorfall ab?
+      - Welche KI-Systeme stehen auf der Whitelist?
+      - Wer besitzt Entscheidungsbefugnis für KI bei KAHLE?
+      - Welche Regeln gelten für Kommunikation und Kennzeichnung?
+  - file: null
+    questions:
+      - Welche Regel gilt für die frei erfundene Anwendung ZX-999-NICHT-VORHANDEN?

@@ -2,47 +2,80 @@ knowledgebases:
   kahleallgemein:
     - question: "Welche Leistungen bietet KAHLE seinen Kundinnen und Kunden an?"
       expected_topic: "Allgemeines Leistungs- und Serviceangebot"
+      expected_sources: ["Leistungen", "Services"]
       must_have_terms: ["Leistungen", "Service"]
     - question: "Welche Standorte oder Kontaktwege werden fuer KAHLE genannt?"
       expected_topic: "Standorte, Kontakt und Erreichbarkeit"
+      expected_sources: ["Standorte"]
       must_have_terms: ["Standort", "Kontakt"]
     - question: "Wie beschreibt KAHLE seinen Anspruch an Beratung und Kundenservice?"
       expected_topic: "Serviceverstaendnis und Beratungsanspruch"
+      expected_sources: ["Leistungen", "Services"]
       must_have_terms: ["Beratung", "Kundenservice"]
     - question: "Welche Informationen gibt es zu Terminvereinbarung oder Werkstattservice?"
       expected_topic: "Termin, Werkstatt und Serviceprozesse"
+      expected_sources: ["Leistungen", "Services"]
       must_have_terms: ["Termin", "Werkstatt"]
     - question: "Welche allgemeinen Informationen sind fuer Neukunden besonders relevant?"
       expected_topic: "Einstiegsinformationen fuer Neukunden"
+      expected_sources: ["Leistungen", "Services"]
+    - question: "Welche interne Information gibt es zur frei erfundenen Kennung ZX-999-NICHT-VORHANDEN?"
+      expected_topic: "Keine freigegebene Quelle"
+      expect_no_answer: true
   kahlekontext:
     - question: "Welche internen Kontextinformationen sollen Antworten zu KAHLE beruecksichtigen?"
       expected_topic: "Antwortkontext und interne Einordnung"
+      expected_sources: ["masterkontext"]
       must_have_terms: ["Kontext", "KAHLE"]
     - question: "Wie soll mit unklaren oder mehrdeutigen Nutzerfragen umgegangen werden?"
       expected_topic: "Rueckfragen und Umgang mit Unsicherheit"
+      expected_sources: ["masterkontext"]
       must_have_terms: ["Rueckfrage", "unklar"]
     - question: "Welche Quellen oder Wissensbereiche haben Vorrang bei Antworten?"
       expected_topic: "Quellenpriorisierung und Wissenshierarchie"
+      expected_sources: ["masterkontext"]
       must_have_terms: ["Quelle", "Wissen"]
     - question: "Welche Tonalitaet wird fuer Antworten im KAHLE-Kontext erwartet?"
       expected_topic: "Kommunikationsstil und Tonalitaet"
+      expected_sources: ["masterkontext"]
       must_have_terms: ["Tonalitaet", "Antwort"]
     - question: "Wie sollen Antworten abgegrenzt werden, wenn Informationen im Kontext fehlen?"
       expected_topic: "Grenzen des Wissens und Transparenz"
+      expected_sources: ["masterkontext"]
       must_have_terms: ["fehlen", "Informationen"]
+    - question: "An welchen KAHLE-Standorten werden welche Marken genannt?"
+      expected_topic: "Tabellen- und Mehrquellenabfrage zu Standorten und Marken"
+      expected_sources: ["Standorte", "Marken"]
+      must_have_terms: ["Standort"]
+    - question: "Was steht in der Quelle KB_KAHLE_Hannover zur Niederlassung?"
+      expected_topic: "Kennungs- und Dateinamensuche"
+      expected_sources: ["Hannover"]
   kahlerichtlinien:
     - question: "Welche Regeln gelten fuer Datenschutz und den Umgang mit personenbezogenen Daten?"
       expected_topic: "Datenschutz und personenbezogene Daten"
+      expected_sources: ["Datenschutz"]
       must_have_terms: ["Datenschutz", "personenbezogen"]
     - question: "Welche Inhalte duerfen nicht erfunden werden, wenn keine Quelle vorliegt?"
       expected_topic: "Vermeidung von Halluzinationen"
+      expected_sources: ["richtlinie"]
       must_have_terms: ["Quelle", "nicht erfinden"]
     - question: "Wie sollen vertrauliche oder sensible Informationen behandelt werden?"
       expected_topic: "Vertraulichkeit und sensible Daten"
+      expected_sources: ["Compliance"]
       must_have_terms: ["vertraulich", "sensibel"]
     - question: "Welche Vorgaben gibt es fuer sichere und regelkonforme Antworten?"
       expected_topic: "Compliance und Antwortregeln"
+      expected_sources: ["Compliance"]
       must_have_terms: ["sicher", "regelkonform"]
     - question: "Wann soll eine Anfrage abgelehnt oder an einen Menschen eskaliert werden?"
       expected_topic: "Ablehnung und Eskalation"
+      expected_sources: ["Compliance"]
       must_have_terms: ["ablehnen", "eskalieren"]
+    - question: "Nenne die einschlaegige Datenschutzregel und verlinke die Originalquelle."
+      expected_topic: "Richtlinienfrage mit Originalquelle"
+      expected_sources: ["Datenschutz"]
+      must_have_terms: ["Datenschutz"]
+    - question: "Welche Aussage gilt, wenn zwei freigegebene Richtlinien einander widersprechen?"
+      expected_topic: "Konflikt transparent machen und nicht selbst entscheiden"
+      expected_sources: ["Richtlinie"]
+      must_have_terms: ["Widerspruch"]

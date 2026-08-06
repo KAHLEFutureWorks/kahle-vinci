@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import re
+import socket
+import struct
+import tempfile
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+import requests
+from pypdf import PdfReader
+
+
+class IngestError(ValueError):
+    """Stable, user-safe rejection reason for the upload interface."""
+
+
+@dataclass(frozen=True)
+class InspectedFile:
+    filename: str
+    extension: str
+    media_type: str
+    size: int
+    sha256: str
+    page_count: int | None = None
+
+
+@dataclass(frozen=True)
+class InjectionFinding:
+    risk: str
+    signals: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class IngestResult:
+    inspected: InspectedFile
+    original_path: Path
+    markdown_path: Path
+    markdown_sha256: str
+    injection: InjectionFinding
+    conversion_quality: str = "good"
+    conversion_issues: tuple[str, ...] = ()
+
+
+class MalwareScanner(Protocol):
+    def scan(self, filename: str, data: bytes) -> None: ...
+
+
+class MarkdownConverter(Protocol):
+    def convert(self, filename: str, data: bytes, title: str) -> str: ...
+
+
+class SecureFileInspector:
+    OFFICE_ROOTS = {"docx": "word/", "xlsx": "xl/", "pptx": "ppt/"}
+    MEDIA_TYPES = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "txt": "text/plain",
+        "md": "text/markdown",
+        "csv": "text/csv",
+    }
+
+    def __init__(self, max_bytes: int = 50 * 1024 * 1024, max_pdf_pages: int = 200):
+        self.max_bytes = max_bytes
+        self.max_pdf_pages = max_pdf_pages
+
+    def inspect(self, filename: str, data: bytes) -> InspectedFile:
+        safe_name = Path(filename or "").name
+        if not safe_name or safe_name != filename or safe_name in {".", ".."}:
+            raise IngestError("invalid_filename")
+        extension = Path(safe_name).suffix.lower().lstrip(".")
+        if extension not in self.MEDIA_TYPES:
+            raise IngestError("file_type_not_allowed")
+        if not data:
+            raise IngestError("empty_file")
+        if len(data) > self.max_bytes:
+            raise IngestError("file_too_large")
+
+        pages = None
+        if extension == "pdf":
+            if not data.startswith(b"%PDF-"):
+                raise IngestError("file_type_mismatch")
+            try:
+                reader = PdfReader(io.BytesIO(data))
+                if reader.is_encrypted:
+                    raise IngestError("encrypted_file_not_allowed")
+                pages = len(reader.pages)
+            except IngestError:
+                raise
+            except Exception as exc:
+                raise IngestError("invalid_pdf") from exc
+            if pages > self.max_pdf_pages:
+                raise IngestError("pdf_page_limit_exceeded")
+        elif extension in self.OFFICE_ROOTS:
+            self._inspect_office(extension, data)
+        else:
+            self._inspect_text(data)
+
+        return InspectedFile(
+            filename=safe_name,
+            extension=extension,
+            media_type=self.MEDIA_TYPES[extension],
+            size=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+            page_count=pages,
+        )
+
+    def _inspect_office(self, extension: str, data: bytes) -> None:
+        if data.startswith(bytes.fromhex("D0CF11E0")):
+            raise IngestError("encrypted_or_legacy_office_not_allowed")
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                names = {name.replace("\\", "/").lower() for name in archive.namelist()}
+                if "[content_types].xml" not in names:
+                    raise IngestError("file_type_mismatch")
+                if not any(name.startswith(self.OFFICE_ROOTS[extension]) for name in names):
+                    raise IngestError("file_type_mismatch")
+                if any(name.endswith("vbaproject.bin") for name in names):
+                    raise IngestError("macros_not_allowed")
+                content_types = archive.read("[Content_Types].xml").lower()
+                if b"macroenabled" in content_types or b"vba" in content_types:
+                    raise IngestError("macros_not_allowed")
+                if any("encryptedpackage" in name or "encryptioninfo" in name for name in names):
+                    raise IngestError("encrypted_file_not_allowed")
+        except IngestError:
+            raise
+        except (zipfile.BadZipFile, KeyError) as exc:
+            raise IngestError("invalid_office_file") from exc
+
+    @staticmethod
+    def _inspect_text(data: bytes) -> None:
+        if b"\x00" in data[:8192]:
+            raise IngestError("file_type_mismatch")
+        for encoding in ("utf-8-sig", "cp1252"):
+            try:
+                data.decode(encoding)
+                return
+            except UnicodeDecodeError:
+                continue
+        raise IngestError("invalid_text_encoding")
+
+
+class QuarantineStorage:
+    def __init__(self, root: str | Path):
+        self.root = Path(root).resolve()
+
+    def store(self, document_id: str, version_id: str, extension: str, data: bytes) -> Path:
+        for value in (document_id, version_id):
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
+                raise IngestError("invalid_storage_identifier")
+        target_dir = (self.root / document_id / version_id).resolve()
+        if self.root not in target_dir.parents:
+            raise IngestError("invalid_storage_path")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"original.{extension}"
+        if target.exists():
+            raise IngestError("original_already_exists")
+        fd, temporary = tempfile.mkstemp(prefix=".upload-", dir=target_dir)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return target
+
+    def store_markdown(self, original_path: Path, markdown: str) -> Path:
+        target = original_path.with_name("rag.md")
+        if target.exists():
+            raise IngestError("markdown_already_exists")
+        target.write_text(markdown, encoding="utf-8", newline="\n")
+        return target
+
+
+class ClamAVScanner:
+    """ClamAV INSTREAM adapter. Scanner outages fail closed."""
+
+    def __init__(self, host: str = "clamav", port: int = 3310, timeout: float = 30.0):
+        self.host, self.port, self.timeout = host, port, timeout
+
+    def scan(self, filename: str, data: bytes) -> None:
+        try:
+            with socket.create_connection((self.host, self.port), self.timeout) as connection:
+                connection.settimeout(self.timeout)
+                connection.sendall(b"zINSTREAM\0")
+                for offset in range(0, len(data), 1024 * 1024):
+                    chunk = data[offset : offset + 1024 * 1024]
+                    connection.sendall(struct.pack(">I", len(chunk)) + chunk)
+                connection.sendall(struct.pack(">I", 0))
+                response = connection.recv(4096).decode("utf-8", errors="replace")
+        except OSError as exc:
+            raise IngestError("malware_scanner_unavailable") from exc
+        if " FOUND" in response:
+            raise IngestError("malware_detected")
+        if " OK" not in response:
+            raise IngestError("malware_scan_failed")
+
+
+class DocumentWorkerAdapter:
+    def __init__(self, base_url: str, api_key: str = "", timeout: float = 300.0):
+        self.base_url, self.api_key, self.timeout = base_url.rstrip("/"), api_key, timeout
+
+    def convert(self, filename: str, data: bytes, title: str) -> str:
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            response = requests.post(
+                f"{self.base_url}/bundle/to_md",
+                headers=headers,
+                files={"files": (filename, data, "application/octet-stream")},
+                data={"title": title, "mode": "raw"},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise IngestError("document_conversion_failed") from exc
+        markdown = response.content.decode("utf-8", errors="strict").strip()
+        if not markdown:
+            raise IngestError("document_conversion_empty")
+        return markdown + "\n"
+
+
+class PromptInjectionInspector:
+    RULES = {
+        "ignore_instructions": re.compile(r"\b(ignore|disregard|forget)\b.{0,50}\b(instruction|prompt|system)\b", re.I | re.S),
+        "system_prompt_request": re.compile(r"\b(system prompt|developer message|hidden instructions?)\b", re.I),
+        "tool_or_secret_request": re.compile(r"\b(call|use|execute|reveal|show)\b.{0,60}\b(tool|password|secret|token|api key)\b", re.I | re.S),
+        "role_override": re.compile(r"\b(you are now|act as|new role|jailbreak)\b", re.I),
+    }
+
+    def inspect(self, markdown: str) -> InjectionFinding:
+        signals = tuple(name for name, rule in self.RULES.items() if rule.search(markdown))
+        risk = "high" if len(signals) >= 2 else "medium" if signals else "none"
+        return InjectionFinding(risk=risk, signals=signals)
+
+
+class ConversionQualityInspector:
+    MOJIBAKE = ("\u00c3", "\u00c2", "\u00e2\u20ac", "\ufffd")
+
+    def inspect(self, markdown: str) -> tuple[str, tuple[str, ...]]:
+        issues: list[str] = []
+        if len((markdown or "").strip()) < 20:
+            issues.append("conversion_output_too_short")
+        if any(marker in (markdown or "") for marker in self.MOJIBAKE):
+            issues.append("character_encoding_corrupted")
+        table_rows = [line for line in (markdown or "").splitlines() if line.strip().startswith("|")]
+        if table_rows:
+            widths = [line.count("|") for line in table_rows if not re.fullmatch(r"[| :\-]+", line.strip())]
+            if widths and max(widths) != min(widths):
+                issues.append("table_column_structure_inconsistent")
+        return ("failed" if "character_encoding_corrupted" in issues or "conversion_output_too_short" in issues
+                else "low" if issues else "good", tuple(issues))
+
+
+class SecureIngestPipeline:
+    def __init__(self, inspector: SecureFileInspector, scanner: MalwareScanner, converter: MarkdownConverter,
+                 storage: QuarantineStorage, injection_inspector: PromptInjectionInspector | None = None):
+        self.inspector = inspector
+        self.scanner = scanner
+        self.converter = converter
+        self.storage = storage
+        self.injection_inspector = injection_inspector or PromptInjectionInspector()
+        self.quality_inspector = ConversionQualityInspector()
+
+    def ingest(self, document_id: str, version_id: str, filename: str, data: bytes, title: str) -> IngestResult:
+        inspected = self.inspector.inspect(filename, data)
+        self.scanner.scan(filename, data)
+        original = self.storage.store(document_id, version_id, inspected.extension, data)
+        try:
+            markdown = self.converter.convert(filename, data, title)
+            injection = self.injection_inspector.inspect(markdown)
+            conversion_quality, conversion_issues = self.quality_inspector.inspect(markdown)
+            markdown_path = self.storage.store_markdown(original, markdown)
+        except Exception:
+            # Original remains quarantined for audit/diagnosis; it is never published implicitly.
+            raise
+        return IngestResult(
+            inspected=inspected,
+            original_path=original,
+            markdown_path=markdown_path,
+            markdown_sha256=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+            injection=injection, conversion_quality=conversion_quality,
+            conversion_issues=conversion_issues,
+        )

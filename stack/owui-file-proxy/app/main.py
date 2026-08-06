@@ -123,6 +123,7 @@ OWUI_LOG_CLEANUP_STALE_HOURS = int(os.getenv("OWUI_LOG_CLEANUP_STALE_HOURS", "36
 
 # Size limit
 MAX_FILE_BYTES = int(os.getenv("MAX_FILE_BYTES", "20000000"))  # 20 MB
+MAX_EXTRACTED_TEXT_CHARS_TOTAL = int(os.getenv("MAX_EXTRACTED_TEXT_CHARS_TOTAL", "180000"))
 
 # Signed download links
 FILE_LINK_SECRET = os.getenv("FILE_LINK_SECRET", "")
@@ -1304,6 +1305,22 @@ class BundleToMdRequest(BaseModel):
     title: str = Field("Masterkontext", description="Title for the bundle output")
     file_paths: Optional[list[str]] = Field(None, description="List of exact filenames/paths in uploads")
 
+
+class FilesExtractTextRequest(BaseModel):
+    file_paths: list[NonEmptyStr] = Field(
+        ...,
+        min_length=1,
+        max_length=5,
+        description="One to five exact uploaded filenames/paths to read without modifying or saving them",
+    )
+    max_chars_per_file: int = Field(
+        60000,
+        ge=1000,
+        le=100000,
+        description="Maximum extracted characters returned per file; truncation is reported explicitly",
+    )
+
+
 class BundleToMdSaveRequest(BaseModel):
     title: str = Field("Masterkontext", description="Title for the bundle output")
     file_paths: list[NonEmptyStr] = Field(..., min_length=1, description="List of exact filenames/paths in uploads")
@@ -2300,6 +2317,88 @@ def docx_to_pdf_save(payload: DocxToPdfSaveRequest, x_api_key: Optional[str] = H
     saved["conversion"] = "docx_to_pdf_branded"
     saved["template_used"] = bool(_PDF_TEMPLATE_USED.get())
     return saved
+
+# -----------------------------
+# Uploaded files: read-only text extraction for chat analysis
+# -----------------------------
+@app.post("/files/extract_text", operation_id="files_extract_text")
+def files_extract_text(payload: FilesExtractTextRequest, x_api_key: Optional[str] = Header(default=None)):
+    """
+    Read one or more uploaded DOCX, PDF, XLSX, TXT, Markdown or CSV files.
+
+    This operation is read-only. It returns extracted text to the model for
+    analysis, summaries and comparisons. It never modifies a source file,
+    creates an output file or returns a download URL.
+    """
+    _require_api_key(x_api_key)
+
+    paths: list[Path] = []
+    for file_path in payload.file_paths:
+        _reject_wildcards(file_path)
+        paths.append(
+            _resolve_path(
+                file_path,
+                allowed_exts=(".docx", ".pdf", ".xlsx", ".txt", ".md", ".csv"),
+                require_exact=True,
+            )
+        )
+
+    worker_files = []
+    for path in paths:
+        data = _read_file(path)
+        worker_files.append(
+            ("files", (_visible_filename(path.name), data, "application/octet-stream"))
+        )
+
+    response = requests.post(
+        f"{DOC_WORKER_URL}/bundle/extract_text",
+        headers=_worker_headers(),
+        files=worker_files,
+        timeout=300,
+    )
+    _raise_for_worker_response(response)
+
+    try:
+        worker_payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="document_worker_invalid_json") from exc
+
+    worker_results = worker_payload.get("files") if isinstance(worker_payload, dict) else None
+    if not isinstance(worker_results, list) or len(worker_results) != len(paths):
+        raise HTTPException(status_code=502, detail="document_worker_invalid_extract_result")
+
+    results: list[dict[str, Any]] = []
+    total_returned_chars = 0
+    for path, item in zip(paths, worker_results):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=502, detail="document_worker_invalid_extract_item")
+        full_text = str(item.get("text") or "")
+        remaining_chars = max(0, MAX_EXTRACTED_TEXT_CHARS_TOTAL - total_returned_chars)
+        file_limit = min(payload.max_chars_per_file, remaining_chars)
+        returned_text = full_text[:file_limit]
+        total_returned_chars += len(returned_text)
+        results.append(
+            {
+                "filename": _visible_filename(path.name),
+                "ext": str(item.get("ext") or path.suffix.lower().lstrip(".")),
+                "sha256": str(item.get("sha") or _sha256(_read_file(path))),
+                "size_bytes": int(item.get("bytes") or path.stat().st_size),
+                "text": returned_text,
+                "text_chars": len(full_text),
+                "returned_chars": len(returned_text),
+                "truncated": len(returned_text) < len(full_text),
+            }
+        )
+
+    return {
+        "operation": "read_only_text_extraction",
+        "files": results,
+        "files_count": len(results),
+        "total_text_chars": sum(item["text_chars"] for item in results),
+        "returned_chars": total_returned_chars,
+        "truncated": any(item["truncated"] for item in results),
+    }
+
 
 # -----------------------------
 # Generic single-file -> Markdown

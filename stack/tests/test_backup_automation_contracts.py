@@ -16,7 +16,7 @@ def test_backup_script_safety_contract():
     assert "set -Eeuo pipefail" in src
     assert "if (( EUID != 0 ))" in src
     assert "trap cleanup EXIT" in src
-    assert src.index("install -d -m 700") < src.index("trap cleanup EXIT")
+    assert src.index('install -d -o root -g root -m 700 "$STAGING_DIR" "$STATUS_DIR"') < src.index("trap cleanup EXIT")
     assert "restart_stack || true" in src
     assert "compose up -d --wait --wait-timeout 120" in src
     assert "flock -n 9" in src

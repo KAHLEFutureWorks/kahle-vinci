@@ -355,7 +355,7 @@ def test_direct_document_request_skips_rag_and_uses_only_requested_content():
 
         module.create_downloadable_file = fake_create
         tools = module.Tools()
-        tools._run_internal_rag = lambda query: (_ for _ in ()).throw(
+        tools._run_internal_rag = lambda query, user=None: (_ for _ in ()).throw(
             AssertionError("direct document creation must not run internal RAG")
         )
         raw = asyncio.run(tools.kahle_workflow_execute(request, output_format="docx"))
@@ -602,7 +602,7 @@ def test_workflow_cancels_internal_research_task_when_rag_errors():
 
     tools._tasks_create = fake_create
     tools._task_update = fake_update
-    tools._run_internal_rag = lambda query: "KAHLE_RAG_RESULT\nFOUND: false\nERROR: IONOS API Key fehlt."
+    tools._run_internal_rag = lambda query, user=None: "KAHLE_RAG_RESULT\nFOUND: false\nERROR: IONOS API Key fehlt."
 
     raw = asyncio.run(
         tools.kahle_workflow_execute(

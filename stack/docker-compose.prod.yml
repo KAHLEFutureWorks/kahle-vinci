@@ -20,8 +20,8 @@ services:
       ENABLE_PROFILE_IMAGE_URL_FORWARDING: "False"
       WEBUI_SESSION_COOKIE_SECURE: "True"
       WEBUI_AUTH_COOKIE_SECURE: "True"
-      WEBUI_SESSION_COOKIE_SAME_SITE: "lax"
-      WEBUI_AUTH_COOKIE_SAME_SITE: "lax"
+      WEBUI_SESSION_COOKIE_SAME_SITE: "none"
+      WEBUI_AUTH_COOKIE_SAME_SITE: "none"
       OAUTH_MAX_SESSIONS_PER_USER: "5"
       OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE: "True"
       OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "False"
@@ -50,10 +50,20 @@ services:
     cpus: 1.0
     pids_limit: 192
 
+  clamav:
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 256
+
   kb-admin-dashboard:
     mem_limit: 512m
     cpus: 1.0
     pids_limit: 192
+
+  reranker:
+    mem_limit: 4g
+    cpus: 4.0
+    pids_limit: 512
 
   document-worker:
     mem_limit: 1500m

@@ -9,39 +9,61 @@
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
-		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
 	}
 
 	handle /files/* {
+		header {
+			Content-Security-Policy "frame-ancestors 'none'"
+			X-Frame-Options "DENY"
+		}
 		reverse_proxy owui-file-proxy:8091
 	}
 
-	redir /admin/vector /admin/vector/ 308
+	redir /admin/vector /wissen/ 308
+	redir /admin/vector/* /wissen/ 308
 
-	handle_path /admin/vector/api/* {
+	redir /wissen /wissen/ 308
+
+	handle_path /wissen/api/* {
+		header {
+			Content-Security-Policy "frame-ancestors 'none'"
+			X-Frame-Options "DENY"
+		}
 		reverse_proxy kb-admin-api:8092
 	}
 
-	@vector_static path /admin/vector/assets/* /admin/vector/favicon.svg
+	@vector_static path /wissen/assets/* /wissen/favicon.svg
 	handle @vector_static {
-		forward_auth kb-admin-api:8092 {
-			uri /session
+		header {
+			Content-Security-Policy "frame-ancestors 'none'"
+			X-Frame-Options "DENY"
 		}
-		uri strip_prefix /admin/vector
+		forward_auth kb-admin-api:8092 {
+			uri /portal/session
+		}
+		uri strip_prefix /wissen
 		reverse_proxy kb-admin-dashboard:3000
 	}
 
-	handle /admin/vector/* {
+	handle /wissen/* {
+		header {
+			Content-Security-Policy "frame-ancestors 'none'"
+			X-Frame-Options "DENY"
+		}
 		forward_auth kb-admin-api:8092 {
-			uri /session
+			uri /portal/session
 		}
 		reverse_proxy kb-admin-dashboard:3000
 	}
 
 	handle {
+		header {
+			-X-Frame-Options
+			Content-Security-Policy "frame-ancestors 'self' https://kahlekg.sharepoint.com"
+		}
 		reverse_proxy open-webui:8080
 	}
 }
