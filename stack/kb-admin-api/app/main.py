@@ -2103,6 +2103,26 @@ def portal_admin_removals(identity: dict[str, Any] = Depends(require_portal_iden
     return MAINTENANCE.list_removals()
 
 
+@app.post("/portal/admin/trash/{document_id}/delete")
+def portal_admin_delete_from_trash(
+    document_id: str, payload: PortalRestoreRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    """Sofortige endgueltige Loeschung, nur fuer Portal-Admins (PRD 23.3)."""
+    try:
+        MAINTENANCE.delete_now(
+            document_id, identity["user_id"], payload.reason, file_root=PORTAL_FILES_ROOT,
+        )
+    except MaintenanceError as exc:
+        status = 403 if str(exc) == "portal_admin_required" else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    PORTAL_GOVERNANCE.record_audit(
+        identity["user_id"], "document_deleted_immediately", "document", document_id,
+        {"reason": payload.reason},
+    )
+    return {"document_id": document_id, "status": "deleted"}
+
+
 @app.post("/portal/admin/removal-requests/{request_id}/decision")
 def portal_admin_decide_removal(
     request_id: str, payload: PortalRemovalDecisionRequest,

@@ -77,3 +77,60 @@ def test_trashed_documents_disappear_from_both_listings():
         # Im Papierkorb steht er weiterhin, jetzt aber mit lesbarem Titel.
         trash = client.get("/portal/admin/removals").json()["trash"]
         assert any(item.get("title") == "Wegwerfdokument" for item in trash), trash
+
+
+def test_only_portal_admins_delete_immediately_and_legal_hold_still_blocks():
+    """
+    Der regulaere Weg loescht erst nach 90 Tagen. Ein Portal-Admin darf das
+    abkuerzen; ein Legal Hold bleibt aber auch fuer ihn bindend.
+    """
+    import tempfile
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from test_portal_api import identity, load_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="admin2", email="admin2@kahle.de", display_name="Zweiter Admin",
+        )
+        module.PORTAL_GOVERNANCE.set_role("portal", "admin2", "admin")
+
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        def trashed(title: str) -> str:
+            case = module.DOCUMENT_LIFECYCLE.submit(
+                uploaded_by_user_id="portal", owner_user_id="portal",
+                target_knowledgebase_id=kb.knowledgebase_id, title=title,
+                original_filename=f"{title}.md", original_file_id=title,
+                original_sha256=("a" * 63 + title[-1]), valid_workdays=30,
+                confidentiality="internal",
+            )
+            module.MAINTENANCE.move_to_trash(case.document_id, "portal", "Weg damit")
+            return case.document_id
+
+        normal = trashed("Dokument1")
+        held = trashed("Dokument2")
+        module.MAINTENANCE.set_legal_hold(held, "portal", True, "Laufendes Verfahren", "2026-12-01")
+
+        # Ein normaler Admin darf nicht sofort loeschen.
+        current["user"] = identity("admin2", "user")
+        assert client.get("/portal/session").status_code == 200
+        forbidden = client.post(f"/portal/admin/trash/{normal}/delete", json={"reason": "Weg"})
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "portal_admin_required"
+
+        current["user"] = identity("portal", "admin")
+        blocked = client.post(f"/portal/admin/trash/{held}/delete", json={"reason": "Weg damit"})
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == "legal_hold_blocks_deletion"
+
+        deleted = client.post(f"/portal/admin/trash/{normal}/delete", json={"reason": "Endgültig weg"})
+        assert deleted.status_code == 200, deleted.text
+        remaining = [item["document_id"] for item in client.get("/portal/admin/removals").json()["trash"]]
+        assert normal not in remaining and held in remaining

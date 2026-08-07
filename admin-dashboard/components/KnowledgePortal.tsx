@@ -169,7 +169,7 @@ export default function KnowledgePortal() {
   return <div className="wp-shell">
     <header className="wp-header"><div><strong>KAHLE-<span>Vinci</span></strong><small>Wissensportal</small></div><div className="wp-user"><span>{session.display_name}</span><small>{session.email} · {session.role.replace("_", "-")}</small></div></header>
     <aside className="wp-nav"><p>Wissen verwalten</p>{tabs.map(([id, label, Icon]: any) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={19} /><span>{label}</span>{id === "tasks" && tasks.length > 0 && <b>{tasks.length}</b>}<ChevronRight size={15} /></button>)}<div className="wp-security"><ShieldCheck /><div><strong>Sicher verarbeitet</strong><small>Rechte, Gültigkeit und Quellen werden automatisch geprüft.</small></div></div></aside>
-    <main className="wp-main">{error && <div className="wp-alert"><AlertTriangle />{error}<button onClick={() => setError("")}>Schließen</button></div>}{tab === "overview" && <Overview session={session} tasks={tasks} kbs={kbs} go={setTab} />}{tab === "upload" && <Upload session={session} kbs={kbs} done={refresh} />}{tab === "tasks" && <Tasks tasks={tasks} session={session} done={refresh} />}{tab === "documents" && <DocumentList documents={documents} changes={documentChanges} ownershipTasks={ownershipTasks} users={users} session={session} done={refresh} />}{tab === "feedback" && <FeedbackForm />}{tab === "quality" && isAdmin && <QualityDashboardView data={quality} />}{tab === "quality-cases" && isAdmin && <QualityCasesView data={qualityCases} />}{tab === "users" && isAdmin && <UserAdmin users={users} session={session} done={refresh} />}{tab === "knowledgebases" && isAdmin && <KnowledgebaseAdmin kbs={kbs} changes={changes} session={session} done={refresh} />}{tab === "trash" && isAdmin && <TrashView data={removals} done={refresh} />}{tab === "audit" && isAdmin && <AuditView entries={audit} users={users} />}</main>
+    <main className="wp-main">{error && <div className="wp-alert"><AlertTriangle />{error}<button onClick={() => setError("")}>Schließen</button></div>}{tab === "overview" && <Overview session={session} tasks={tasks} kbs={kbs} go={setTab} />}{tab === "upload" && <Upload session={session} kbs={kbs} done={refresh} />}{tab === "tasks" && <Tasks tasks={tasks} session={session} done={refresh} />}{tab === "documents" && <DocumentList documents={documents} changes={documentChanges} ownershipTasks={ownershipTasks} users={users} session={session} done={refresh} />}{tab === "feedback" && <FeedbackForm />}{tab === "quality" && isAdmin && <QualityDashboardView data={quality} />}{tab === "quality-cases" && isAdmin && <QualityCasesView data={qualityCases} />}{tab === "users" && isAdmin && <UserAdmin users={users} session={session} done={refresh} />}{tab === "knowledgebases" && isAdmin && <KnowledgebaseAdmin kbs={kbs} changes={changes} session={session} done={refresh} />}{tab === "trash" && isAdmin && <TrashView data={removals} done={refresh} session={session} />}{tab === "audit" && isAdmin && <AuditView entries={audit} users={users} />}</main>
   </div>;
 }
 
@@ -239,11 +239,20 @@ function Tasks({ tasks, session, done }: { tasks: Task[]; session: Session; done
   const [reason, setReason] = useState<Record<string,string>>({}), [busy, setBusy] = useState("");
   const [review, setReview] = useState<any>(null), [revision, setRevision] = useState(""), [confirmed, setConfirmed] = useState(false);
   const canDecide = session.role !== "employee", isAdmin = ["admin","portal_admin"].includes(session.role);
+  const ownDecision = (status: string) =>
+    ["pending_employee_decision", "duplicate_blocked"].includes(status);
+  async function chooseAction(caseId: string, action: string) {
+    setBusy(caseId);
+    try {
+      await api(`/portal/cases/${caseId}/action`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
+      await done();
+    } finally { setBusy(""); }
+  }
   async function decide(caseId: string, decision: string) { setBusy(caseId); try { await api(`/portal/cases/${caseId}/decision`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, reason: reason[caseId] || (decision === "approve" ? "Fachlich geprüft und freigegeben" : "Zur weiteren Prüfung") }) }); await done(); } finally { setBusy(""); } }
   async function openReview(caseId: string) { const payload = await api<any>(`/portal/cases/${caseId}/review`); setReview(payload); setRevision(isAdmin ? payload.markdown : ""); setConfirmed(false); }
   async function revise() { if (!review) return; setBusy(review.case.case_id); try { await api(`/portal/cases/${review.case.case_id}/revision`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({instruction:isAdmin?"":revision,replacement_markdown:isAdmin?revision:"",reason:reason[review.case.case_id]||"Freigegebene Korrektur",confirmed})}); setReview(null); await done(); } finally {setBusy("");} }
   if (review) return <section className="wp-page"><Title eyebrow="Dokumentprüfung" title={review.case.title} text={isAdmin ? "Original und RAG-Markdown können direkt miteinander verglichen werden." : "Original und aufbereitete Fassung können direkt miteinander verglichen werden."} /><div className="wp-actions"><a className="wp-primary" target="_blank" rel="noreferrer" href={review.original_url}>Original öffnen</a><button onClick={() => setReview(null)}>Zurück</button></div><div className="wp-form"><label>{isAdmin ? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"}<textarea rows={22} readOnly={!isAdmin} value={isAdmin ? revision : review.markdown} onChange={e => isAdmin && setRevision(e.target.value)} /></label>{(isAdmin || session.role === "employee") && <><label>{isAdmin ? "Begründung" : "Korrektur in Alltagssprache"}<textarea value={isAdmin ? (reason[review.case.case_id]||"") : revision} onChange={e => isAdmin ? setReason({...reason,[review.case.case_id]:e.target.value}) : setRevision(e.target.value)} /></label><label><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> Ich gebe diese Korrektur ausdrücklich zur Verarbeitung frei.</label><button className="wp-primary" disabled={!confirmed || busy === review.case.case_id} onClick={() => void revise()}>Neue Entwurfsversion anlegen und vollständig prüfen</button></>}</div></section>;
-  return <section className="wp-page"><Title eyebrow="Arbeitsvorrat" title={session.role === "employee" ? "Meine Vorgänge" : "Offene Freigaben"} text="Du siehst nur Vorgänge, für die du zuständig bist." /><div className="wp-task-list">{tasks.length ? tasks.map(task => <article key={task.case_id}><div className="wp-task-icon"><FileSearch /></div><div className="wp-task-copy"><Badge status={task.status} /><h2>{task.title}</h2><p>{task.original_filename} · {task.target_knowledgebase_id}</p><p className="wp-reason">{reviewReason[task.status] || "Wartet auf eine Entscheidung."}</p>{task.requires_admin && <span className="wp-escalated"><AlertTriangle /> Adminentscheidung erforderlich</span>}<button className="wp-secondary" onClick={() => void openReview(task.case_id)}>Original und Markdown prüfen</button></div>{canDecide && task.status.includes("approval") && <div className="wp-task-actions"><textarea placeholder="Kurze Begründung" value={reason[task.case_id] || ""} onChange={e => setReason({...reason,[task.case_id]:e.target.value})} /><div><button onClick={() => void decide(task.case_id,"reject")}>Ablehnen</button><button onClick={() => void decide(task.case_id,"escalate")}>Weiterleiten</button><button className="approve" disabled={busy === task.case_id} onClick={() => void decide(task.case_id,"approve")}>Freigeben</button></div></div>}</article>) : <div className="wp-empty"><CheckCircle2 /><h2>Alles erledigt</h2><p>Aktuell wartet kein Vorgang auf dich.</p></div>}</div></section>;
+  return <section className="wp-page"><Title eyebrow="Arbeitsvorrat" title={session.role === "employee" ? "Meine Vorgänge" : "Offene Freigaben"} text="Du siehst nur Vorgänge, für die du zuständig bist." /><div className="wp-task-list">{tasks.length ? tasks.map(task => <article key={task.case_id}><div className="wp-task-icon"><FileSearch /></div><div className="wp-task-copy"><Badge status={task.status} /><h2>{task.title}</h2><p>{task.original_filename} · {task.target_knowledgebase_id}</p><p className="wp-reason">{reviewReason[task.status] || "Wartet auf eine Entscheidung."}</p>{task.requires_admin && <span className="wp-escalated"><AlertTriangle /> Adminentscheidung erforderlich</span>}<div className="wp-task-buttons"><button className="wp-secondary" onClick={() => void openReview(task.case_id)}>Original und Markdown prüfen</button>{ownDecision(task.status)&&<>{task.status==="duplicate_blocked"?<button className="wp-secondary approve" disabled={busy===task.case_id} onClick={()=>void chooseAction(task.case_id,"publish_existing")}>Vorhandenes zusätzlich veröffentlichen</button>:<button className="wp-secondary approve" disabled={busy===task.case_id} onClick={()=>void chooseAction(task.case_id,"create")}>Als neues Dokument vorschlagen</button>}<button className="wp-secondary" disabled={busy===task.case_id} onClick={()=>void chooseAction(task.case_id,"discard")}>Verwerfen</button></>}</div></div>{canDecide && task.status.includes("approval") && <div className="wp-task-actions"><textarea placeholder="Kurze Begründung" value={reason[task.case_id] || ""} onChange={e => setReason({...reason,[task.case_id]:e.target.value})} /><div><button onClick={() => void decide(task.case_id,"reject")}>Ablehnen</button><button onClick={() => void decide(task.case_id,"escalate")}>Weiterleiten</button><button className="approve" disabled={busy === task.case_id} onClick={() => void decide(task.case_id,"approve")}>Freigeben</button></div></div>}</article>) : <div className="wp-empty"><CheckCircle2 /><h2>Alles erledigt</h2><p>Aktuell wartet kein Vorgang auf dich.</p></div>}</div></section>;
 }
 
 function UserAdmin({ users, session, done }: { users: PortalUser[]; session: Session; done: () => Promise<void> }) {
@@ -446,9 +455,64 @@ function DocumentList({documents,changes,ownershipTasks,users,session,done}:{doc
 }
 
 
-function TrashView({data,done}:{data:any;done:()=>Promise<void>}){
- const [reason,setReason]=useState<Record<string,string>>({});
- async function decide(id:string,approve:boolean){await api(`/portal/admin/removal-requests/${id}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approve,reason:reason[id]||'Adminentscheidung'})});await done();}
- async function restore(id:string){await api(`/portal/admin/trash/${id}/restore`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason[id]||'Wiederherstellung durch Admin'})});await done();}
- return <section className="wp-page"><Title eyebrow="Aufbewahrung" title="Papierkorb und Löschanträge" text="Dokumente bleiben mindestens 30 und höchstens 90 Tage wiederherstellbar; Legal Holds setzen die Löschung aus."/><h2>Offene Anträge</h2><div className="wp-task-list">{(data.requests||[]).filter((x:any)=>x.status==='pending').map((item:any)=><article key={item.request_id}><div className="wp-task-copy"><Badge status={item.kind}/><h2>{item.title||item.document_id}</h2><p>{item.reason}</p><small className="wp-hint">{item.document_id}</small><textarea value={reason[item.request_id]||''} onChange={e=>setReason({...reason,[item.request_id]:e.target.value})}/></div><div className="wp-actions"><button onClick={()=>void decide(item.request_id,false)}>Ablehnen</button><button className="approve" onClick={()=>void decide(item.request_id,true)}>Bestätigen</button></div></article>)}</div><h2>Papierkorb</h2><div className="wp-task-list">{(data.trash||[]).map((item:any)=><article key={item.document_id}><div className="wp-task-copy"><Badge status={item.legal_hold?'Legal Hold':'Papierkorb'}/><h2>{item.title||item.document_id}</h2><p>Seit {item.trashed_at} · {item.reason}</p><small className="wp-hint">{item.document_id}</small></div><button onClick={()=>void restore(item.document_id)}>Wiederherstellen</button></article>)}</div></section>;
+function TrashView({data,done,session}:{data:any;done:()=>Promise<void>;session:Session}) {
+  const [reason,setReason]=useState<Record<string,string>>({}),[busy,setBusy]=useState("");
+  const [message,setMessage]=useState(""),[pendingDelete,setPendingDelete]=useState("");
+  const isPortalAdmin = session.role === "portal_admin";
+  const openRequests = ((data.requests||[]) as any[]).filter(item => item.status === "pending");
+
+  async function call(id: string, what: string, path: string, body: Record<string, unknown>) {
+    setBusy(id); setMessage("");
+    try {
+      await api(path, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      setMessage(`${what} wurde ausgeführt.`);
+      await done();
+    } catch (cause) {
+      setMessage(friendlyError(cause, `${what} ist fehlgeschlagen.`));
+    } finally { setBusy(""); setPendingDelete(""); }
+  }
+
+  const decide = (id:string,approve:boolean) => call(id, approve?"Die Bestätigung":"Die Ablehnung",
+    `/portal/admin/removal-requests/${id}/decision`, {approve,reason:reason[id]||"Adminentscheidung"});
+  const restore = (id:string) => call(id, "Die Wiederherstellung",
+    `/portal/admin/trash/${id}/restore`, {reason:reason[id]||"Wiederherstellung durch Admin"});
+  const purge = (id:string) => call(id, "Die endgültige Löschung",
+    `/portal/admin/trash/${id}/delete`, {reason:reason[id]||"Endgültige Löschung durch Portal-Admin"});
+
+  return <section className="wp-page"><Title eyebrow="Aufbewahrung" title="Papierkorb und Löschanträge" text="Dokumente bleiben mindestens 30 und höchstens 90 Tage wiederherstellbar; Legal Holds setzen die Löschung aus."/>
+    {message&&<p className="wp-message">{message}</p>}
+    <h2>Offene Anträge</h2>
+    <div className="wp-doc-list">{openRequests.length ? openRequests.map((item:any)=>
+      <article key={item.request_id}><div className="wp-trash-row">
+        <div className="wp-trash-copy"><Badge status={item.kind}/><strong>{item.title||item.document_id}</strong>
+          <span>{item.reason}</span><small className="wp-hint">{item.document_id}</small></div>
+        <div className="wp-trash-side">
+          <textarea placeholder="Begründung" value={reason[item.request_id]||""} onChange={e=>setReason({...reason,[item.request_id]:e.target.value})}/>
+          <div className="wp-actions">
+            <button disabled={busy===item.request_id} onClick={()=>void decide(item.request_id,false)}>Ablehnen</button>
+            <button className="approve" disabled={busy===item.request_id} onClick={()=>void decide(item.request_id,true)}>Bestätigen</button>
+          </div>
+        </div>
+      </div></article>) : <p className="wp-empty-hint">Kein offener Antrag.</p>}</div>
+    <h2>Papierkorb</h2>
+    <div className="wp-doc-list">{(data.trash||[]).length ? (data.trash||[]).map((item:any)=>
+      <article key={item.document_id}><div className="wp-trash-row">
+        <div className="wp-trash-copy"><Badge status={item.legal_hold?"Legal Hold":"Papierkorb"}/>
+          <strong>{item.title||item.document_id}</strong>
+          <span>Seit {item.trashed_at} · {item.reason}</span><small className="wp-hint">{item.document_id}</small></div>
+        <div className="wp-trash-side">
+          <textarea placeholder="Begründung" value={reason[item.document_id]||""} onChange={e=>setReason({...reason,[item.document_id]:e.target.value})}/>
+          <div className="wp-actions">
+            <button className="approve" disabled={busy===item.document_id} onClick={()=>void restore(item.document_id)}>Wiederherstellen</button>
+            {/* Endgueltiges Loeschen ist unumkehrbar und deshalb zweistufig. */}
+            {isPortalAdmin&&!item.legal_hold&&(pendingDelete===item.document_id
+              ? <><button className="wp-danger" disabled={busy===item.document_id} onClick={()=>void purge(item.document_id)}>Wirklich endgültig löschen</button>
+                  <button onClick={()=>setPendingDelete("")}>Abbrechen</button></>
+              : <button className="wp-danger" onClick={()=>setPendingDelete(item.document_id)}>Endgültig löschen</button>)}
+          </div>
+          {pendingDelete===item.document_id&&<p className="wp-hint">Das Original, das Markdown und der Inhalt werden unwiderruflich gelöscht. Nur die Auditdaten bleiben.</p>}
+          {item.legal_hold&&<p className="wp-hint">Legal Hold: eine Löschung ist ausgesetzt.</p>}
+        </div>
+      </div></article>) : <p className="wp-empty-hint">Der Papierkorb ist leer.</p>}</div>
+  </section>;
 }

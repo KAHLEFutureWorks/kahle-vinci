@@ -441,3 +441,31 @@ class MaintenanceService:
         with self.store.connect() as db:
             rows = db.execute("SELECT * FROM notification_outbox WHERE status = 'pending' ORDER BY scheduled_for, message_id LIMIT ?", (limit,)).fetchall()
         return [OutboxMessage(row["message_id"], row["recipient"], row["subject"], row["body"], row["kind"], row["scheduled_for"]) for row in rows]
+
+
+    def delete_now(self, document_id: str, actor_user_id: str, reason: str,
+                   file_root: Path | None = None) -> None:
+        """
+        Sofortige physische Loeschung durch einen Portal-Admin.
+
+        Der regulaere Weg loescht erst nach 90 Tagen. Ein Portal-Admin darf das
+        abkuerzen; ein Legal Hold bleibt auch fuer ihn bindend, denn er dient
+        gerade dazu, eine Loeschung auszusetzen.
+        """
+        if len(reason.strip()) < 3:
+            raise MaintenanceError("deletion_reason_required")
+        with self.store.connect() as db:
+            actor = db.execute(
+                "SELECT role FROM portal_users WHERE user_id=? AND active=1", (actor_user_id,)
+            ).fetchone()
+            if not actor or actor["role"] != "portal_admin":
+                raise MaintenanceError("portal_admin_required")
+            row = db.execute(
+                "SELECT * FROM document_trash WHERE document_id=? AND physically_deleted_at IS NULL",
+                (document_id,),
+            ).fetchone()
+            if not row:
+                raise MaintenanceError("trash_entry_not_found")
+            if row["legal_hold"]:
+                raise MaintenanceError("legal_hold_blocks_deletion")
+            self._physically_delete(db, row, file_root)

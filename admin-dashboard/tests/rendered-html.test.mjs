@@ -92,6 +92,14 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /matchLevelText\[match\.level\]/);
   assert.match(portal, /match_percent/);
 
+  // Eigene Vorgänge lassen sich aus der Aufgabenliste heraus weiterschicken.
+  assert.match(portal, /chooseAction\(task\.case_id, ?"create"\)/);
+  assert.match(portal, /chooseAction\(task\.case_id, ?"discard"\)/);
+  // Endgültiges Löschen ist Portal-Admins vorbehalten und zweistufig.
+  assert.match(portal, /portal\/admin\/trash\/\$\{id\}\/delete/);
+  assert.match(portal, /Wirklich endgültig löschen/);
+  assert.match(portal, /isPortalAdmin&&!item\.legal_hold/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);
