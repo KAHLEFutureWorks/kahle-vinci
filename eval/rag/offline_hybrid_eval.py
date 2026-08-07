@@ -87,6 +87,9 @@ def main() -> int:
     parser.add_argument("--api-key", default=os.getenv("IONOS_API_KEY", ""))
     parser.add_argument("--model", default="BAAI/bge-m3")
     parser.add_argument("--reranker-url", default=os.getenv("RERANKER_URL", "http://127.0.0.1:8080"))
+    # Auf CPU braucht gte-multilingual-reranker-base rund zwei Sekunden je
+    # Kandidat. Der Messlauf darf deshalb laenger warten als die Laufzeit.
+    parser.add_argument("--reranker-timeout", type=float, default=60.0)
     args = parser.parse_args()
     if not args.api_key:
         parser.error("--api-key or IONOS_API_KEY is required")
@@ -115,7 +118,8 @@ def main() -> int:
         sparse_query = corpus.query_vector(query)
         sparse_scores = [sparse_dot(sparse_query, corpus.document_vector(chunk["content"])) for chunk in chunks]
         fused_scores = rrf(dense_scores, sparse_scores)
-        reranked_scores = tei_rerank(query, chunks, fused_scores, args.reranker_url)
+        reranked_scores = tei_rerank(query, chunks, fused_scores, args.reranker_url,
+                                     timeout=args.reranker_timeout)
         configurations = {
             "dense_only": dense_scores, "sparse_only": sparse_scores,
             "hybrid_rrf": fused_scores, "hybrid_reranked": reranked_scores,

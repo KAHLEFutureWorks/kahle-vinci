@@ -339,7 +339,11 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
     container_name: reranker
     restart: unless-stopped
-    command: ["--model-id", "Alibaba-NLP/gte-multilingual-reranker-base", "--auto-truncate"]
+    # QdrantHybridRetriever erzwingt 30 bis 50 Kandidaten je Anfrage (PRD 19.2)
+    # und sendet sie in einem Aufruf. Der TEI-Standardwert von 32 laesst das
+    # fail-closed scheitern, sobald mehr als 32 Kandidaten gefunden werden.
+    command: ["--model-id", "Alibaba-NLP/gte-multilingual-reranker-base", "--auto-truncate",
+              "--max-client-batch-size", "50"]
     environment:
       HUGGINGFACE_HUB_CACHE: /data
     volumes:

@@ -43,6 +43,7 @@ class Tools:
         IONOS_API_KEY: str = Field(default="")
         IONOS_EMBEDDING_MODEL: str = Field(default="")
         RERANKER_URL: str = Field(default="http://reranker:80")
+        RERANKER_MODEL: str = Field(default="Qwen/Qwen3-VL-Reranker-8B")
         TIMEOUT_S: int = Field(default=60)
 
     def __init__(self):
@@ -66,7 +67,8 @@ class Tools:
             retriever = QdrantHybridRetriever(
                 self.valves.QDRANT_URL, self.valves.COLLECTION_ALIAS,
                 RemoteSparseQueryEncoder(self.valves.KB_SYNC_URL, internal_key),
-                TeiReranker(self.valves.RERANKER_URL), timeout=int(self.valves.TIMEOUT_S),
+                IonosReranker(base_url, api_key, self.valves.RERANKER_MODEL),
+                timeout=int(self.valves.TIMEOUT_S),
             )
             chunks = retriever.retrieve(query, dense, scope)
         except Exception as exc:

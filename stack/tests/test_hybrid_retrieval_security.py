@@ -61,3 +61,25 @@ def test_hybrid_request_repeats_acl_in_both_prefetches_and_rejects_leak(monkeypa
     assert captured["body"]["prefetch"][0]["filter"] == captured["body"]["prefetch"][1]["filter"]
     assert {item["key"] for item in captured["body"]["prefetch"][0]["filter"]["must"]} >= {"build_id"}
     assert captured["body"]["query"] == {"fusion": "rrf"}
+
+
+def test_reranker_batch_limit_covers_the_enforced_candidate_policy():
+    """
+    Der Retriever erzwingt 30 bis 50 Kandidaten (PRD 19.2) und sendet sie in
+    einem einzigen /rerank-Aufruf. TEI weist jede Anfrage oberhalb von
+    --max-client-batch-size mit HTTP 422 ab, und der Retriever ist fail-closed.
+    Bleibt der TEI-Standardwert 32 stehen, scheitert damit jede Antwort, sobald
+    mehr als 32 Kandidaten gefunden werden.
+    """
+    import re
+
+    compose = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text(encoding="utf-8")
+    reranker = compose.split("\n  reranker:", 1)[1].split("\n  kb-admin-dashboard:", 1)[0]
+    match = re.search(r'"--max-client-batch-size",\s*"(\d+)"', reranker)
+    assert match, "reranker service must pin --max-client-batch-size"
+
+    # Obergrenze der Policy aus dem Retriever lesen, statt sie hier zu duplizieren.
+    policy = re.search(r"if not 30 <= candidate_limit <= (\d+)", PATH.read_text(encoding="utf-8"))
+    assert policy, "retriever must enforce a candidate_limit ceiling"
+
+    assert int(match.group(1)) >= int(policy.group(1))
