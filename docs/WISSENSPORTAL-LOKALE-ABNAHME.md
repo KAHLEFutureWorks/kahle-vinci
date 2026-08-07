@@ -9,10 +9,26 @@ Dieses Protokoll ist die fortlaufende Nachweisakte zur lokalen Umsetzung des PRD
 Die drei Python-Suiten laufen über einen dokumentierten Befehl:
 
 ```
-pwsh ./scripts/run-local-tests.ps1
+./scripts/run-local-tests.ps1
 ```
 
-Die Abhängigkeiten stehen in `stack/requirements-dev.txt`. Die Suiten laufen bewusst in getrennten Prozessen, weil `kb-admin-api` und `kb-sync` jeweils ein eigenes Paket `app` besitzen. Die Modulsuchpfade setzt je eine `conftest.py` im Testverzeichnis; ein `PYTHONPATH` von außen ist nicht nötig.
+Auf dem Entwicklungsrechner steht nur Windows PowerShell 5.1 zur Verfügung,
+kein `pwsh`. Beide Skripte sind für diese Edition geeignet und werden aus einer
+laufenden PowerShell-Sitzung direkt aufgerufen.
+
+Die Testabhängigkeiten stehen in `stack/requirements-dev.txt` und müssen
+einmalig installiert werden, sinnvollerweise in einer eigenen Umgebung:
+
+```
+python -m venv .venv-test
+./.venv-test/Scripts/python.exe -m pip install -r stack/requirements-dev.txt
+./scripts/run-local-tests.ps1 -Python ./.venv-test/Scripts/python.exe
+```
+
+Die Suiten laufen bewusst in getrennten Prozessen, weil `kb-admin-api` und
+`kb-sync` jeweils ein eigenes Paket `app` besitzen. Die Modulsuchpfade setzt je
+eine `conftest.py` im Testverzeichnis; ein `PYTHONPATH` von außen ist nicht
+nötig.
 
 ## Automatisierte Nachweise
 
