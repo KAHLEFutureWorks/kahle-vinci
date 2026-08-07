@@ -358,3 +358,40 @@ class SecureIngestPipeline:
             injection=injection, conversion_quality=conversion_quality,
             conversion_issues=conversion_issues,
         )
+
+
+class ScreenshotInspector:
+    """
+    Pruefung fuer Bildanhaenge an Wissensfehlermeldungen.
+
+    Bewusst getrennt von SecureFileInspector: Dort gelten Dokumentformate und
+    Seitengrenzen, hier zaehlt nur, dass wirklich ein Bild ankommt. Der Typ wird
+    ausschliesslich am Dateiinhalt bestimmt; die Endung ist nicht
+    vertrauenswuerdig. SVG ist nicht zugelassen, weil es Skripte tragen kann.
+    """
+
+    SIGNATURES = (
+        (b"\x89PNG\r\n\x1a\n", "png", "image/png"),
+        (b"\xff\xd8\xff", "jpg", "image/jpeg"),
+    )
+    # Marker, die in einem echten Rasterbild nichts zu suchen haben.
+    ACTIVE_CONTENT = (b"<script", b"<?php", b"<svg", b"javascript:")
+
+    def __init__(self, max_bytes: int = 5 * 1024 * 1024):
+        self.max_bytes = max_bytes
+
+    def inspect(self, data: bytes) -> tuple[str, str]:
+        """Gibt Endung und Medientyp zurueck oder wirft IngestError."""
+        if not data:
+            raise IngestError("empty_file")
+        if len(data) > self.max_bytes:
+            raise IngestError("screenshot_too_large")
+        for signature, extension, media_type in self.SIGNATURES:
+            if data.startswith(signature):
+                break
+        else:
+            raise IngestError("screenshot_type_not_allowed")
+        head = data[:4096].lower()
+        if any(marker in head for marker in self.ACTIVE_CONTENT):
+            raise IngestError("embedded_executable_content_not_allowed")
+        return extension, media_type

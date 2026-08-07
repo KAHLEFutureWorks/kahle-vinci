@@ -267,3 +267,54 @@ def test_knowledgebase_overview_is_admin_only_and_ignores_read_rights():
         forbidden = client.get("/portal/admin/knowledgebase-overview")
         assert forbidden.status_code == 403
         assert forbidden.json()["detail"] == "admin_required"
+
+
+def test_feedback_screenshot_is_checked_and_only_admins_may_fetch_it():
+    """
+    Der Anhang durchlaeuft dieselbe Kette wie ein Dokument. Abrufen darf ihn
+    nur ein Admin: Ein Screenshot zeigt genau die Antwort, die der Meldende
+    fuer falsch haelt, und damit potenziell fremde Inhalte.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        module = load_app(root)
+        module.PORTAL_FILES_ROOT = (root / "portal-files").resolve()
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="employee", email="employee@kahle.de", display_name="Mitarbeiter",
+        )
+        module.SECURE_INGEST.scanner = type("Scanner", (), {"scan": lambda self, n, d: None})()
+
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        feedback_id = client.post("/portal/feedback/rag", json={
+            "reason": "incorrect", "comment": "Stimmt nicht.",
+            "question": "Wie lange gilt das?", "answer": "Unbegrenzt.",
+            "request_id": "req-1",
+        }).json()["feedback_id"]
+
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+        assert client.post(
+            f"/portal/feedback/{feedback_id}/screenshot",
+            files={"file": ("beweis.png", png, "image/png")},
+        ).status_code == 201
+
+        # Ein als PNG benanntes Skript wird am Inhalt erkannt.
+        rejected = client.post(
+            f"/portal/feedback/{feedback_id}/screenshot",
+            files={"file": ("angriff.png", b"<script>alert(1)</script>", "image/png")},
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"] == "screenshot_type_not_allowed"
+
+        # Mitarbeitende duerfen den Anhang nicht wieder abrufen.
+        assert client.get(f"/portal/admin/feedback/{feedback_id}/screenshot").status_code == 403
+
+        current["user"] = identity("portal", "admin")
+        served = client.get(f"/portal/admin/feedback/{feedback_id}/screenshot")
+        assert served.status_code == 200
+        assert served.content == png

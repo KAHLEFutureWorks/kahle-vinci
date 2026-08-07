@@ -80,6 +80,10 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /className="wp-kb-head" aria-expanded=/);
   assert.match(styles, /\.wp-kb-overview\{/);
 
+  // Screenshot zur Wissensfehlermeldung, nur Bildformate.
+  assert.match(portal, /accept="image\/png,image\/jpeg"/);
+  assert.match(portal, /feedback\/\$\{result\.feedback_id\}\/screenshot/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);

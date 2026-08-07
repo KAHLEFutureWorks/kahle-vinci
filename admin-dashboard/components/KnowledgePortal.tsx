@@ -313,6 +313,7 @@ function AuditView({ entries, users }: { entries: AuditEntry[]; users: PortalUse
 
 function FeedbackForm() {
   const [context, setContext] = useState<any>(null), [reason, setReason] = useState("incorrect"), [comment, setComment] = useState(""), [message, setMessage] = useState("");
+  const [screenshot, setScreenshot] = useState<File | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search), chatId = params.get("chat_id"), messageId = params.get("message_id");
     if (!chatId || !messageId) return;
@@ -321,9 +322,26 @@ function FeedbackForm() {
   async function submit() {
     if (!context) return setMessage("Bitte öffne diese Meldung direkt über den Link unter einer Vinci-Antwort.");
     const result = await api<{feedback_id:string}>("/portal/feedback/rag", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...context,reason,comment})});
-    setMessage(`Danke. Die Meldung wurde unter ${result.feedback_id} angelegt.`); setComment("");
+    // Der Anhang folgt der Meldung, weil er ihre Kennung braucht. Schlaegt er
+    // fehl, bleibt die Meldung bestehen und der Fehler wird benannt.
+    if (screenshot) {
+      const form = new FormData(); form.append("file", screenshot);
+      try {
+        const response = await fetch(`${API}/portal/feedback/${result.feedback_id}/screenshot`,
+          { method: "POST", credentials: "include", body: form });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.detail || `request_${response.status}`);
+        }
+      } catch (cause) {
+        setScreenshot(null); setComment("");
+        return setMessage(`Die Meldung wurde unter ${result.feedback_id} angelegt, das Bild konnte aber nicht angehängt werden: ${friendlyError(cause, "unbekannter Grund")}`);
+      }
+    }
+    setMessage(`Danke. Die Meldung wurde unter ${result.feedback_id} angelegt.`);
+    setComment(""); setScreenshot(null);
   }
-  return <section className="wp-page narrow"><Title eyebrow="Qualität sichern" title="Wissensfehler melden" text="Frage, Antwort, Quellen und technische Versionen werden automatisch aus dem zugehörigen Chat übernommen." /><div className="wp-form"><label>Was ist aufgefallen?<select value={reason} onChange={e => setReason(e.target.value)}><option value="incorrect">Information ist falsch</option><option value="outdated">Information ist veraltet</option><option value="conflicting_sources">Quellen widersprechen sich</option><option value="irrelevant_source">Quelle passt nicht zur Frage</option><option value="suspected_permission_issue">Ich durfte diese Information vermutlich nicht sehen</option><option value="other">Sonstiges</option></select></label><label>Ergänzung<textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="Was genau sollten wir prüfen?" /></label>{context && <div className="wp-owner"><ShieldCheck /><div><strong>Chatkontext wurde sicher übernommen</strong><span>Request-ID: {context.request_id}</span></div></div>}<button className="wp-primary" onClick={() => void submit()}>Meldung freigeben und senden</button>{message && <p className="wp-message">{message}</p>}</div></section>;
+  return <section className="wp-page narrow"><Title eyebrow="Qualität sichern" title="Wissensfehler melden" text="Frage, Antwort, Quellen und technische Versionen werden automatisch aus dem zugehörigen Chat übernommen." /><div className="wp-form"><label>Was ist aufgefallen?<select value={reason} onChange={e => setReason(e.target.value)}><option value="incorrect">Information ist falsch</option><option value="outdated">Information ist veraltet</option><option value="conflicting_sources">Quellen widersprechen sich</option><option value="irrelevant_source">Quelle passt nicht zur Frage</option><option value="suspected_permission_issue">Ich durfte diese Information vermutlich nicht sehen</option><option value="other">Sonstiges</option></select></label><label>Ergänzung<textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="Was genau sollten wir prüfen?" /></label>{context && <div className="wp-owner"><ShieldCheck /><div><strong>Chatkontext wurde sicher übernommen</strong><span>Request-ID: {context.request_id}</span></div></div>}<label>Screenshot (optional)<input type="file" accept="image/png,image/jpeg" onChange={e => setScreenshot(e.target.files?.[0] || null)} /><small className="wp-hint">PNG oder JPEG bis 5 MB. Nur Admins sehen das Bild.</small></label><button className="wp-primary" onClick={() => void submit()}>Meldung freigeben und senden</button>{message && <p className="wp-message">{message}</p>}</div></section>;
 }
 
 

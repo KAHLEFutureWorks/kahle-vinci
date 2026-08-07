@@ -46,9 +46,15 @@ class QualityCaseService:
                     answer TEXT NOT NULL, sources_json TEXT NOT NULL, passages_json TEXT NOT NULL,
                     rights_json TEXT NOT NULL, runtime_json TEXT NOT NULL, request_id TEXT NOT NULL,
                     severity TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
-                    resolved_at TEXT, resolution_reason TEXT
+                    resolved_at TEXT, resolution_reason TEXT,
+                    screenshot_filename TEXT
                 );
             """)
+            # Bestehende Datenbanken kennen die Spalte noch nicht; CREATE TABLE
+            # IF NOT EXISTS ergaenzt sie nicht nachtraeglich.
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(rag_feedback)")}
+            if "screenshot_filename" not in columns:
+                db.execute("ALTER TABLE rag_feedback ADD COLUMN screenshot_filename TEXT")
 
     def system_incident(self, step: str, diagnostic: dict[str, Any], *, fingerprint: str | None = None) -> str:
         safe_diagnostic = {key: value for key, value in diagnostic.items() if key not in {"content", "document", "answer"}}
@@ -87,7 +93,13 @@ class QualityCaseService:
         severity = "critical" if reason == "suspected_permission_issue" else "normal"
         with self.store.connect() as db:
             db.execute(
-                "INSERT INTO rag_feedback VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, NULL, NULL)",
+                # Spalten ausdruecklich benennen: ohne Namen bricht jedes
+                # spaetere ALTER TABLE dieses INSERT.
+                "INSERT INTO rag_feedback ("
+                " feedback_id, reported_by_user_id, reason, comment, question, answer,"
+                " sources_json, passages_json, rights_json, runtime_json, request_id,"
+                " severity, status, created_at, resolved_at, resolution_reason"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, NULL, NULL)",
                 (feedback_id, user_id, reason, comment.strip()[:2000], question[:8000], answer[:16000],
                  json.dumps(sources), json.dumps(passages), json.dumps(rights), json.dumps(runtime),
                  request_id[:200], severity, stamp),
@@ -103,3 +115,30 @@ class QualityCaseService:
                 "SELECT * FROM rag_feedback WHERE status = 'open' ORDER BY created_at DESC"
             ).fetchall()]
         return {"incidents": incidents, "feedback": feedback}
+
+
+    def attach_screenshot(self, feedback_id: str, user_id: str, filename: str) -> None:
+        """Vermerkt den geprueften Bildanhang an einer Meldung."""
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT reported_by_user_id FROM rag_feedback WHERE feedback_id = ?",
+                (feedback_id,),
+            ).fetchone()
+            if not row:
+                raise QualityCaseError("feedback_not_found")
+            if row["reported_by_user_id"] != user_id:
+                raise QualityCaseError("only_reporter_may_attach")
+            db.execute(
+                "UPDATE rag_feedback SET screenshot_filename = ? WHERE feedback_id = ?",
+                (filename, feedback_id),
+            )
+
+    def screenshot_of(self, feedback_id: str) -> str | None:
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT screenshot_filename FROM rag_feedback WHERE feedback_id = ?",
+                (feedback_id,),
+            ).fetchone()
+        if not row:
+            raise QualityCaseError("feedback_not_found")
+        return row["screenshot_filename"]

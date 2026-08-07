@@ -78,7 +78,7 @@ try:
     )
     from .secure_ingest import (
         ClamAVScanner, DocumentWorkerAdapter, IngestError, PromptInjectionInspector,
-        QuarantineStorage, SecureFileInspector, SecureIngestPipeline,
+        QuarantineStorage, ScreenshotInspector, SecureFileInspector, SecureIngestPipeline,
     )
 except ImportError:  # pragma: no cover
     from document_lifecycle import Analysis, DocumentLifecycle, LifecycleError, workdays_until
@@ -99,7 +99,7 @@ except ImportError:  # pragma: no cover
     )
     from secure_ingest import (
         ClamAVScanner, DocumentWorkerAdapter, IngestError, PromptInjectionInspector,
-        QuarantineStorage, SecureFileInspector, SecureIngestPipeline,
+        QuarantineStorage, ScreenshotInspector, SecureFileInspector, SecureIngestPipeline,
     )
 
 APP_VERSION = "0.2.0"
@@ -1473,6 +1473,74 @@ def portal_report_rag_feedback(
             f"Ein kritischer Wissensfehler wurde gemeldet. Referenz: {feedback_id}", dedupe_key=feedback_id,
         )
     return {"feedback_id": feedback_id, "status": "open"}
+
+
+SCREENSHOT_INSPECTOR = ScreenshotInspector()
+
+
+def _feedback_screenshot_dir(feedback_id: str) -> Path:
+    safe = PurePosixPath(feedback_id).name
+    if not safe or safe != feedback_id:
+        raise HTTPException(status_code=422, detail="invalid_feedback_reference")
+    return (PORTAL_FILES_ROOT / "feedback-screenshots" / safe).resolve()
+
+
+@app.post("/portal/feedback/{feedback_id}/screenshot", status_code=201)
+async def portal_attach_feedback_screenshot(
+    feedback_id: str, file: UploadFile = File(...),
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    """
+    Bildanhang zu einer Wissensfehlermeldung.
+
+    Ein Screenshot zeigt dem Admin oft in Sekunden, was eine Beschreibung nur
+    umstaendlich erklaert. Der Anhang durchlaeuft dieselbe Kette wie ein
+    Dokument: Typpruefung am Inhalt statt an der Endung, Groessengrenze und
+    Malwarescan. Nur der Meldende darf anhaengen, nur Admins duerfen abrufen.
+    """
+    data = await file.read(SCREENSHOT_INSPECTOR.max_bytes + 1)
+    try:
+        extension, _ = SCREENSHOT_INSPECTOR.inspect(data)
+    except IngestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        SECURE_INGEST.scanner.scan(f"screenshot.{extension}", data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="malware_scan_failed") from exc
+
+    filename = f"screenshot.{extension}"
+    try:
+        QUALITY_CASES.attach_screenshot(feedback_id, identity["user_id"], filename)
+    except QualityCaseError as exc:
+        status = 404 if str(exc) == "feedback_not_found" else 403
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    target = _feedback_screenshot_dir(feedback_id)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / filename).write_bytes(data)
+    PORTAL_GOVERNANCE.record_audit(
+        identity["user_id"], "feedback_screenshot_attached", "rag_feedback", feedback_id, {},
+    )
+    return {"feedback_id": feedback_id, "filename": filename}
+
+
+@app.get("/portal/admin/feedback/{feedback_id}/screenshot")
+def portal_admin_feedback_screenshot(
+    feedback_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> FileResponse:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    try:
+        filename = QUALITY_CASES.screenshot_of(feedback_id)
+    except QualityCaseError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not filename:
+        raise HTTPException(status_code=404, detail="screenshot_not_available")
+    path = _feedback_screenshot_dir(feedback_id) / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="screenshot_not_available")
+    media = "image/png" if filename.endswith(".png") else "image/jpeg"
+    return FileResponse(path, media_type=media)
 
 
 @app.post("/portal/incidents/{incident_id}/comment")

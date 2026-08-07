@@ -128,3 +128,38 @@ def test_document_worker_retries_transient_outage_before_success(monkeypatch):
     markdown = DocumentWorkerAdapter("http://worker", retries=3).convert("test.docx", b"data", "Test")
     assert markdown.startswith("# Ergebnis")
     assert len(attempts) == 3
+
+
+def test_screenshot_inspector_trusts_content_not_the_filename():
+    from app.secure_ingest import IngestError, ScreenshotInspector
+
+    inspector = ScreenshotInspector()
+    assert inspector.inspect(b"\x89PNG\r\n\x1a\n" + b"0" * 40) == ("png", "image/png")
+    assert inspector.inspect(b"\xff\xd8\xff" + b"0" * 40) == ("jpg", "image/jpeg")
+
+    for payload, expected in (
+        (b"", "empty_file"),
+        (b"GIF89a" + b"0" * 40, "screenshot_type_not_allowed"),
+        # Als PNG benannt, tatsaechlich aber ein Skript.
+        (b"<script>alert(1)</script>", "screenshot_type_not_allowed"),
+        (b"<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>", "screenshot_type_not_allowed"),
+        (b"\x89PNG\r\n\x1a\n" + b"x" * (5 * 1024 * 1024), "screenshot_too_large"),
+    ):
+        try:
+            inspector.inspect(payload)
+        except IngestError as error:
+            assert str(error) == expected, (payload[:20], str(error))
+        else:
+            raise AssertionError(f"accepted payload that should fail: {payload[:20]!r}")
+
+
+def test_screenshot_inspector_rejects_active_content_behind_a_valid_header():
+    from app.secure_ingest import IngestError, ScreenshotInspector
+
+    smuggled = b"\x89PNG\r\n\x1a\n" + b"<script>steal()</script>" + b"0" * 40
+    try:
+        ScreenshotInspector().inspect(smuggled)
+    except IngestError as error:
+        assert str(error) == "embedded_executable_content_not_allowed"
+    else:
+        raise AssertionError("active content behind a PNG header was accepted")
