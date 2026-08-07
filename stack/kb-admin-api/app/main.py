@@ -1304,7 +1304,12 @@ def _run_portal_upload_job(
         upload = UploadFile(file=io.BytesIO(data), filename=filename)
         result = asyncio.run(portal_upload_document(
             file=upload, knowledgebase_id=knowledgebase_id, title=title,
-            valid_workdays=valid_workdays, confidentiality=confidentiality,
+            # Die Gueltigkeit ist beim Anlegen des Jobs bereits in Arbeitstage
+            # aufgeloest. valid_until muss trotzdem ausdruecklich None sein:
+            # Beim direkten Funktionsaufruf greift sonst der Form(None)-Default,
+            # und das ist ein FieldInfo-Objekt, nicht None.
+            valid_workdays=valid_workdays, valid_until=None,
+            confidentiality=confidentiality,
             owner_user_id=owner_user_id, identity=identity,
         ))
         UPLOAD_JOBS.progress(job_id, "comparison", 90)

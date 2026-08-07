@@ -288,7 +288,13 @@ def test_upload_rejects_a_date_beyond_sixty_workdays():
 
 
 def test_upload_job_accepts_workdays_alone():
-    """Der Weg, den die Oberflaeche tatsaechlich nutzt."""
+    """
+    Der Weg, den die Oberflaeche tatsaechlich nutzt.
+
+    Der Statuscode allein genuegt nicht: Der Upload laeuft als Hintergrundjob,
+    dessen Fehler still in upload_jobs landen statt die Antwort zu beeinflussen.
+    Geprueft wird deshalb das Jobergebnis.
+    """
     with tempfile.TemporaryDirectory() as directory:
         _, client, knowledgebase_id = _upload_ready_client(directory)
         response = client.post(
@@ -300,6 +306,8 @@ def test_upload_job_accepts_workdays_alone():
             files={"file": ("wissen.md", b"Original", "text/markdown")},
         )
         assert response.status_code == 202, response.text
+        job = client.get(f"/portal/upload-jobs/{response.json()['job_id']}").json()
+        assert job["status"] == "completed", job.get("error_code")
 
 
 def test_upload_job_accepts_a_date_alone():
@@ -319,3 +327,39 @@ def test_upload_job_accepts_a_date_alone():
             files={"file": ("wissen.md", b"Original", "text/markdown")},
         )
         assert response.status_code == 202, response.text
+        job = client.get(f"/portal/upload-jobs/{response.json()['job_id']}").json()
+        assert job["status"] == "completed", job.get("error_code")
+
+
+def test_background_job_passes_every_form_parameter_explicitly():
+    """
+    _run_portal_upload_job ruft portal_upload_document als gewoehnliche Funktion
+    auf, nicht ueber HTTP. Nicht uebergebene Parameter erhalten dadurch FastAPIs
+    Form()-Default, also ein FieldInfo-Objekt statt None. Eine Pruefung wie
+    `value is None` schlaegt damit still fehl, und der Fehler landet nur im
+    Jobstatus. Jeder Form-Parameter muss deshalb ausdruecklich gesetzt werden.
+    """
+    import inspect
+    import re
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+
+    # Form(...) liefert fastapi.params.Form, das von FieldInfo erbt.
+    form_parameters = {
+        name for name, parameter in
+        inspect.signature(module.portal_upload_document).parameters.items()
+        if any(base.__name__ == "FieldInfo" for base in type(parameter.default).__mro__)
+    }
+    assert form_parameters, "expected portal_upload_document to declare Form parameters"
+
+    source = inspect.getsource(module._run_portal_upload_job)
+    call = re.search(r"portal_upload_document\((.*?)\n\s*\)\)", source, re.S)
+    assert call, "could not locate the portal_upload_document call"
+    passed = set(re.findall(r"(\w+)\s*=", call.group(1)))
+
+    missing = sorted(form_parameters - passed)
+    assert not missing, (
+        "background job must pass these explicitly, otherwise they arrive as "
+        f"FieldInfo instead of their value: {missing}"
+    )
