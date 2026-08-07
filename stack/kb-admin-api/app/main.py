@@ -1343,6 +1343,10 @@ async def portal_upload_document(
             "document_id": match.document_id, "title": match.title, "level": match.level,
             "knowledgebase_ids": list(match.knowledgebase_ids), "version_candidate": match.version_candidate,
             "has_conflict": bool(match.conflicting_passages),
+            # Ohne diese Werte sieht der Entscheider nur eine Stufe wie "medium"
+            # und kann nicht einschaetzen, wie stark der Treffer wirklich ist.
+            "match_percent": round(match.combined_score * 100),
+            "conflict_count": len(match.conflicting_passages),
         } for match in material_matches],
     )
 

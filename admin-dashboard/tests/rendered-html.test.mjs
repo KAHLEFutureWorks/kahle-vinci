@@ -36,8 +36,9 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
 
   // PRD 26.3: erkennbare Fokuszustände und Tastaturbedienung.
   assert.match(styles, /:focus-visible\{[^}]*outline:/);
-  assert.match(portal, /onKeyDown=\{selectionKeys\(/);
-  assert.match(portal, /role="button" tabIndex=\{0\}/);
+  // Auswahlflächen sind echte Buttons und damit ohne Zutun tastaturbedienbar.
+  assert.doesNotMatch(portal, /<article[^>]*onClick=/);
+  assert.match(portal, /<button type="button" className="wp-doc-head" aria-expanded=/);
   // Die Benutzerauswahl ist ein echter Button statt eines klickbaren <article>.
   assert.match(portal, /className="wp-pick" aria-pressed=/);
   assert.doesNotMatch(portal, /<article[^>]*className=\{selected === user\.user_id[^>]*onClick=/);
@@ -83,6 +84,13 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   // Screenshot zur Wissensfehlermeldung, nur Bildformate.
   assert.match(portal, /accept="image\/png,image\/jpeg"/);
   assert.match(portal, /feedback\/\$\{result\.feedback_id\}\/screenshot/);
+
+  // Aktionen am Dokument melden Erfolg wie Fehler, statt still abzubrechen.
+  assert.match(portal, /Bitte gib zuerst eine Begründung/);
+  assert.doesNotMatch(portal, /if\(!selected\|\|reason\.trim\(\)\.length<3\)return/);
+  // Trefferstufen als Klartext statt roher Codes, mit Prozentwert.
+  assert.match(portal, /matchLevelText\[match\.level\]/);
+  assert.match(portal, /match_percent/);
 
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
