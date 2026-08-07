@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 
-def load_app(root: Path):
+def load_app(root: Path, env: dict[str, str] | None = None):
     kb_root = root / "knowledgebases"
     for name in ("kahleallgemein", "kahlekontext", "kahlerichtlinien"):
         (kb_root / name).mkdir(parents=True)
@@ -17,6 +17,10 @@ def load_app(root: Path):
     os.environ["KB_STATE_PATH"] = str(root / "state.json")
     os.environ["KB_PORTAL_DB_PATH"] = str(root / "portal.sqlite3")
     os.environ["KB_ADMIN_DEV_AUTH_BYPASS"] = "false"
+    # Zusaetzliche Variablen gelten nur fuer diesen Import und werden danach
+    # zurueckgesetzt, damit sie nicht in andere Tests durchschlagen.
+    previous = {name: os.environ.get(name) for name in (env or {})}
+    os.environ.update(env or {})
     app_dir = Path(__file__).resolve().parents[1] / "app"
     sys.path.insert(0, str(app_dir))
     path = app_dir / "main.py"
@@ -24,7 +28,14 @@ def load_app(root: Path):
     loaded = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     sys.modules[spec.name] = loaded
-    spec.loader.exec_module(loaded)
+    try:
+        spec.loader.exec_module(loaded)
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     return loaded
 
 
@@ -164,3 +175,58 @@ def test_migration_metadata_endpoint_uses_initialized_legacy_migration_service()
         assert response.json() == {"status": "metadata_resolved"}
         assert captured["actor_user_id"] == "portal"
         assert captured["path"] == "kahleallgemein/alt.md"
+
+
+def _step_up_env(**overrides):
+    """Vollstaendige Step-up-Umgebung, einzelne Werte gezielt ueberschreibbar."""
+    env = {
+        "KB_PORTAL_STEP_UP_SECRET": "s" * 43,
+        "KB_PORTAL_ENTRA_TENANT_ID": "",
+        "KB_PORTAL_ENTRA_CLIENT_ID": "",
+        "KB_PORTAL_ENTRA_CLIENT_SECRET": "",
+        "KB_PORTAL_ENTRA_REDIRECT_URI": "",
+        "KB_PORTAL_LOCAL_STEP_UP": "false",
+    }
+    env.update(overrides)
+    return env
+
+
+def test_local_step_up_never_replaces_a_configured_microsoft_login():
+    """
+    Der lokale Ersatz ist ausschliesslich fuer die Abnahme gedacht. Sobald auch
+    nur eine Entra-Angabe existiert, ist die Umgebung nicht mehr rein lokal und
+    Microsoft muss gewinnen, selbst wenn das lokale Flag gesetzt wurde.
+    """
+    entra_fields = (
+        "KB_PORTAL_ENTRA_TENANT_ID", "KB_PORTAL_ENTRA_CLIENT_ID",
+        "KB_PORTAL_ENTRA_CLIENT_SECRET", "KB_PORTAL_ENTRA_REDIRECT_URI",
+    )
+    for field in entra_fields:
+        with tempfile.TemporaryDirectory() as directory:
+            module = load_app(
+                Path(directory),
+                env=_step_up_env(**{"KB_PORTAL_LOCAL_STEP_UP": "true", field: "gesetzt"}),
+            )
+            adapter = getattr(module.STEP_UP_AUTHORITY, "oidc", None)
+            assert not isinstance(adapter, module.LocalStepUpAdapter), (
+                f"local step-up must not activate when {field} is set"
+            )
+
+
+def test_local_step_up_requires_the_explicit_flag_and_a_secret():
+    for env in (
+        _step_up_env(),                                      # Flag fehlt
+        _step_up_env(KB_PORTAL_LOCAL_STEP_UP="true",
+                     KB_PORTAL_STEP_UP_SECRET=""),           # Secret fehlt
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            module = load_app(Path(directory), env=env)
+            assert module.STEP_UP_AUTHORITY is None
+
+
+def test_local_step_up_activates_only_in_a_purely_local_environment():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(
+            Path(directory), env=_step_up_env(KB_PORTAL_LOCAL_STEP_UP="true"),
+        )
+        assert isinstance(module.STEP_UP_AUTHORITY.oidc, module.LocalStepUpAdapter)

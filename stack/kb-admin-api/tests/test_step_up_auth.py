@@ -115,3 +115,54 @@ if __name__ == "__main__":
     test_step_up_is_bound_to_user_email_nonce_and_short_lived_proof()
     test_challenge_is_single_use_and_bound_to_current_openwebui_user()
     print("step-up auth tests passed")
+
+
+def test_local_adapter_round_trips_email_and_nonce():
+    adapter = step_up_module.LocalStepUpAdapter(
+        confirm_url="/wissen/api/portal/auth/step-up/local-confirm",
+        signing_secret="x" * 43,
+    )
+    url = adapter.authorization_url(
+        state="s", nonce="n-123", code_challenge="c", login_hint="portal@kahle.de",
+    )
+    assert url.startswith("/wissen/api/portal/auth/step-up/local-confirm?")
+    code = parse_qs(urlparse(url).query)["code"][0]
+
+    claims = adapter.exchange_and_validate(
+        code=code, code_verifier="ignored", expected_nonce="n-123",
+    )
+    assert claims["preferred_username"] == "portal@kahle.de"
+
+
+def test_local_adapter_rejects_a_replayed_or_forged_code():
+    adapter = step_up_module.LocalStepUpAdapter(
+        confirm_url="/confirm", signing_secret="x" * 43,
+    )
+    url = adapter.authorization_url(
+        state="s", nonce="n-123", code_challenge="c", login_hint="portal@kahle.de",
+    )
+    code = parse_qs(urlparse(url).query)["code"][0]
+
+    # Nonce einer anderen Challenge darf nicht durchgehen.
+    try:
+        adapter.exchange_and_validate(code=code, code_verifier="", expected_nonce="andere")
+    except step_up_module.StepUpError as error:
+        assert str(error) == "local_step_up_nonce_mismatch"
+    else:
+        raise AssertionError("foreign nonce was accepted")
+
+    # Mit fremdem Schluessel signierter Code darf nicht durchgehen.
+    forged = step_up_module.LocalStepUpAdapter(
+        confirm_url="/confirm", signing_secret="y" * 43,
+    ).authorization_url(
+        state="s", nonce="n-123", code_challenge="c", login_hint="angreifer@kahle.de",
+    )
+    forged_code = parse_qs(urlparse(forged).query)["code"][0]
+    try:
+        adapter.exchange_and_validate(
+            code=forged_code, code_verifier="", expected_nonce="n-123",
+        )
+    except step_up_module.StepUpError as error:
+        assert str(error) == "local_step_up_code_signature_invalid"
+    else:
+        raise AssertionError("forged code was accepted")

@@ -17,13 +17,17 @@ import unicodedata
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
+from html import escape
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
+from urllib.parse import quote
 
 import requests
 from docx import Document
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, Response as FastAPIResponse
+from fastapi.responses import (
+    FileResponse, HTMLResponse, RedirectResponse, Response as FastAPIResponse,
+)
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
@@ -47,9 +51,13 @@ except ImportError:  # pragma: no cover - supports the existing file-based contr
     )
 
 try:
-    from .step_up_auth import MicrosoftOIDCAdapter, StepUpAuthority, StepUpError
+    from .step_up_auth import (
+        LocalStepUpAdapter, MicrosoftOIDCAdapter, StepUpAuthority, StepUpError,
+    )
 except ImportError:  # pragma: no cover
-    from step_up_auth import MicrosoftOIDCAdapter, StepUpAuthority, StepUpError
+    from step_up_auth import (
+        LocalStepUpAdapter, MicrosoftOIDCAdapter, StepUpAuthority, StepUpError,
+    )
 
 try:
     from .document_lifecycle import Analysis, DocumentLifecycle, LifecycleError, workdays_until
@@ -207,6 +215,29 @@ if all(
             redirect_uri=_ENTRA_REDIRECT_URI,
         ),
         signing_secret=_STEP_UP_SECRET,
+    )
+elif (
+    os.getenv("KB_PORTAL_LOCAL_STEP_UP", "false").strip().lower() == "true"
+    and _STEP_UP_SECRET
+    # Fail closed: sobald irgendeine Entra-Angabe existiert, ist die Umgebung
+    # nicht mehr rein lokal und der Ersatzadapter darf nicht greifen.
+    and not any(
+        (_ENTRA_TENANT_ID, _ENTRA_CLIENT_ID, _ENTRA_CLIENT_SECRET, _ENTRA_REDIRECT_URI)
+    )
+):
+    STEP_UP_AUTHORITY = StepUpAuthority(
+        PORTAL_GOVERNANCE.store,
+        LocalStepUpAdapter(
+            confirm_url="/wissen/api/portal/auth/step-up/local-confirm",
+            signing_secret=_STEP_UP_SECRET,
+        ),
+        signing_secret=_STEP_UP_SECRET,
+    )
+    print(
+        "WARNUNG: lokale Step-up-Bestaetigung aktiv. Rollen und Rechte werden "
+        "weiterhin geprueft, die zweite Microsoft-Anmeldung jedoch nicht. "
+        "Nur fuer die lokale Abnahme zulaessig.",
+        flush=True,
     )
 
 
@@ -1677,6 +1708,45 @@ def portal_step_up_start(
         "authorization_url": started.authorization_url,
         "expires_in": started.expires_in,
     }
+
+
+@app.get("/portal/auth/step-up/local-confirm", response_class=HTMLResponse)
+def portal_step_up_local_confirm(
+    state: str, code: str, email: str = "",
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> HTMLResponse:
+    """
+    Bestaetigungsseite der lokalen Abnahme, an Microsofts Stelle.
+
+    Existiert nur, solange der lokale Adapter aktiv ist. Der Schritt bleibt
+    bewusst ein eigener Klick, damit lokal derselbe Ablauf durchlaufen wird wie
+    produktiv mit der zweiten Microsoft-Anmeldung.
+    """
+    if not isinstance(getattr(STEP_UP_AUTHORITY, "oidc", None), LocalStepUpAdapter):
+        raise HTTPException(status_code=404, detail="not_found")
+    callback = (
+        "/wissen/api/portal/auth/step-up/callback"
+        f"?state={quote(state, safe='')}&code={quote(code, safe='')}"
+    )
+    return HTMLResponse(f"""<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<title>Bestätigung erforderlich</title>
+<style>
+ body{{font-family:system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#171a1d}}
+ h1{{font-size:1.3rem}} p{{line-height:1.55;color:#414a52}}
+ .warn{{background:#fff2dd;border-left:3px solid #d68a1c;padding:.9rem 1rem;color:#7e500e;font-size:.9rem}}
+ a.btn{{display:inline-block;margin-top:1.4rem;background:#006bb6;color:#fff;
+   padding:.7rem 1.3rem;border-radius:5px;text-decoration:none;font-weight:600}}
+ a.btn:focus-visible{{outline:3px solid #006bb6;outline-offset:2px}}
+</style></head><body>
+<h1>Kritische Aktion bestätigen</h1>
+<p>Produktiv verlangt dieser Schritt eine erneute Anmeldung bei Microsoft.
+In dieser lokalen Abnahmeumgebung ist kein Microsoft-Konto angebunden.</p>
+<p class="warn">Lokaler Ersatz für die zweite Anmeldung. Deine Rolle und deine
+Rechte werden weiterhin vollständig serverseitig geprüft.</p>
+<p>Angemeldet als <strong>{escape(identity["email"])}</strong>.</p>
+<a class="btn" href="{escape(callback, quote=True)}">Bestätigen und fortfahren</a>
+</body></html>""")
 
 
 @app.get("/portal/auth/step-up/callback")

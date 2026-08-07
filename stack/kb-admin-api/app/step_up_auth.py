@@ -147,6 +147,74 @@ class MicrosoftOIDCAdapter:
         return clean
 
 
+class LocalStepUpAdapter:
+    """
+    Identitaetsanbieter fuer die lokale Abnahme, wenn kein Entra erreichbar ist.
+
+    Ersetzt ausschliesslich den Microsoft-Rueckkanal. Challenge, State, PKCE,
+    Ablaufzeiten, Nonce- und E-Mail-Abgleich, Cookie und Auditeintrag der
+    StepUpAuthority laufen unveraendert weiter. Lokal wird damit derselbe Ablauf
+    geprueft wie in Produktion, nur die zweite Anmeldung bestaetigt der Nutzer
+    auf einer lokalen Seite statt bei Microsoft.
+
+    Darf niemals produktiv laufen. `main.py` aktiviert diesen Adapter nur, wenn
+    keine einzige Entra-Variable gesetzt ist und das Flag ausdruecklich gesetzt
+    wurde.
+    """
+
+    def __init__(self, *, confirm_url: str, signing_secret: str):
+        if len(signing_secret) < 43:
+            raise StepUpError("step_up_signing_secret_too_short")
+        self.confirm_url = confirm_url
+        self.secret = signing_secret.encode("utf-8")
+
+    def authorization_url(
+        self, *, state: str, nonce: str, code_challenge: str, login_hint: str,
+    ) -> str:
+        query = urlencode({
+            "state": state,
+            "code": self._code(login_hint, nonce),
+            "email": login_hint,
+        })
+        return f"{self.confirm_url}?{query}"
+
+    def exchange_and_validate(
+        self, *, code: str, code_verifier: str, expected_nonce: str,
+    ) -> dict[str, Any]:
+        email, nonce = self._decode(code)
+        if not hmac.compare_digest(nonce, expected_nonce):
+            raise StepUpError("local_step_up_nonce_mismatch")
+        return {"preferred_username": email, "nonce": nonce}
+
+    def _code(self, email: str, nonce: str) -> str:
+        payload = json.dumps({"email": email, "nonce": nonce}, separators=(",", ":"))
+        raw = payload.encode("utf-8")
+        signature = hmac.new(self.secret, raw, hashlib.sha256).digest()
+        return f"{self._b64url(raw)}.{self._b64url(signature)}"
+
+    def _decode(self, code: str) -> tuple[str, str]:
+        try:
+            body, signature = code.split(".", 1)
+            raw = self._b64url_decode(body)
+            expected = hmac.new(self.secret, raw, hashlib.sha256).digest()
+            if not hmac.compare_digest(self._b64url_decode(signature), expected):
+                raise StepUpError("local_step_up_code_signature_invalid")
+            payload = json.loads(raw.decode("utf-8"))
+            return str(payload["email"]).lower(), str(payload["nonce"])
+        except StepUpError:
+            raise
+        except Exception as exc:
+            raise StepUpError("local_step_up_code_invalid") from exc
+
+    @staticmethod
+    def _b64url(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _b64url_decode(value: str) -> bytes:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
 class StepUpAuthority:
     COOKIE_NAME = "kahle_portal_step_up"
 

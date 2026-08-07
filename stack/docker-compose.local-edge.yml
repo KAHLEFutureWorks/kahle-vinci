@@ -17,6 +17,17 @@
 # Oder ueber scripts/start-stack.ps1 -WithEdge
 
 services:
+  # Kritische Adminaktionen verlangen eine frische Microsoft-Anmeldung. Lokal
+  # ist kein Entra angebunden, wodurch das Anlegen einer Knowledge Base und
+  # damit der gesamte Abnahmeablauf mit 503 endete. Der lokale Adapter ersetzt
+  # nur den Microsoft-Rueckkanal; Identitaet, Rollen und Rechte werden
+  # unveraendert serverseitig geprueft. Er aktiviert sich ausschliesslich, wenn
+  # keine einzige Entra-Variable gesetzt ist.
+  kb-admin-api:
+    environment:
+      KB_PORTAL_LOCAL_STEP_UP: "true"
+      KB_PORTAL_STEP_UP_SECRET: "${KB_PORTAL_STEP_UP_SECRET:-lokale-abnahme-step-up-signatur-nur-fuer-tests}"
+
   caddy-local:
     image: caddy:2.11.3-alpine
     container_name: caddy-local
