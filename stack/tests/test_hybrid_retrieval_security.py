@@ -138,6 +138,18 @@ def test_distributed_tool_bundles_are_self_contained_and_current():
         assert bundle.exists(), f"{name} fehlt in dist/"
         spec = importlib.util.spec_from_file_location(f"bundle_{name[:-3]}", bundle)
         loaded = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(loaded)
+        # dataclass loest __module__ ueber sys.modules auf; ohne Registrierung
+        # scheitert schon der Import des Bundles.
+        sys.modules[spec.name] = loaded
+        try:
+            spec.loader.exec_module(loaded)
+        finally:
+            sys.modules.pop(spec.name, None)
         for required in ("Tools", "IonosReranker", "QdrantHybridRetriever"):
             assert hasattr(loaded, required), f"{name} bundle is missing {required}"
+        # Dekoratoren gingen beim Zusammenbauen verloren, weil lineno einer
+        # Klasse auf das Schluesselwort zeigt und nicht auf @dataclass. Die
+        # Klasse nahm dann keine Argumente mehr an und jedes Retrieval brach
+        # mit RetrievalError ab.
+        scope = loaded.RetrievalScope("user-1", ("kb-1",), ("version-1",))
+        assert scope.knowledgebase_ids == ("kb-1",)

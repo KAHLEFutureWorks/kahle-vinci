@@ -51,7 +51,13 @@ def split_source(path: Path) -> tuple[str | None, list[str], str]:
 
     imports, remainder = [], []
     for node in body:
-        segment = "".join(lines[node.lineno - 1:node.end_lineno])
+        # lineno einer Klasse oder Funktion zeigt auf das Schluesselwort, nicht
+        # auf ihre Dekoratoren. Ohne diese Korrektur verliert das Bundle jedes
+        # @dataclass, und die Klasse nimmt zur Laufzeit keine Argumente mehr an.
+        first = node.lineno
+        for decorator in getattr(node, "decorator_list", []):
+            first = min(first, decorator.lineno)
+        segment = "".join(lines[first - 1:node.end_lineno])
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             imports.append(segment.rstrip("\n"))
         else:
