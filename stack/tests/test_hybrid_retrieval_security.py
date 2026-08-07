@@ -113,3 +113,31 @@ def test_ionos_reranker_reads_the_documented_response_shape():
     assert captured["payload"]["documents"] == ["a", "b"]
     assert captured["payload"]["model"] == "Qwen/Qwen3-VL-Reranker-8B"
     assert ranked == [(1, 0.96), (0, 0.02)]
+
+
+def test_distributed_tool_bundles_are_self_contained_and_current():
+    """
+    OpenWebUI nimmt pro Tool genau eine Datei und stellt keinen Modulsuchpfad
+    bereit. Die Quelldateien der Hybrid-Tools verweisen aber auf Klassen aus
+    hybrid_retrieval.py; nur die gebauten Bundles unter dist/ sind lauffaehig.
+    Dieser Test schlaegt fehl, sobald eine Quelle geaendert und das Bundle nicht
+    neu gebaut wurde.
+    """
+    import importlib.util
+    import subprocess
+
+    tools = Path(__file__).resolve().parents[1] / "open-webui-tools"
+    result = subprocess.run(
+        [sys.executable, str(tools / "build_tools.py"), "--check"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, f"dist/ ist veraltet:\n{result.stdout}{result.stderr}"
+
+    for name in ("rag_chat_hybrid_tool.py", "kahle_workflow_orchestrator.py"):
+        bundle = tools / "dist" / name
+        assert bundle.exists(), f"{name} fehlt in dist/"
+        spec = importlib.util.spec_from_file_location(f"bundle_{name[:-3]}", bundle)
+        loaded = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loaded)
+        for required in ("Tools", "IonosReranker", "QdrantHybridRetriever"):
+            assert hasattr(loaded, required), f"{name} bundle is missing {required}"
