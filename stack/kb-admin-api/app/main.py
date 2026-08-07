@@ -1159,6 +1159,60 @@ def portal_list_documents(
     return {"documents": [dict(row) for row in rows]}
 
 
+@app.get("/portal/admin/knowledgebase-overview")
+def portal_admin_knowledgebase_overview(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    """
+    Verwaltungssicht auf Wissensbereiche und ihre Dokumente.
+
+    Bewusst getrennt von /portal/documents: Dort filtern die Leserechte, hier
+    verwaltet ein Admin die Struktur und braucht auch Bereiche, in die er selbst
+    nicht hineinlesen darf. Zurueckgegeben werden ausschliesslich Metadaten,
+    niemals Dokumentinhalte, und Owner erscheinen mit Anzeigenamen statt roher
+    Benutzer-ID.
+    """
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        bases = db.execute(
+            "SELECT knowledgebase_id, slug, label, purpose, status FROM knowledgebases"
+            " ORDER BY label"
+        ).fetchall()
+        documents = db.execute(
+            """SELECT p.knowledgebase_id, d.document_id, d.title, d.owner_user_id,
+                      COALESCE(u.display_name, d.owner_user_id) AS owner_name,
+                      COALESCE(v.status, 'draft') AS status, v.valid_until
+               FROM document_publications p
+               JOIN canonical_documents d ON d.document_id = p.document_id
+               LEFT JOIN document_versions v ON v.version_id = d.active_version_id
+               LEFT JOIN portal_users u ON u.user_id = d.owner_user_id
+               ORDER BY d.title"""
+        ).fetchall()
+
+    by_base: dict[str, list[dict[str, Any]]] = {}
+    for row in documents:
+        by_base.setdefault(row["knowledgebase_id"], []).append({
+            key: row[key] for key in
+            ("document_id", "title", "owner_name", "status", "valid_until")
+        })
+
+    overview = []
+    for base in bases:
+        entries = by_base.get(base["knowledgebase_id"], [])
+        counts: dict[str, int] = {}
+        for entry in entries:
+            counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+        overview.append({
+            **{key: base[key] for key in ("knowledgebase_id", "slug", "label", "purpose", "status")},
+            "document_count": len(entries),
+            "status_counts": counts,
+            "documents": entries,
+        })
+    unassigned = sum(1 for row in documents if row["knowledgebase_id"] is None)
+    return {"knowledgebases": overview, "unpublished_documents": unassigned}
+
+
 def _resolve_valid_workdays(valid_workdays: int | None, valid_until: str | None) -> int:
     """
     PRD 17.1 laesst zwei gleichwertige Eingaben zu: Arbeitstage oder ein

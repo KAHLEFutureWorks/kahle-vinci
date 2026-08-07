@@ -75,6 +75,11 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   // Dokumentkacheln lassen sich wieder schließen.
   assert.match(portal, /current === documentId \? "" : documentId/);
 
+  // Adminübersicht: Wissensbereiche mit ihren Dokumenten, aufklappbar.
+  assert.match(portal, /portal\/admin\/knowledgebase-overview/);
+  assert.match(portal, /className="wp-kb-head" aria-expanded=/);
+  assert.match(styles, /\.wp-kb-overview\{/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);

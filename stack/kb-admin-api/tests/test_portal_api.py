@@ -230,3 +230,40 @@ def test_local_step_up_activates_only_in_a_purely_local_environment():
             Path(directory), env=_step_up_env(KB_PORTAL_LOCAL_STEP_UP="true"),
         )
         assert isinstance(module.STEP_UP_AUTHORITY.oidc, module.LocalStepUpAdapter)
+
+
+def test_knowledgebase_overview_is_admin_only_and_ignores_read_rights():
+    """
+    Die Verwaltungssicht muss auch Bereiche zeigen, in die der Admin selbst
+    nicht hineinlesen darf; /portal/documents filtert dafuer zu streng. Sie
+    liefert deshalb ausschliesslich Metadaten.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        base = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="employee", email="employee@kahle.de", display_name="Mitarbeiter",
+        )
+
+        payload = client.get("/portal/admin/knowledgebase-overview").json()
+        entry = next(
+            item for item in payload["knowledgebases"]
+            if item["knowledgebase_id"] == base.knowledgebase_id
+        )
+        assert entry["label"] == "Service"
+        assert entry["document_count"] == 0
+        # Kein Feld darf Dokumentinhalte transportieren.
+        assert not any("content" in key or "markdown" in key for key in entry)
+
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        forbidden = client.get("/portal/admin/knowledgebase-overview")
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "admin_required"
