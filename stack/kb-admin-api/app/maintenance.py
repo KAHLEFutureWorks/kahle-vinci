@@ -280,9 +280,19 @@ class MaintenanceService:
             self.move_to_trash(request["document_id"], actor_user_id, reason)
 
     def list_removals(self) -> dict[str, list[dict[str, Any]]]:
+        # Dokumenttitel mitliefern: Mit einer blossen UUID kann ein Admin nicht
+        # entscheiden, ob er etwas wiederherstellen oder endgueltig loeschen will.
         with self.store.connect() as db:
-            requests = [dict(row) for row in db.execute("SELECT * FROM document_removal_requests ORDER BY created_at DESC").fetchall()]
-            trash = [dict(row) for row in db.execute("SELECT * FROM document_trash WHERE physically_deleted_at IS NULL ORDER BY trashed_at").fetchall()]
+            requests = [dict(row) for row in db.execute(
+                """SELECT r.*, d.title FROM document_removal_requests r
+                   LEFT JOIN canonical_documents d ON d.document_id = r.document_id
+                   ORDER BY r.created_at DESC"""
+            ).fetchall()]
+            trash = [dict(row) for row in db.execute(
+                """SELECT t.*, d.title FROM document_trash t
+                   LEFT JOIN canonical_documents d ON d.document_id = t.document_id
+                   WHERE t.physically_deleted_at IS NULL ORDER BY t.trashed_at"""
+            ).fetchall()]
         return {"requests": requests, "trash": trash}
 
     def restore_from_trash(self, document_id: str, actor_user_id: str, reason: str) -> None:

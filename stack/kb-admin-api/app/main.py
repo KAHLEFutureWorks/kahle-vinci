@@ -1152,7 +1152,10 @@ def portal_list_documents(
                FROM canonical_documents d
                LEFT JOIN document_versions v ON v.version_id=d.active_version_id
                LEFT JOIN document_publications p ON p.document_id=d.document_id
-               WHERE d.owner_user_id=? OR p.knowledgebase_id IN ({})
+               WHERE (d.owner_user_id=? OR p.knowledgebase_id IN ({}))
+                 AND d.document_id NOT IN (
+                     SELECT document_id FROM document_trash
+                     WHERE physically_deleted_at IS NULL)
                ORDER BY d.updated_at DESC""".format(",".join("?" for _ in readable) or "NULL"),
             (identity["user_id"], *readable),
         ).fetchall()
@@ -1187,6 +1190,9 @@ def portal_admin_knowledgebase_overview(
                JOIN canonical_documents d ON d.document_id = p.document_id
                LEFT JOIN document_versions v ON v.version_id = d.active_version_id
                LEFT JOIN portal_users u ON u.user_id = d.owner_user_id
+               WHERE d.document_id NOT IN (
+                   SELECT document_id FROM document_trash
+                   WHERE physically_deleted_at IS NULL)
                ORDER BY d.title"""
         ).fetchall()
 

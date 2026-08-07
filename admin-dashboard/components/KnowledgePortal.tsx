@@ -103,6 +103,11 @@ function titleFromFilename(filename: string) {
 
 // Warum ein Vorgang bei Admin oder Fuehrungskraft liegt. Ohne diese Angabe
 // sieht die entscheidende Person nur, dass etwas wartet, nicht weshalb.
+const subjectText: Record<string, string> = {
+  user: "Benutzer", document: "Dokument", document_case: "Vorgang",
+  knowledgebase: "Wissensbereich", rag_feedback: "Wissensfehler",
+};
+
 const reviewReason: Record<string, string> = {
   pending_admin_approval: "Der Fall verlangt eine Adminentscheidung.",
   pending_manager_approval: "Reguläre Freigabe durch die Führungskraft.",
@@ -303,7 +308,10 @@ function AuditView({ entries, users }: { entries: AuditEntry[]; users: PortalUse
   // Rohe UUIDs sagen niemandem etwas. Die Benutzerliste ist ohnehin geladen.
   const nameOf = (userId: string) =>
     users.find(user => user.user_id === userId)?.display_name || userId;
-  return <section className="wp-page"><Title eyebrow="Nachvollziehbarkeit" title="Auditprotokoll" text="Kritische Aktionen aus Rollenverwaltung und Dokumentlebenszyklus in einer gemeinsamen Ansicht." /><div className="wp-actions"><a className="wp-primary" href={`${API}/portal/admin/audit/export.csv`}>CSV exportieren</a><a className="wp-primary" href={`${API}/portal/admin/audit/export.pdf`}>PDF exportieren</a></div><div className="wp-task-list">{entries.map((entry, index) => <article key={`${entry.occurred_at}-${index}`}><div className="wp-task-icon"><ShieldCheck /></div><div className="wp-task-copy"><Badge status={entry.event_type} /><h2>{entry.subject_type}: {entry.subject_id}</h2><p>{new Date(entry.occurred_at).toLocaleString("de-DE")} · {nameOf(entry.actor_user_id)}</p></div></article>)}</div></section>;
+  // Betroffene Objekte ebenfalls benennen; eine UUID allein sagt nichts.
+  const labelOf = (subjectType: string, subjectId: string) =>
+    subjectType === "user" ? nameOf(subjectId) : subjectId;
+  return <section className="wp-page"><Title eyebrow="Nachvollziehbarkeit" title="Auditprotokoll" text="Kritische Aktionen aus Rollenverwaltung und Dokumentlebenszyklus in einer gemeinsamen Ansicht." /><div className="wp-actions"><a className="wp-primary" href={`${API}/portal/admin/audit/export.csv`}>CSV exportieren</a><a className="wp-primary" href={`${API}/portal/admin/audit/export.pdf`}>PDF exportieren</a></div><div className="wp-task-list">{entries.map((entry, index) => <article key={`${entry.occurred_at}-${index}`}><div className="wp-task-icon"><ShieldCheck /></div><div className="wp-task-copy"><Badge status={entry.event_type} /><h2>{subjectText[entry.subject_type]||entry.subject_type}: {labelOf(entry.subject_type, entry.subject_id)}</h2><p>{new Date(entry.occurred_at).toLocaleString("de-DE")} · {nameOf(entry.actor_user_id)}</p></div></article>)}</div></section>;
 }
 
 
@@ -406,7 +414,7 @@ function DocumentList({documents,changes,ownershipTasks,users,session,done}:{doc
     () => post(`/portal/ownership-tasks/${id}/confirmation`, {accept,reason:reason||"Übernahme geprüft"}), false);
 
   return <section className="wp-page"><Title eyebrow="Wissensbestand" title="Dokumente" text="Gültigkeit, Vertraulichkeit und Entfernung werden nachvollziehbar beantragt und freigegeben."/>
-    <div className="wp-task-list">{documents.length ? documents.map(doc=>{
+    <div className="wp-doc-list">{documents.length ? documents.map(doc=>{
       const open = selected===doc.document_id;
       return <article key={`${doc.document_id}-${doc.knowledgebase_id}`} className={open?"selected":""}>
         {/* Kopf als Schaltflaeche: das Panel darunter enthaelt eigene Bedienelemente
@@ -442,5 +450,5 @@ function TrashView({data,done}:{data:any;done:()=>Promise<void>}){
  const [reason,setReason]=useState<Record<string,string>>({});
  async function decide(id:string,approve:boolean){await api(`/portal/admin/removal-requests/${id}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approve,reason:reason[id]||'Adminentscheidung'})});await done();}
  async function restore(id:string){await api(`/portal/admin/trash/${id}/restore`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason[id]||'Wiederherstellung durch Admin'})});await done();}
- return <section className="wp-page"><Title eyebrow="Aufbewahrung" title="Papierkorb und Löschanträge" text="Dokumente bleiben mindestens 30 und höchstens 90 Tage wiederherstellbar; Legal Holds setzen die Löschung aus."/><h2>Offene Anträge</h2><div className="wp-task-list">{(data.requests||[]).filter((x:any)=>x.status==='pending').map((item:any)=><article key={item.request_id}><div className="wp-task-copy"><Badge status={item.kind}/><h2>{item.document_id}</h2><p>{item.reason}</p><textarea value={reason[item.request_id]||''} onChange={e=>setReason({...reason,[item.request_id]:e.target.value})}/></div><div className="wp-actions"><button onClick={()=>void decide(item.request_id,false)}>Ablehnen</button><button className="approve" onClick={()=>void decide(item.request_id,true)}>Bestätigen</button></div></article>)}</div><h2>Papierkorb</h2><div className="wp-task-list">{(data.trash||[]).map((item:any)=><article key={item.document_id}><div className="wp-task-copy"><Badge status={item.legal_hold?'Legal Hold':'Papierkorb'}/><h2>{item.document_id}</h2><p>Seit {item.trashed_at} · {item.reason}</p></div><button onClick={()=>void restore(item.document_id)}>Wiederherstellen</button></article>)}</div></section>;
+ return <section className="wp-page"><Title eyebrow="Aufbewahrung" title="Papierkorb und Löschanträge" text="Dokumente bleiben mindestens 30 und höchstens 90 Tage wiederherstellbar; Legal Holds setzen die Löschung aus."/><h2>Offene Anträge</h2><div className="wp-task-list">{(data.requests||[]).filter((x:any)=>x.status==='pending').map((item:any)=><article key={item.request_id}><div className="wp-task-copy"><Badge status={item.kind}/><h2>{item.title||item.document_id}</h2><p>{item.reason}</p><small className="wp-hint">{item.document_id}</small><textarea value={reason[item.request_id]||''} onChange={e=>setReason({...reason,[item.request_id]:e.target.value})}/></div><div className="wp-actions"><button onClick={()=>void decide(item.request_id,false)}>Ablehnen</button><button className="approve" onClick={()=>void decide(item.request_id,true)}>Bestätigen</button></div></article>)}</div><h2>Papierkorb</h2><div className="wp-task-list">{(data.trash||[]).map((item:any)=><article key={item.document_id}><div className="wp-task-copy"><Badge status={item.legal_hold?'Legal Hold':'Papierkorb'}/><h2>{item.title||item.document_id}</h2><p>Seit {item.trashed_at} · {item.reason}</p><small className="wp-hint">{item.document_id}</small></div><button onClick={()=>void restore(item.document_id)}>Wiederherstellen</button></article>)}</div></section>;
 }

@@ -732,10 +732,16 @@ class DocumentLifecycle:
         with self.store.connect() as db:
             if actor.role in {"admin", "portal_admin"}:
                 rows = db.execute(
+                    # Die eigenen offenen Uploads gehoeren dazu: Ohne sie findet
+                    # ein Admin, der selbst hochlaedt, seinen Vorgang nirgends
+                    # wieder und das Dokument bleibt unbemerkt Entwurf.
                     """SELECT case_id FROM document_cases
                        WHERE status IN ('pending_admin_approval','security_blocked','needs_correction','error')
                           OR (status='pending_manager_approval' AND requires_admin=1)
-                       ORDER BY updated_at"""
+                          OR (uploaded_by_user_id = ?
+                              AND status IN ('pending_employee_decision','duplicate_blocked'))
+                       ORDER BY updated_at""",
+                    (actor_user_id,),
                 ).fetchall()
             else:
                 rows = db.execute(

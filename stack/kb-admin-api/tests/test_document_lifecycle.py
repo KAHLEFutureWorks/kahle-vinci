@@ -389,3 +389,25 @@ def test_workdays_until_rejects_past_dates_and_more_than_sixty_workdays():
         assert str(error) == "valid_workdays_out_of_range"
     else:
         raise AssertionError("more than 60 workdays was accepted")
+
+
+def test_admins_also_see_their_own_open_uploads():
+    """
+    Ein Admin, der selbst hochlaedt, muss seinen Vorgang wiederfinden. Vorher
+    lieferte tasks_for fuer Admins ausschliesslich die Eskalationsliste; der
+    eigene Upload wartete unsichtbar auf eine Entscheidung und blieb Entwurf.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        governance, lifecycle, knowledgebase_id = setup(Path(directory))
+        case = lifecycle.submit(
+            uploaded_by_user_id="admin", owner_user_id="admin",
+            target_knowledgebase_id=knowledgebase_id, title="Eigener Upload",
+            original_filename="eigen.md", original_file_id="eigen",
+            original_sha256=SHA_A, valid_workdays=30, confidentiality="internal",
+        )
+        checked = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(),
+        )
+        assert checked.status == "pending_employee_decision"
+        assert case.case_id in {task.case_id for task in lifecycle.tasks_for("admin")}
