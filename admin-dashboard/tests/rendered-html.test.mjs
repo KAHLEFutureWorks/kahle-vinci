@@ -114,6 +114,13 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /admin\/documents\/\$\{documentId\}\/publications/);
   assert.match(portal, /Wissensbereich zuordnen oder lösen/);
 
+  // Eigene Uploads und fremde Freigaben stehen getrennt.
+  assert.match(portal, /Deine Uploads · Entscheidung offen/);
+  assert.match(portal, /Zur Freigabe durch dich/);
+  assert.match(portal, /Danach geht der Vorgang zur Freigabe/);
+  // Freigabeknöpfe erscheinen nie am eigenen Vorgang.
+  assert.match(portal, /!own && canDecide && task\.status\.includes\("approval"\)/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);

@@ -262,7 +262,50 @@ function Tasks({ tasks, session, done }: { tasks: Task[]; session: Session; done
   async function openReview(caseId: string) { const payload = await api<any>(`/portal/cases/${caseId}/review`); setReview(payload); setRevision(isAdmin ? payload.markdown : ""); setConfirmed(false); }
   async function revise() { if (!review) return; setBusy(review.case.case_id); try { await api(`/portal/cases/${review.case.case_id}/revision`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({instruction:isAdmin?"":revision,replacement_markdown:isAdmin?revision:"",reason:reason[review.case.case_id]||"Freigegebene Korrektur",confirmed})}); setReview(null); await done(); } finally {setBusy("");} }
   if (review) return <section className="wp-page"><Title eyebrow="Dokumentprüfung" title={review.case.title} text={isAdmin ? "Original und RAG-Markdown können direkt miteinander verglichen werden." : "Original und aufbereitete Fassung können direkt miteinander verglichen werden."} /><div className="wp-actions"><a className="wp-primary" target="_blank" rel="noreferrer" href={review.original_url}>Original öffnen</a><button onClick={() => setReview(null)}>Zurück</button></div><div className="wp-form"><label>{isAdmin ? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"}<textarea rows={22} readOnly={!isAdmin} value={isAdmin ? revision : review.markdown} onChange={e => isAdmin && setRevision(e.target.value)} /></label>{(isAdmin || session.role === "employee") && <><label>{isAdmin ? "Begründung" : "Korrektur in Alltagssprache"}<textarea value={isAdmin ? (reason[review.case.case_id]||"") : revision} onChange={e => isAdmin ? setReason({...reason,[review.case.case_id]:e.target.value}) : setRevision(e.target.value)} /></label><label><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> Ich gebe diese Korrektur ausdrücklich zur Verarbeitung frei.</label><button className="wp-primary" disabled={!confirmed || busy === review.case.case_id} onClick={() => void revise()}>Neue Entwurfsversion anlegen und vollständig prüfen</button></>}</div></section>;
-  return <section className="wp-page"><Title eyebrow="Arbeitsvorrat" title={session.role === "employee" ? "Meine Vorgänge" : "Offene Freigaben"} text="Du siehst nur Vorgänge, für die du zuständig bist." /><div className="wp-task-list">{tasks.length ? tasks.map(task => <article key={task.case_id}><div className="wp-task-icon"><FileSearch /></div><div className="wp-task-copy"><Badge status={task.status} /><h2>{task.title}</h2><p>{task.original_filename} · {task.target_knowledgebase_id}</p><p className="wp-reason">{reviewReason[task.status] || "Wartet auf eine Entscheidung."}</p>{task.requires_admin && <span className="wp-escalated"><AlertTriangle /> Adminentscheidung erforderlich</span>}<div className="wp-task-buttons"><button className="wp-secondary" onClick={() => void openReview(task.case_id)}>Original und Markdown prüfen</button>{ownDecision(task.status)&&<>{task.status==="duplicate_blocked"?<button className="wp-secondary approve" disabled={busy===task.case_id} onClick={()=>void chooseAction(task.case_id,"publish_existing")}>Vorhandenes zusätzlich veröffentlichen</button>:<button className="wp-secondary approve" disabled={busy===task.case_id} onClick={()=>void chooseAction(task.case_id,"create")}>Als neues Dokument vorschlagen</button>}<button className="wp-secondary" disabled={busy===task.case_id} onClick={()=>void chooseAction(task.case_id,"discard")}>Verwerfen</button></>}</div></div>{canDecide && task.status.includes("approval") && <div className="wp-task-actions"><textarea placeholder="Kurze Begründung" value={reason[task.case_id] || ""} onChange={e => setReason({...reason,[task.case_id]:e.target.value})} /><div><button onClick={() => void decide(task.case_id,"reject")}>Ablehnen</button><button onClick={() => void decide(task.case_id,"escalate")}>Weiterleiten</button><button className="approve" disabled={busy === task.case_id} onClick={() => void decide(task.case_id,"approve")}>Freigeben</button></div></div>}</article>) : <div className="wp-empty"><CheckCircle2 /><h2>Alles erledigt</h2><p>Aktuell wartet kein Vorgang auf dich.</p></div>}</div></section>;
+  // Eigene Uploads und fremde Freigaben sind zwei verschiedene Rollen im
+  // selben Vorgang. Gemischt in einer Liste ist nicht erkennbar, wo man
+  // selbst gefragt ist und wo man als Pruefer entscheidet.
+  const mine = tasks.filter(task => ownDecision(task.status));
+  const toReview = tasks.filter(task => !ownDecision(task.status));
+
+  function card(task: Task, own: boolean) {
+    return <article key={task.case_id}>
+      <div className="wp-task-icon"><FileSearch /></div>
+      <div className="wp-task-copy">
+        <Badge status={task.status} /><h2>{task.title}</h2>
+        <p>{task.original_filename} · {task.target_knowledgebase_id}</p>
+        <p className="wp-reason">{own
+          ? "Wähle, wie es weitergehen soll. Danach geht der Vorgang zur Freigabe."
+          : reviewReason[task.status] || "Wartet auf eine Entscheidung."}</p>
+        {task.requires_admin && <span className="wp-escalated"><AlertTriangle /> Adminentscheidung erforderlich</span>}
+        <div className="wp-task-buttons">
+          <button className="wp-secondary" onClick={() => void openReview(task.case_id)}>Original und Markdown prüfen</button>
+          {own && <>
+            {task.status === "duplicate_blocked"
+              ? <button className="wp-secondary approve" disabled={busy === task.case_id} onClick={() => void chooseAction(task.case_id, "publish_existing")}>Vorhandenes zusätzlich veröffentlichen</button>
+              : <button className="wp-secondary approve" disabled={busy === task.case_id} onClick={() => void chooseAction(task.case_id, "create")}>Als neues Dokument vorschlagen</button>}
+            <button className="wp-secondary" disabled={busy === task.case_id} onClick={() => void chooseAction(task.case_id, "discard")}>Verwerfen</button>
+          </>}
+        </div>
+      </div>
+      {!own && canDecide && task.status.includes("approval") && <div className="wp-task-actions">
+        <textarea placeholder="Kurze Begründung" value={reason[task.case_id] || ""} onChange={e => setReason({...reason, [task.case_id]: e.target.value})} />
+        <div>
+          <button onClick={() => void decide(task.case_id, "reject")}>Ablehnen</button>
+          <button onClick={() => void decide(task.case_id, "escalate")}>Weiterleiten</button>
+          <button className="approve" disabled={busy === task.case_id} onClick={() => void decide(task.case_id, "approve")}>Freigeben</button>
+        </div>
+      </div>}
+    </article>;
+  }
+
+  return <section className="wp-page"><Title eyebrow="Arbeitsvorrat" title={session.role === "employee" ? "Meine Vorgänge" : "Offene Freigaben"} text="Du siehst nur Vorgänge, für die du zuständig bist." />
+    {mine.length > 0 && <><h2>Deine Uploads · Entscheidung offen</h2>
+      <div className="wp-task-list">{mine.map(task => card(task, true))}</div></>}
+    {toReview.length > 0 && <><h2>{session.role === "employee" ? "Zur Kenntnis" : "Zur Freigabe durch dich"}</h2>
+      <div className="wp-task-list">{toReview.map(task => card(task, false))}</div></>}
+    {tasks.length === 0 && <div className="wp-empty"><CheckCircle2 /><h2>Alles erledigt</h2><p>Aktuell wartet kein Vorgang auf dich.</p></div>}
+  </section>;
 }
 
 function UserAdmin({ users, session, done }: { users: PortalUser[]; session: Session; done: () => Promise<void> }) {
