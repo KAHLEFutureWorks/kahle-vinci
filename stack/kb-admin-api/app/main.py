@@ -1188,8 +1188,10 @@ def portal_admin_knowledgebase_overview(
         raise HTTPException(status_code=403, detail="admin_required")
     with PORTAL_GOVERNANCE.store.connect() as db:
         bases = db.execute(
+            # Geloeschte Bereiche verschwinden aus der Verwaltung; archivierte
+            # bleiben sichtbar, weil nur sie endgueltig entfernt werden koennen.
             "SELECT knowledgebase_id, slug, label, purpose, status FROM knowledgebases"
-            " ORDER BY label"
+            " WHERE status != 'deleted' ORDER BY label"
         ).fetchall()
         documents = db.execute(
             """SELECT p.knowledgebase_id, d.document_id, d.title, d.owner_user_id,

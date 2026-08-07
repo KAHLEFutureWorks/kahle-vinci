@@ -318,3 +318,41 @@ def test_feedback_screenshot_is_checked_and_only_admins_may_fetch_it():
         served = client.get(f"/portal/admin/feedback/{feedback_id}/screenshot")
         assert served.status_code == 200
         assert served.content == png
+
+
+def test_overview_hides_deleted_knowledgebases_but_keeps_archived_ones():
+    """
+    Ein endgueltig entfernter Wissensbereich darf nicht weiter in der
+    Verwaltung stehen. Archivierte bleiben sichtbar: Nur ueber sie fuehrt der
+    Weg zum endgueltigen Entfernen.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        labels = {}
+        for slug, label in (("aktiv", "Aktiv"), ("archiv", "Archiviert"), ("weg", "Geloescht")):
+            created = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+                "portal", "create", payload={"slug": slug, "label": label},
+            )
+            labels[label] = created.knowledgebase_id
+        module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "archive", knowledgebase_id=labels["Archiviert"],
+        )
+        module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "archive", knowledgebase_id=labels["Geloescht"],
+        )
+        module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "delete", knowledgebase_id=labels["Geloescht"],
+        )
+
+        shown = {
+            item["label"]: item["status"]
+            for item in client.get("/portal/admin/knowledgebase-overview").json()["knowledgebases"]
+        }
+        assert shown.get("Aktiv") == "active"
+        assert shown.get("Archiviert") == "archived"
+        assert "Geloescht" not in shown

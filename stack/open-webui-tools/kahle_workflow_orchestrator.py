@@ -4,6 +4,11 @@ author: local
 version: 0.4.0
 description: Deterministisches Mehrschritt-Tool fuer KAHLE-Workflows mit Tasks, RAG/Web-Recherche und strukturierter Ausgabe.
 """
+# ACHTUNG: Diese Datei ist NICHT in OpenWebUI installierbar.
+# Sie verweist auf Klassen aus hybrid_retrieval.py und laeuft allein mit
+# NameError. Installiere die gebaute Fassung aus dist/ desselben Namens:
+#     python stack/open-webui-tools/build_tools.py
+#     -> stack/open-webui-tools/dist/<diese Datei>
 
 from __future__ import annotations
 

@@ -2,6 +2,11 @@
 version: 1.0.0
 description: Berechtigungsgefilterte Dense+BM25-Suche mit RRF, Reranking und Quellen.
 """
+# ACHTUNG: Diese Datei ist NICHT in OpenWebUI installierbar.
+# Sie verweist auf Klassen aus hybrid_retrieval.py und laeuft allein mit
+# NameError. Installiere die gebaute Fassung aus dist/ desselben Namens:
+#     python stack/open-webui-tools/build_tools.py
+#     -> stack/open-webui-tools/dist/<diese Datei>
 
 import json
 import os
