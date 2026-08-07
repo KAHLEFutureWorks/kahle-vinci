@@ -67,6 +67,36 @@ nötig.
 | 80 Prozent der Testmitarbeiter schaffen den Upload ohne Erklärung | organisatorischer Praxistest offen, Protokoll liegt vor | Testrunde nach `WISSENSPORTAL-UX-TESTPROTOKOLL.md` durchführen |
 | Führungskräfte entscheiden Normalfälle durchschnittlich unter drei Minuten | organisatorischer Praxistest offen, Protokoll liegt vor | Zeitmessung in derselben Testrunde durchführen |
 
+## Kalibrierung der automatischen Einstufung
+
+Erster Praxisbefund vom 7. August 2026 mit der KAHLE-KI-Richtlinie. Das Dokument wurde als „bereichsbeschränkt" eingestuft und damit zur Adminprüfung eskaliert, obwohl es eine unternehmensweite Richtlinie ist.
+
+Ursache war keine inhaltliche Erkennung, sondern drei zu grob gefasste Muster:
+
+- Jede E-Mail-Adresse zählte als personenbezogenes Merkmal, auch interne wie `oltmanns@kahle.de` im Verantwortlichkeitsblock.
+- Jede Telefonnummer zählte, auch die Servicenummer der Datenschutzbeauftragten.
+- Das Wort „vertraulich" zählte, obwohl es in Richtlinien fast immer nur einen Begriff erklärt.
+
+Praktisch wäre damit nahezu jede KAHLE-Richtlinie bereichsbeschränkt geworden und über den Admin gelaufen; die Einstufung hätte ihre Aussagekraft verloren. PRD 15.2 sieht genau diese Kalibrierung anhand echter Dokumente vor.
+
+Nachgezogen wurde:
+
+| Merkmal | Vorher | Jetzt |
+|---|---|---|
+| E-Mail-Adresse | jede | nur außerhalb von `kahle.de` |
+| Telefonnummer | jede | Servicenummern 0800, 0180 und 0900 zählen nicht |
+| „vertraulich" | jede Erwähnung | nur als ausdrückliche Kennzeichnung, etwa „Klassifizierung: vertraulich" |
+
+Bank-, Zugangs-, Gesundheits- und Kundendaten sowie Marge, Einkaufspreis und Personalakte lösen unverändert aus. Fünf Tests decken die Abgrenzung ab, darunter der reale Kontaktblock der Richtlinie.
+
+## Offene Lücke: Begründung durch Mitarbeitende
+
+PRD 10.1 erlaubt Mitarbeitenden, eine Herabstufung mit schriftlicher Begründung zu beantragen; PRD 13.2 nennt zusätzlich „Konvertierungsfehler kommentieren" und „Sonderfall an Admin melden" als Nutzeraktionen. Die Oberfläche bietet nach dem Upload nur „Als neues Dokument vorschlagen" und „Verwerfen" an.
+
+Wer die automatische Einstufung für falsch hält, hat damit keinen Weg, das zu äußern. Der Endpunkt für den Herabstufungsantrag existiert bereits, verlangt aber eine `document_id`, die es zum Zeitpunkt des Uploads noch nicht gibt: Dort existiert nur ein Vorgang. Eine Anmerkung am Vorgang ist bisher nicht vorgesehen; `PortalCaseActionRequest` kennt kein Textfeld.
+
+Offen und noch nicht umgesetzt.
+
 ## Benutzeroberfläche und UX
 
 Die Portal-UI wurde am 7. August 2026 gegen die Abschnitte 12.3, 16.1, 21.1, 26.2 und 26.3 des PRD geprüft. Sieben Abweichungen wurden gefunden und behoben:
