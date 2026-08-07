@@ -356,3 +356,57 @@ def test_overview_hides_deleted_knowledgebases_but_keeps_archived_ones():
         assert shown.get("Aktiv") == "active"
         assert shown.get("Archiviert") == "archived"
         assert "Geloescht" not in shown
+
+
+def test_admins_can_reassign_a_document_to_another_knowledgebase():
+    """
+    PRD 9.3: Ein Dokument kann in mehreren Wissensbereichen veroeffentlicht
+    sein, ohne dupliziert zu werden. Bisher entstand eine Zuordnung nur aus
+    einem Uploadfall; ein Dokument ohne Bereich liess sich nicht mehr zuordnen.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module._trigger_hybrid_reindex = lambda: {"ok": True}
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        first = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "eins", "label": "Eins"})
+        second = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "zwei", "label": "Zwei"})
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal",
+            target_knowledgebase_id=first.knowledgebase_id, title="Wanderndes Dokument",
+            original_filename="w.md", original_file_id="w", original_sha256="e" * 64,
+            valid_workdays=30, confidentiality="internal",
+        )
+        # Nur aktive Dokumente duerfen veroeffentlicht werden.
+        blocked = client.put(f"/portal/admin/documents/{case.document_id}/publications",
+                             json={"knowledgebase_id": second.knowledgebase_id, "reason": "Passt besser"})
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == "only_active_documents_can_be_published"
+
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute("UPDATE document_versions SET status='active' WHERE version_id=?", (case.version_id,))
+            db.execute("UPDATE canonical_documents SET active_version_id=? WHERE document_id=?",
+                       (case.version_id, case.document_id))
+
+        added = client.put(f"/portal/admin/documents/{case.document_id}/publications",
+                           json={"knowledgebase_id": second.knowledgebase_id, "reason": "Passt besser"})
+        assert added.status_code == 200, added.text
+        active = {p["knowledgebase_id"] for p in added.json()["publications"] if p["status"] == "active"}
+        assert second.knowledgebase_id in active
+
+        removed = client.put(f"/portal/admin/documents/{case.document_id}/publications",
+                             json={"knowledgebase_id": second.knowledgebase_id, "active": False,
+                                   "reason": "Doch nicht passend"})
+        assert removed.status_code == 200
+        still_active = {p["knowledgebase_id"] for p in removed.json()["publications"] if p["status"] == "active"}
+        assert second.knowledgebase_id not in still_active
+
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        assert client.put(f"/portal/admin/documents/{case.document_id}/publications",
+                          json={"knowledgebase_id": first.knowledgebase_id, "reason": "Nicht erlaubt"}).status_code == 403

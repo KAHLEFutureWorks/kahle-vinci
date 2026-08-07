@@ -107,6 +107,13 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /changeKindText\[change\.kind\]/);
   assert.match(portal, /userNames\[change\.requested_by\]/);
 
+  // Archivieren und Entfernen warnen, wenn Dokumente betroffen sind.
+  assert.match(portal, /function affectedDocuments/);
+  assert.match(portal, /Zum Fortfahren erneut bestätigen/);
+  // PRD 9.3: Admins ordnen bestehende Dokumente einem Bereich zu oder lösen die Zuordnung.
+  assert.match(portal, /admin\/documents\/\$\{documentId\}\/publications/);
+  assert.match(portal, /Wissensbereich zuordnen oder lösen/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);

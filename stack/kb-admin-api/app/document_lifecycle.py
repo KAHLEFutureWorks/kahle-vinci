@@ -844,3 +844,65 @@ class DocumentLifecycle:
         if len(clean) != 64 or any(character not in "0123456789abcdef" for character in clean):
             raise LifecycleError("invalid_sha256")
         return clean
+
+
+    def set_publication(self, *, document_id: str, knowledgebase_id: str,
+                        active: bool, actor_user_id: str, reason: str) -> None:
+        """
+        Ordnet ein bestehendes Dokument einem Wissensbereich zu oder loest die
+        Zuordnung.
+
+        PRD 9.3: Ein kanonisches Dokument kann in mehreren Wissensbereichen
+        veroeffentlicht sein, ohne dupliziert zu werden; die zusaetzliche
+        Veroeffentlichung ist eine Adminentscheidung. Bisher entstand eine
+        Zuordnung nur beiläufig aus einem Uploadfall, weshalb ein Dokument nach
+        dem Entfernen seines Bereichs nicht mehr zugeordnet werden konnte.
+        """
+        if len(reason.strip()) < 3:
+            raise LifecycleError("publication_reason_required")
+        with self.store.connect() as db:
+            document = db.execute(
+                """SELECT d.document_id, v.status FROM canonical_documents d
+                   LEFT JOIN document_versions v ON v.version_id = d.active_version_id
+                   WHERE d.document_id = ?""",
+                (document_id,),
+            ).fetchone()
+            if not document:
+                raise LifecycleError("document_not_found")
+            if active and document["status"] != "active":
+                raise LifecycleError("only_active_documents_can_be_published")
+            base = db.execute(
+                "SELECT status FROM knowledgebases WHERE knowledgebase_id = ?",
+                (knowledgebase_id,),
+            ).fetchone()
+            if not base:
+                raise LifecycleError("unknown_knowledgebase")
+            if active and base["status"] != "active":
+                raise LifecycleError("knowledgebase_not_active")
+            db.execute(
+                """INSERT INTO document_publications(document_id,knowledgebase_id,status,created_at,updated_at)
+                   VALUES (?,?,?,?,?) ON CONFLICT(document_id,knowledgebase_id)
+                   DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at""",
+                (document_id, knowledgebase_id, "active" if active else "inactive",
+                 self.now(), self.now()),
+            )
+            case = db.execute(
+                "SELECT case_id FROM document_cases WHERE document_id = ? ORDER BY created_at DESC LIMIT 1",
+                (document_id,),
+            ).fetchone()
+            if case:
+                self._event(db, case["case_id"], actor_user_id, "publication_changed", {
+                    "knowledgebase_id": knowledgebase_id,
+                    "active": active, "reason": reason.strip()[:500],
+                })
+
+    def publications_of(self, document_id: str) -> list[dict[str, Any]]:
+        with self.store.connect() as db:
+            rows = db.execute(
+                """SELECT p.knowledgebase_id, p.status, k.label
+                   FROM document_publications p
+                   LEFT JOIN knowledgebases k ON k.knowledgebase_id = p.knowledgebase_id
+                   WHERE p.document_id = ? ORDER BY k.label""",
+                (document_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]

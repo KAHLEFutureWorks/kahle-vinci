@@ -1230,6 +1230,49 @@ def portal_admin_knowledgebase_overview(
     return {"knowledgebases": overview, "unpublished_documents": unassigned}
 
 
+class PortalPublicationRequest(BaseModel):
+    knowledgebase_id: str = Field(..., min_length=1, max_length=100)
+    active: bool = True
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+@app.get("/portal/admin/documents/{document_id}/publications")
+def portal_admin_publications(
+    document_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"publications": DOCUMENT_LIFECYCLE.publications_of(document_id)}
+
+
+@app.put("/portal/admin/documents/{document_id}/publications")
+def portal_admin_set_publication(
+    document_id: str, payload: PortalPublicationRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    """
+    Ordnet ein bestehendes Dokument einem Wissensbereich zu oder loest die
+    Zuordnung (PRD 9.3). Ohne diesen Weg blieb ein Dokument nach dem Entfernen
+    seines Bereichs ohne Zuordnung und liess sich keinem anderen zuweisen.
+    """
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    try:
+        DOCUMENT_LIFECYCLE.set_publication(
+            document_id=document_id, knowledgebase_id=payload.knowledgebase_id,
+            active=payload.active, actor_user_id=identity["user_id"], reason=payload.reason,
+        )
+    except LifecycleError as exc:
+        status = 404 if str(exc).startswith(("document_not_found", "unknown_")) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    PORTAL_GOVERNANCE.record_audit(
+        identity["user_id"], "document_publication_changed", "document", document_id,
+        {"knowledgebase_id": payload.knowledgebase_id, "active": payload.active},
+    )
+    indexing = _trigger_hybrid_reindex()
+    return {"publications": DOCUMENT_LIFECYCLE.publications_of(document_id), "indexing": indexing}
+
+
 def _resolve_valid_workdays(valid_workdays: int | None, valid_until: str | None) -> int:
     """
     PRD 17.1 laesst zwei gleichwertige Eingaben zu: Arbeitstage oder ein
