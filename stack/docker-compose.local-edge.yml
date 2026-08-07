@@ -1,0 +1,50 @@
+# Lokaler Reverse Proxy fuer die Abnahme.
+#
+# Caddy ist bisher nur in docker-compose.prod.yml definiert. Lokal lief
+# stattdessen ein von Hand gestarteter Container mit einer eigenen Caddyfile,
+# die nur die alten /admin/vector-Routen kannte und auf nicht mehr existierende
+# Upstreams zeigte; /wissen/ war dadurch gar nicht erreichbar.
+#
+# Diese Datei verwendet bewusst dieselbe Caddyfile wie die Produktion, damit die
+# Abnahme das echte Routing prueft, insbesondere die forward_auth-Absicherung
+# des Portals. PUBLIC_HOSTNAME wird auf ":3004" gesetzt: Caddy bindet dann
+# einfach auf diesen Port und verzichtet auf TLS und ACME.
+#
+# Start zusammen mit dem Hauptstack:
+#
+#     docker compose -f stack/docker-compose.yml -f stack/docker-compose.local-edge.yml up -d
+#
+# Oder ueber scripts/start-stack.ps1 -WithEdge
+
+services:
+  caddy-local:
+    image: caddy:2.11.3-alpine
+    container_name: caddy-local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3004:3004"
+    environment:
+      PUBLIC_HOSTNAME: ":3004"
+      # Die Caddyfile setzt `email {$ACME_EMAIL}` global. Ein leerer Wert laesst
+      # die Direktive ohne Argument zurueck und bricht den Parser. Ohne TLS wird
+      # die Adresse nie verwendet, sie muss nur vorhanden sein.
+      ACME_EMAIL: "local@kahle.invalid"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_local_data:/data
+      - caddy_local_config:/config
+    depends_on:
+      open-webui:
+        condition: service_started
+      owui-file-proxy:
+        condition: service_healthy
+      kb-admin-api:
+        condition: service_healthy
+      kb-admin-dashboard:
+        condition: service_started
+    networks:
+      - appnet
+
+volumes:
+  caddy_local_data: {}
+  caddy_local_config: {}

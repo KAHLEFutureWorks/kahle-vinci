@@ -24,6 +24,7 @@ param(
     [string]$ProjectRoot = "",
     [string]$Prefix = "KAHLE-Vinci",
     [switch]$RemoveOrphans,
+    [switch]$NoEdge,
     [string[]]$ComposeArgs = @()
 )
 
@@ -60,9 +61,19 @@ if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("KAHLE_RO
 }
 
 $composeFile = Join-Path $ProjectRoot "stack\docker-compose.yml"
+$edgeFile = Join-Path $ProjectRoot "stack\docker-compose.local-edge.yml"
+
+# Dieselben Dateien wie beim Start, sonst bleibt der Reverse Proxy stehen.
+$composeFiles = @("compose", "-f", $composeFile)
+if (-not $NoEdge) {
+    $composeFiles += @("-f", $edgeFile)
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("ACME_EMAIL"))) {
+        $env:ACME_EMAIL = "local@kahle.invalid"
+    }
+}
 
 try {
-    $downArgs = @("compose", "-f", $composeFile, "down")
+    $downArgs = $composeFiles + @("down")
     if ($RemoveOrphans) { $downArgs += "--remove-orphans" }
     if ($ComposeArgs.Count -gt 0) { $downArgs += $ComposeArgs }
 

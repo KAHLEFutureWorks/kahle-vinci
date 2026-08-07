@@ -4,6 +4,7 @@ param(
   [string]$Prefix = "KAHLE-Vinci",
   [switch]$Pull,
   [switch]$NoBuild,
+  [switch]$NoEdge,
   [string[]]$ComposeArgs = @()
 )
 
@@ -54,15 +55,26 @@ foreach ($item in $defaults.GetEnumerator()) {
 
 $composeFile = Join-Path $ProjectRoot "stack\docker-compose.yml"
 
+# Caddy ist nur fuer die Produktion definiert. Ohne dieses Overlay gibt es
+# lokal keinen Reverse Proxy und /wissen/ ist nicht erreichbar.
+$edgeFile = Join-Path $ProjectRoot "stack\docker-compose.local-edge.yml"
+$composeFiles = @("compose", "-f", $composeFile)
+if (-not $NoEdge) {
+  $composeFiles += @("-f", $edgeFile)
+  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("ACME_EMAIL"))) {
+    $env:ACME_EMAIL = "local@kahle.invalid"
+  }
+}
+
 try {
   if ($Pull) {
-    & docker compose -f $composeFile pull --ignore-buildable
+    & docker @composeFiles pull --ignore-buildable
     if ($LASTEXITCODE -ne 0) {
       throw "docker compose pull failed with exit code $LASTEXITCODE"
     }
   }
 
-  $upArgs = @("compose", "-f", $composeFile, "up", "-d")
+  $upArgs = $composeFiles + @("up", "-d")
   if (-not $NoBuild) {
     $upArgs += "--build"
   }
