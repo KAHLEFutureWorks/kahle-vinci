@@ -58,6 +58,11 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /die Prüfung läuft weiter/);
   assert.match(portal, /sessionStorage\.getItem\(RUNNING_UPLOAD_JOB\)/);
 
+  // Formularfelder brauchen einen sichtbaren Rahmen, sonst sind sie weiß auf weiß.
+  assert.match(styles, /:where\(\.wp-shell input[^)]*\)[^{]*\{[^}]*border:/);
+  // Beschriftung über dem Feld, sonst überlappt der Fokusrahmen den Text.
+  assert.match(styles, /\.wp-form>label\{[^}]*flex-direction:column/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);

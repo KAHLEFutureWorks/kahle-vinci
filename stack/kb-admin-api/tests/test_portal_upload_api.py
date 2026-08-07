@@ -285,3 +285,37 @@ def test_upload_rejects_a_date_beyond_sixty_workdays():
         )
         assert response.status_code == 422, response.text
         assert response.json()["detail"] == "valid_workdays_out_of_range"
+
+
+def test_upload_job_accepts_workdays_alone():
+    """Der Weg, den die Oberflaeche tatsaechlich nutzt."""
+    with tempfile.TemporaryDirectory() as directory:
+        _, client, knowledgebase_id = _upload_ready_client(directory)
+        response = client.post(
+            "/portal/upload-jobs",
+            data={
+                "knowledgebase_id": knowledgebase_id, "title": "Wissen",
+                "valid_workdays": "30", "confidentiality": "internal",
+            },
+            files={"file": ("wissen.md", b"Original", "text/markdown")},
+        )
+        assert response.status_code == 202, response.text
+
+
+def test_upload_job_accepts_a_date_alone():
+    from datetime import date
+
+    from document_lifecycle import add_workdays
+
+    with tempfile.TemporaryDirectory() as directory:
+        _, client, knowledgebase_id = _upload_ready_client(directory)
+        response = client.post(
+            "/portal/upload-jobs",
+            data={
+                "knowledgebase_id": knowledgebase_id, "title": "Wissen",
+                "valid_until": add_workdays(date.today(), 30).isoformat(),
+                "confidentiality": "internal",
+            },
+            files={"file": ("wissen.md", b"Original", "text/markdown")},
+        )
+        assert response.status_code == 202, response.text
