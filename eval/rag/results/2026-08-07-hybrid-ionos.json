@@ -1,0 +1,912 @@
+{
+  "documents": 4,
+  "chunks": 121,
+  "questions": 21,
+  "model": "BAAI/bge-m3",
+  "configurations": {
+    "dense_only": {
+      "document_hit_rate": 0.9047619047619048,
+      "source_link_rate": 1.0
+    },
+    "sparse_only": {
+      "document_hit_rate": 0.9523809523809523,
+      "source_link_rate": 1.0
+    },
+    "hybrid_rrf": {
+      "document_hit_rate": 1.0,
+      "source_link_rate": 1.0
+    },
+    "hybrid_reranked": {
+      "document_hit_rate": 1.0,
+      "source_link_rate": 1.0
+    }
+  },
+  "latency_ms": {
+    "median": 12426.123200013535,
+    "p95": 23815.900000015972
+  },
+  "records": [
+    {
+      "question": "Warum ist KI gerade jetzt für Autohäuser relevant?",
+      "expected": "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Entlastung kann KI im Autohaus schaffen?",
+      "expected": "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Was erwarten Kunden laut Strategie von digitalen Services?",
+      "expected": "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Rolle spielen Zeitvorteil und Kundenbindung?",
+      "expected": "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Was bedeutet der Satz, dass KI jetzt entschieden wird?",
+      "expected": "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+      "configurations": {
+        "dense_only": {
+          "hit": false,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Aufgabe übernimmt der Voicebot Kahla?",
+      "expected": "KI_Anwendeungsuebersicht_KAHLE.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Datenarten verarbeitet KAHLE-Speak?",
+      "expected": "KI_Anwendeungsuebersicht_KAHLE.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welchen Status hat KAHLE-Vinci in der Anwendungsübersicht?",
+      "expected": "KI_Anwendeungsuebersicht_KAHLE.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Technik und Modelle nutzt KAHLE-Vinci?",
+      "expected": "KI_Anwendeungsuebersicht_KAHLE.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Für welche Bereiche wird Microsoft 365 Copilot eingesetzt?",
+      "expected": "KI_Anwendeungsuebersicht_KAHLE.md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Datenschutzvoraussetzungen gelten für personenbezogene Daten in KI-Tools?",
+      "expected": "KAHLE_KI-Compliance_v1.2 (1).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": false,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche technischen und organisatorischen Maßnahmen werden genannt?",
+      "expected": "KAHLE_KI-Compliance_v1.2 (1).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Wie lange werden Logfiles mindestens aufbewahrt?",
+      "expected": "KAHLE_KI-Compliance_v1.2 (1).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Wer trägt die Gesamtverantwortung für die KI-Strategie?",
+      "expected": "KAHLE_KI-Compliance_v1.2 (1).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Wie werden neue KI-Projekte geprüft und freigegeben?",
+      "expected": "KAHLE_KI-Compliance_v1.2 (1).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Dos and Don'ts gelten bei der Nutzung von KI?",
+      "expected": "KAHLE_KI_Policy_v1.4 (2).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Wie läuft der Eskalationsprozess bei einem KI-Vorfall ab?",
+      "expected": "KAHLE_KI_Policy_v1.4 (2).md",
+      "configurations": {
+        "dense_only": {
+          "hit": false,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche KI-Systeme stehen auf der Whitelist?",
+      "expected": "KAHLE_KI_Policy_v1.4 (2).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Wer besitzt Entscheidungsbefugnis für KI bei KAHLE?",
+      "expected": "KAHLE_KI_Policy_v1.4 (2).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Regeln gelten für Kommunikation und Kennzeichnung?",
+      "expected": "KAHLE_KI_Policy_v1.4 (2).md",
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI_Policy_v1.4 (2).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KI_im_Autohaus_-_Vom_Hype_zur_konkreten_Entlastung_-_Strategie_Nutzen_Umsetzung.md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    },
+    {
+      "question": "Welche Regel gilt für die frei erfundene Anwendung ZX-999-NICHT-VORHANDEN?",
+      "expected": null,
+      "configurations": {
+        "dense_only": {
+          "hit": true,
+          "top_sources": [
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KI_Anwendeungsuebersicht_KAHLE.md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "sparse_only": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_rrf": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        },
+        "hybrid_reranked": {
+          "hit": true,
+          "top_sources": [
+            "KAHLE_KI-Compliance_v1.2 (1).md",
+            "KAHLE_KI_Policy_v1.4 (2).md",
+            "KAHLE_KI-Compliance_v1.2 (1).md"
+          ],
+          "source_links_ok": true
+        }
+      }
+    }
+  ]
+}

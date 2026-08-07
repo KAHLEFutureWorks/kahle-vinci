@@ -43,29 +43,34 @@ def rrf(dense: list[float], sparse: list[float], k: int = 60) -> list[float]:
     return [1 / (k + dense_ranks[index]) + 1 / (k + sparse_ranks[index]) for index in range(len(dense))]
 
 
-def tei_rerank(query: str, chunks: list[dict], fused: list[float], base_url: str,
-               *, candidate_limit: int = 50, timeout: float = 60) -> list[float]:
-    """Use the same fail-closed multilingual TEI reranker as the Vinci runtime."""
+def rerank(query: str, chunks: list[dict], fused: list[float], base_url: str, api_key: str,
+           model: str, *, candidate_limit: int = 50, timeout: float = 60) -> list[float]:
+    """
+    Bewertet die Kandidaten mit demselben fail-closed Reranker wie die Laufzeit.
+
+    Das ist bewusst derselbe IONOS-Endpunkt, den `IonosReranker` in
+    `stack/open-webui-tools/hybrid_retrieval.py` aufruft: Eine Evaluation gegen
+    ein anderes Modell als das produktiv eingesetzte hat keine Aussagekraft.
+    """
     candidate_order = sorted(range(len(chunks)), key=lambda index: fused[index], reverse=True)[:candidate_limit]
     documents = [chunks[index]["content"] for index in candidate_order]
     try:
         response = requests.post(
             f"{base_url.rstrip('/')}/rerank",
-            json={"query": query, "texts": documents, "truncate": True},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "query": query, "documents": documents},
             timeout=timeout,
         )
         response.raise_for_status()
-        rows = response.json()
-        if isinstance(rows, dict):
-            rows = rows.get("results") or []
+        rows = response.json().get("results") or []
+        if not rows:
+            raise ValueError("reranker_returned_no_results")
         scores = [float("-inf")] * len(chunks)
         for row in rows:
             local_index = int(row["index"])
             if local_index < 0 or local_index >= len(candidate_order):
                 raise ValueError("reranker_index_out_of_range")
-            scores[candidate_order[local_index]] = float(row.get("score", row.get("relevance_score")))
-        if not rows:
-            raise ValueError("reranker_returned_no_results")
+            scores[candidate_order[local_index]] = float(row["relevance_score"])
         return scores
     except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
         raise RuntimeError("required_reranker_unavailable") from exc
@@ -90,9 +95,7 @@ def main() -> int:
         default=os.getenv("IONOS_API_TOKEN") or os.getenv("IONOS_API_KEY", ""),
     )
     parser.add_argument("--model", default="BAAI/bge-m3")
-    parser.add_argument("--reranker-url", default=os.getenv("RERANKER_URL", "http://127.0.0.1:8080"))
-    # Auf CPU braucht gte-multilingual-reranker-base rund zwei Sekunden je
-    # Kandidat. Der Messlauf darf deshalb laenger warten als die Laufzeit.
+    parser.add_argument("--reranker-model", default="Qwen/Qwen3-VL-Reranker-8B")
     parser.add_argument("--reranker-timeout", type=float, default=60.0)
     args = parser.parse_args()
     if not args.api_key:
@@ -122,8 +125,8 @@ def main() -> int:
         sparse_query = corpus.query_vector(query)
         sparse_scores = [sparse_dot(sparse_query, corpus.document_vector(chunk["content"])) for chunk in chunks]
         fused_scores = rrf(dense_scores, sparse_scores)
-        reranked_scores = tei_rerank(query, chunks, fused_scores, args.reranker_url,
-                                     timeout=args.reranker_timeout)
+        reranked_scores = rerank(query, chunks, fused_scores, args.base_url, args.api_key,
+                                 args.reranker_model, timeout=args.reranker_timeout)
         configurations = {
             "dense_only": dense_scores, "sparse_only": sparse_scores,
             "hybrid_rrf": fused_scores, "hybrid_reranked": reranked_scores,

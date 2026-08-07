@@ -47,9 +47,7 @@ Die Abhängigkeiten stehen in `stack/requirements-dev.txt`. Die Suiten laufen be
 
 | Nachweis | Status | Nächster Schritt |
 |---|---|---|
-| Mindestens 90 Prozent richtige Treffer mit den vier KAHLE-Beispieldokumenten | blockiert durch lokalen IONOS-Token | gültigen IONOS-Token im lokalen `kb-sync` hinterlegen und `eval/rag/offline_hybrid_eval.py` ausführen |
-| Mindestens 95 Prozent korrekt verlinkte Originalquellen | gemeinsam mit Retrieval-Evaluation offen | Bericht der Retrieval-Evaluation auswerten |
-| Höchstens 5 Prozent unbelegte Antworten ohne freigegebene Quelle | Laufzeitevaluation offen | Negativfragen mit dem lokalen Vinci-Chat ausführen |
+| Höchstens 5 Prozent unbelegte Antworten ohne freigegebene Quelle | Negativfrage in der Offline-Evaluation bestanden, Laufzeitprüfung im Chat offen | Negativfragen mit dem lokalen Vinci-Chat ausführen |
 | 80 Prozent der Testmitarbeiter schaffen den Upload ohne Erklärung | organisatorischer Praxistest offen, Protokoll liegt vor | Testrunde nach `WISSENSPORTAL-UX-TESTPROTOKOLL.md` durchführen |
 | Führungskräfte entscheiden Normalfälle durchschnittlich unter drei Minuten | organisatorischer Praxistest offen, Protokoll liegt vor | Zeitmessung in derselben Testrunde durchführen |
 
@@ -88,6 +86,27 @@ Einschränkung: Der gemessene Indexneuaufbau verwendet deterministische lokale E
 
 **RPO 24 Stunden: eingehalten, ohne Puffer.** `backup_worker.py` prüft stündlich und erzeugt genau eine Sicherung je Kalendertag. Der größtmögliche Abstand zwischen zwei erfolgreichen Sicherungen beträgt damit 24 Stunden, der maximale Datenverlust entsprechend knapp 24 Stunden. Ein einzelner fehlgeschlagener Backupzyklus verletzt den RPO deshalb unmittelbar. Der Worker meldet jeden Fehlschlag sofort als Admin-Incident; ein zeitlicher Puffer besteht nicht.
 
+## Retrieval-Evaluation
+
+Ausgeführt am 7. August 2026 mit den vier Document-Worker-Ausgaben und den 21 Fragen aus `eval/rag/kahle-document-worker-questions.yml`. Bericht: `eval/rag/results/2026-08-07-hybrid-ionos.json`. Korpus: 121 Chunks, Embeddings `BAAI/bge-m3`, Reranker `Qwen/Qwen3-VL-Reranker-8B`, beide auf IONOS.
+
+| Konfiguration | Richtige Dokumenttreffer | Korrekte Quellenlinks |
+|---|---:|---:|
+| Dense-only (Ausgangswert) | 90,5 % | 100 % |
+| Sparse/BM25-only | 95,2 % | 100 % |
+| Hybrid mit RRF | **100 %** | 100 % |
+| Hybrid mit RRF und Reranker | **100 %** | 100 % |
+
+Damit sind die Kriterien aus PRD 29.2 erfüllt: mindestens 90 Prozent Dokumenttreffer und mindestens 95 Prozent korrekt verlinkte Originalquellen. Die Negativfrage nach der frei erfundenen Anwendung `ZX-999-NICHT-VORHANDEN` wird in allen vier Konfigurationen korrekt nicht belegt.
+
+Die vom PRD 30 geforderte Vergleichsreihe zeigt den erwarteten Verlauf: Die reine Dense-Suche verfehlt zwei Fragen, darunter eine rein lexikalische nach dem Eskalationsprozess. Die deutsche BM25-Suche fängt diese ab, und erst die Fusion beider erreicht die volle Trefferquote.
+
+Einschränkungen, die noch offen sind:
+
+- **Latenz.** Der Median liegt bei 12,4 Sekunden je Frage, das 95. Perzentil bei 23,8 Sekunden. Gemessen wird dabei Query-Embedding plus Reranking über 50 Kandidaten; die Laufzeit ersetzt die lokale Kosinusberechnung durch Qdrant. Das PRD setzt für das Retrieval keine harte Zeitgrenze, aber für einen Chat ist das spürbar und gehört vor dem Rollout genauer untersucht.
+- **Kein Vergleich gegen den lokalen Reranker.** Der Baseline-Lauf mit `gte-multilingual-reranker-base` wurde abgebrochen, als der Testcontainer entfernt wurde. Da dieses Modell wegen seiner Laufzeit ohnehin ausscheidet, wurde er nicht wiederholt.
+- **Offline-Charakter.** Die Evaluation arbeitet direkt auf den Chunks und umgeht Qdrant, die Berechtigungsfilter und das Antwortmodell. Die Rechteprüfung ist getrennt durch die Sicherheitstests belegt.
+
 ## Reranking läuft auf IONOS
 
 Das Reranking war auf einen lokal betriebenen CPU-Cross-Encoder verdrahtet (`Alibaba-NLP/gte-multilingual-reranker-base` in einem TEI-Container). Auf reiner CPU braucht dieses Modell rund zwei Sekunden je Kandidat. Gemessen am 7. August 2026:
@@ -116,11 +135,11 @@ Nebenbefund: `hybrid_retrieval.py` enthielt bereits eine korrekte `IonosReranker
 
 ## Aktueller externer Prüfblocker
 
-Der im lokalen Container `kb-sync` konfigurierte IONOS-Token wurde vom Embedding-Endpunkt mit HTTP 401 abgelehnt. Der Evaluationscode, der Fragensatz und die vier Beispieldokumente liegen lokal bereit. Zugangsdaten werden weder in diesem Protokoll noch in Evaluationsberichten gespeichert.
+Der IONOS-Token ist seit dem 7. August 2026 gueltig; der fruehere HTTP 401 ist behoben. Code und Compose lesen ihn aus `IONOS_API_TOKEN` oder `IONOS_API_KEY`. Zugangsdaten werden weder in diesem Protokoll noch in Evaluationsberichten gespeichert.
 
 Der TEI-Reranker ist seit dem 7. August 2026 verfügbar: Das Image `ghcr.io/huggingface/text-embeddings-inference:cpu-1.9` ist geladen, der Dienst läuft mit `Alibaba-NLP/gte-multilingual-reranker-base` in TEI 1.9.3, und der `/rerank`-Endpunkt ist mit einer deutschen Beispielanfrage verifiziert. Die Offline-Evaluation verwendet verpflichtend denselben Reranker-Endpunkt wie die Vinci-Laufzeit und bricht bei dessen Ausfall geschlossen ab.
 
-Damit ist der IONOS-Token der einzige verbliebene technische Blocker des Go-live-Gates.
+Damit bestehen keine technischen Blocker mehr. Offen sind nur noch die organisatorischen UX-Praxistests und die Laufzeitpruefung der Negativfragen im Vinci-Chat.
 
 Das Go-live-Gate bleibt geschlossen, bis alle offenen Nachweise erbracht und in dieser Datei dokumentiert sind.
 
