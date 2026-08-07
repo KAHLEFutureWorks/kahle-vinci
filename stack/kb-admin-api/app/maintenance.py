@@ -371,6 +371,16 @@ class MaintenanceService:
 
     def _physically_delete(self, db, trash_row, file_root: Path | None) -> None:
         document_id = trash_row["document_id"]
+        # Der Analysekorpus verweist auf Versionen. Bleibt der Eintrag nach
+        # der physischen Loeschung stehen, meldet er weiter Aehnlichkeit
+        # fuer ein Dokument, das es nicht mehr gibt. Die Tabelle gehoert einem
+        # anderen Modul und fehlt in Aufbauten ohne Analysekorpus.
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_analysis_corpus'"
+        ).fetchone():
+            db.execute(
+                "DELETE FROM global_analysis_corpus WHERE document_id = ?", (document_id,),
+            )
         document = db.execute("SELECT title, created_at FROM canonical_documents WHERE document_id = ?", (document_id,)).fetchone()
         versions = db.execute("SELECT original_sha256, created_at, activated_at FROM document_versions WHERE document_id = ? ORDER BY created_at", (document_id,)).fetchall()
         kbs = [row["knowledgebase_id"] for row in db.execute("SELECT knowledgebase_id FROM document_publications WHERE document_id = ?", (document_id,)).fetchall()]

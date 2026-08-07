@@ -177,3 +177,82 @@ def test_withdrawn_cases_leave_no_orphan_draft_in_the_document_list():
             case_id=case.case_id, actor_user_id="portal", action="discard",
         )
         assert "Verworfen" not in titles()
+
+
+def test_trashed_documents_no_longer_count_as_similar_content():
+    """
+    Nach dem Loeschen aller Dokumente meldete der naechste Upload weiter eine
+    sehr hohe Aehnlichkeit. move_to_thrash setzt die Version auf 'trash',
+    pflegte aber den eigenen Status des Analysekorpus nicht nach.
+    """
+    import tempfile
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from test_portal_api import identity, load_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal",
+            target_knowledgebase_id=kb.knowledgebase_id, title="Altbestand",
+            original_filename="alt.md", original_file_id="alt",
+            original_sha256="d" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        module.GLOBAL_CORPUS.upsert(module.CorpusDocument(
+            case.document_id, case.version_id, "Altbestand",
+            "Die Richtlinie regelt den Einsatz von KI im Unternehmen.",
+            (kb.knowledgebase_id,), "active",
+        ))
+        assert [doc.version_id for doc in module.GLOBAL_CORPUS.documents()] == [case.version_id]
+
+        module.MAINTENANCE.move_to_trash(case.document_id, "portal", "Alles neu aufsetzen")
+        assert module.GLOBAL_CORPUS.documents() == [], (
+            "ein Dokument im Papierkorb darf keinen Aehnlichkeitstreffer mehr ausloesen"
+        )
+
+
+def test_corpus_entries_do_not_survive_their_version():
+    """
+    Nach der physischen Loeschung blieb der Korpuseintrag zurueck und meldete
+    weiter eine sehr hohe Aehnlichkeit fuer ein Dokument, das es nicht mehr gab.
+    """
+    import tempfile
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from test_portal_api import identity, load_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        assert TestClient(module.app).get("/portal/session").status_code == 200
+
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal",
+            target_knowledgebase_id=kb.knowledgebase_id, title="Vergaenglich",
+            original_filename="v.md", original_file_id="v",
+            original_sha256="9" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        module.GLOBAL_CORPUS.upsert(module.CorpusDocument(
+            case.document_id, case.version_id, "Vergaenglich", "Inhalt",
+            (kb.knowledgebase_id,), "active",
+        ))
+        assert module.GLOBAL_CORPUS.documents()
+
+        module.MAINTENANCE.move_to_trash(case.document_id, "portal", "Weg damit")
+        module.MAINTENANCE.delete_now(case.document_id, "portal", "Endgültig weg")
+
+        assert module.GLOBAL_CORPUS.documents() == [], (
+            "ein physisch geloeschtes Dokument darf keinen Korpuseintrag hinterlassen"
+        )

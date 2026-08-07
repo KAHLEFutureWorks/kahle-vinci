@@ -213,13 +213,43 @@ class GlobalCorpus:
                 (status, version_id),
             )
 
+    # Endzustaende einer Version. Ein Dokument in einem dieser Zustaende ist aus
+    # dem Bestand heraus und darf keinen Aehnlichkeitstreffer mehr ausloesen.
+    RETIRED_VERSION_STATES = ("trash", "deleted", "withdrawn", "rejected", "withdrawn_duplicate")
+
     def documents(self, exclude_version_id: str | None = None) -> list[CorpusDocument]:
-        query = "SELECT * FROM global_analysis_corpus WHERE status IN ('active','pending','superseded')"
-        params: tuple[str, ...] = ()
-        if exclude_version_id:
-            query += " AND version_id <> ?"
-            params = (exclude_version_id,)
+        # Der Korpus fuehrt einen eigenen Status, der beim Verschieben in den
+        # Papierkorb nicht mitgepflegt wurde; geloeschte Dokumente galten
+        # dadurch weiter als aehnlich. Massgeblich ist der Status der Version
+        # selbst, sofern es sie gibt.
+        placeholders = ",".join("?" for _ in self.RETIRED_VERSION_STATES)
         with self.store.connect() as db:
+            # Der Korpus laeuft auch eigenstaendig, etwa in der Migration; dort
+            # gibt es keine Versionstabelle, gegen die geprueft werden koennte.
+            has_versions = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_versions'"
+            ).fetchone()
+            if has_versions:
+                # Jeder Eintrag entsteht mit einer version_id. Fehlt die Version,
+                # wurde sie physisch geloescht und der Eintrag ist verwaist; er
+                # meldete sonst weiter Treffer fuer ein Dokument, das es nicht
+                # mehr gibt.
+                query = (
+                    "SELECT c.* FROM global_analysis_corpus c"
+                    " JOIN document_versions v ON v.version_id = c.version_id"
+                    " WHERE c.status IN ('active','pending','superseded')"
+                    f" AND v.status NOT IN ({placeholders})"
+                )
+            else:
+                query = (
+                    "SELECT c.* FROM global_analysis_corpus c"
+                    " WHERE c.status IN ('active','pending','superseded')"
+                    f" AND c.status NOT IN ({placeholders})"
+                )
+            params: tuple[str, ...] = tuple(self.RETIRED_VERSION_STATES)
+            if exclude_version_id:
+                query += " AND c.version_id <> ?"
+                params = (*params, exclude_version_id)
             rows = db.execute(query, params).fetchall()
         return [CorpusDocument(row["document_id"], row["version_id"], row["title"], row["markdown"],
                                tuple(json.loads(row["knowledgebase_ids_json"])), row["status"]) for row in rows]
