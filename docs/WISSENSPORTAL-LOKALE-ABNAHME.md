@@ -88,6 +88,32 @@ Einschränkung: Der gemessene Indexneuaufbau verwendet deterministische lokale E
 
 **RPO 24 Stunden: eingehalten, ohne Puffer.** `backup_worker.py` prüft stündlich und erzeugt genau eine Sicherung je Kalendertag. Der größtmögliche Abstand zwischen zwei erfolgreichen Sicherungen beträgt damit 24 Stunden, der maximale Datenverlust entsprechend knapp 24 Stunden. Ein einzelner fehlgeschlagener Backupzyklus verletzt den RPO deshalb unmittelbar. Der Worker meldet jeden Fehlschlag sofort als Admin-Incident; ein zeitlicher Puffer besteht nicht.
 
+## Reranking läuft auf IONOS
+
+Das Reranking war auf einen lokal betriebenen CPU-Cross-Encoder verdrahtet (`Alibaba-NLP/gte-multilingual-reranker-base` in einem TEI-Container). Auf reiner CPU braucht dieses Modell rund zwei Sekunden je Kandidat. Gemessen am 7. August 2026:
+
+| Kandidaten | lokal (CPU) | IONOS |
+|---:|---|---|
+| 8 | 17,0 s | – |
+| 32 | 62,2 s | – |
+| 50 | 101,7 s | 3,24 s Median, 9,17 s schlechtester von zwölf Läufen |
+
+PRD 19.2 erzwingt 30 bis 50 Kandidaten je Anfrage, und `QdrantHybridRetriever` setzt diese Grenzen hart durch. Da das Retrieval fail-closed arbeitet, hätte jede Anfrage oberhalb von etwa 30 Kandidaten **gar keine Antwort** geliefert. Das Zielsystem ist ein netcup VPS 2000 G12 ohne GPU; die Laufzeit ließ sich deshalb nicht durch Konfiguration retten.
+
+Reranking läuft jetzt über `Qwen/Qwen3-VL-Reranker-8B` auf den freigegebenen IONOS-Endpunkten. PRD Prinzip 10 lässt alle drei Vertraulichkeitsstufen dort ausdrücklich zu, und die Embeddings nutzen denselben Weg bereits. Die Trennschärfe ist zusätzlich besser: 0,96 gegen 0,02 bei einem deutschen Beispiel, lokal waren es 0,45 gegen 0,04.
+
+Der lokale `reranker`-Dienst ist vollständig aus `docker-compose.yml` entfernt, ebenso sein Volume und die nicht mehr gelesene Variable `RERANKER_URL`. Zwei Tests sichern, dass er nicht zurückkehrt und dass das IONOS-Antwortformat korrekt gelesen wird.
+
+Nebenbefund: `hybrid_retrieval.py` enthielt bereits eine korrekte `IonosReranker`-Klasse, die nie verdrahtet worden war.
+
+## Offene Punkte für den Serverrollout
+
+| Punkt | Was zu tun ist |
+|---|---|
+| Name des IONOS-Tokens | Lokal ist der Token als Umgebungsvariable `IONOS_API_TOKEN` gesetzt, die Produktionsvorlage führt ihn als `IONOS_API_KEY`. Code und Compose akzeptieren jetzt **beide** Namen, `IONOS_API_TOKEN` hat Vorrang. Beim Rollout ist zu prüfen, unter welchem Namen der Token auf dem Server tatsächlich hinterlegt ist; ein Umbenennen ist nicht mehr nötig, aber genau einer der beiden muss gesetzt sein. |
+| Reranker-Erreichbarkeit | Der Produktionsserver muss die IONOS-Endpunkte erreichen. Fällt IONOS aus, liefert Vinci fail-closed keine Wissensantwort mehr — es gibt bewusst keinen lokalen Rückfall auf ein schwächeres Modell. |
+| Freigewordene Ressourcen | Der entfernte Reranker-Container belegte auf dem VPS dauerhaft Arbeitsspeicher. Nach dem Rollout ist zu prüfen, ob das Speicherbudget entsprechend angepasst werden kann. |
+
 ## Aktueller externer Prüfblocker
 
 Der im lokalen Container `kb-sync` konfigurierte IONOS-Token wurde vom Embedding-Endpunkt mit HTTP 401 abgelehnt. Der Evaluationscode, der Fragensatz und die vier Beispieldokumente liegen lokal bereit. Zugangsdaten werden weder in diesem Protokoll noch in Evaluationsberichten gespeichert.

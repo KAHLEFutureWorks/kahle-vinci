@@ -63,23 +63,53 @@ def test_hybrid_request_repeats_acl_in_both_prefetches_and_rejects_leak(monkeypa
     assert captured["body"]["query"] == {"fusion": "rrf"}
 
 
-def test_reranker_batch_limit_covers_the_enforced_candidate_policy():
+def test_reranking_runs_on_ionos_and_not_on_a_local_service():
     """
-    Der Retriever erzwingt 30 bis 50 Kandidaten (PRD 19.2) und sendet sie in
-    einem einzigen /rerank-Aufruf. TEI weist jede Anfrage oberhalb von
-    --max-client-batch-size mit HTTP 422 ab, und der Retriever ist fail-closed.
-    Bleibt der TEI-Standardwert 32 stehen, scheitert damit jede Antwort, sobald
-    mehr als 32 Kandidaten gefunden werden.
+    Der lokale CPU-Cross-Encoder brauchte rund zwei Sekunden je Kandidat. Bei den
+    von PRD 19.2 erzwungenen 30 bis 50 Kandidaten lief das fail-closed gebaute
+    Retrieval damit in jeden Timeout. Reranking gehoert deshalb auf die
+    freigegebenen IONOS-Endpunkte (PRD Prinzip 10), und der lokale Dienst darf
+    nicht zurueckkehren.
     """
-    import re
+    stack_root = Path(__file__).resolve().parents[1]
+    compose = (stack_root / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "reranker" not in compose, "local reranker service must stay removed"
 
-    compose = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text(encoding="utf-8")
-    reranker = compose.split("\n  reranker:", 1)[1].split("\n  kb-admin-dashboard:", 1)[0]
-    match = re.search(r'"--max-client-batch-size",\s*"(\d+)"', reranker)
-    assert match, "reranker service must pin --max-client-batch-size"
+    tools = stack_root / "open-webui-tools"
+    for name in ("rag_chat_hybrid_tool.py", "kahle_workflow_orchestrator.py"):
+        source = (tools / name).read_text(encoding="utf-8")
+        assert "IonosReranker(base_url, api_key" in source, name
+        assert "TeiReranker(" not in source, f"{name} must not fall back to the local reranker"
 
-    # Obergrenze der Policy aus dem Retriever lesen, statt sie hier zu duplizieren.
-    policy = re.search(r"if not 30 <= candidate_limit <= (\d+)", PATH.read_text(encoding="utf-8"))
-    assert policy, "retriever must enforce a candidate_limit ceiling"
 
-    assert int(match.group(1)) >= int(policy.group(1))
+def test_ionos_reranker_reads_the_documented_response_shape():
+    """IONOS antwortet im Cohere-Format, nicht im TEI-Format."""
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"index": 1, "relevance_score": 0.96},
+                                {"index": 0, "relevance_score": 0.02}]}
+
+    def fake_post(url, **kwargs):
+        captured.update(url=url, payload=kwargs["json"])
+        return Response()
+
+    original = module.requests.post
+    module.requests.post = fake_post
+    try:
+        ranked = module.IonosReranker(
+            "https://openai.inference.de-txl.ionos.com/v1", "token", "Qwen/Qwen3-VL-Reranker-8B",
+        ).rerank("frage", ["a", "b"], top_n=2)
+    finally:
+        module.requests.post = original
+
+    assert captured["url"].endswith("/v1/rerank")
+    assert captured["payload"]["documents"] == ["a", "b"]
+    assert captured["payload"]["model"] == "Qwen/Qwen3-VL-Reranker-8B"
+    assert ranked == [(1, 0.96), (0, 0.02)]

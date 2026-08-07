@@ -14,7 +14,7 @@ services:
       ENABLE_OLLAMA_API: "False"
       ENABLE_OPENAI_API: "True"
       OPENAI_API_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
-      OPENAI_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
+      OPENAI_API_KEY: ${IONOS_API_TOKEN:-${IONOS_API_KEY:?IONOS_API_TOKEN or IONOS_API_KEY is required}}
       TASK_MODEL_EXTERNAL: ${IONOS_CHAT_MODEL_DEFAULT:-mistralai/Mistral-Small-24B-Instruct}
       IONOS_CHAT_MODEL_DEFAULT: ${IONOS_CHAT_MODEL_DEFAULT:-mistralai/Mistral-Small-24B-Instruct}
       IONOS_CHAT_MODEL_REASONING: ${IONOS_CHAT_MODEL_REASONING:-openai/gpt-oss-120b}
@@ -22,7 +22,7 @@ services:
       # RAG embeddings use IONOS BGE-M3. Existing Qdrant/Open WebUI vectors must be reindexed.
       RAG_EMBEDDING_ENGINE: openai
       RAG_OPENAI_API_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
-      RAG_OPENAI_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
+      RAG_OPENAI_API_KEY: ${IONOS_API_TOKEN:-${IONOS_API_KEY:?IONOS_API_TOKEN or IONOS_API_KEY is required}}
       RAG_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
       RAG_EMBEDDING_BATCH_SIZE: "1"
       RAG_EMBEDDING_OPENAI_BATCH_SIZE: "1"
@@ -123,7 +123,6 @@ services:
       KB_ADMIN_API_URL: http://kb-admin-api:8092
       KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
       KB_SYNC_URL: http://kb-sync:8093
-      RERANKER_URL: http://reranker:80
       HYBRID_COLLECTION_ALIAS: vinci_knowledge
     volumes:
       - open-webui:/app/backend/data
@@ -138,8 +137,6 @@ services:
       owui-file-proxy:
         condition: service_healthy
       qdrant:
-        condition: service_started
-      reranker:
         condition: service_started
     networks:
       - appnet
@@ -218,7 +215,7 @@ services:
       KB_CLAMAV_HOST: clamav
       KB_CLAMAV_PORT: "3310"
       IONOS_OPENAI_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
-      IONOS_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
+      IONOS_API_KEY: ${IONOS_API_TOKEN:-${IONOS_API_KEY:?IONOS_API_TOKEN or IONOS_API_KEY is required}}
       IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
       IONOS_CHAT_MODEL_DEFAULT: ${IONOS_CHAT_MODEL_DEFAULT:-mistralai/Mistral-Small-24B-Instruct}
       KB_ADMIN_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
@@ -335,24 +332,6 @@ services:
     networks:
       - appnet
 
-  reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
-    container_name: reranker
-    restart: unless-stopped
-    # QdrantHybridRetriever erzwingt 30 bis 50 Kandidaten je Anfrage (PRD 19.2)
-    # und sendet sie in einem Aufruf. Der TEI-Standardwert von 32 laesst das
-    # fail-closed scheitern, sobald mehr als 32 Kandidaten gefunden werden.
-    command: ["--model-id", "Alibaba-NLP/gte-multilingual-reranker-base", "--auto-truncate",
-              "--max-client-batch-size", "50"]
-    environment:
-      HUGGINGFACE_HUB_CACHE: /data
-    volumes:
-      - reranker_data:/data
-    expose:
-      - "80"
-    networks:
-      - appnet
-
   kb-admin-dashboard:
     build:
       context: ../admin-dashboard
@@ -424,7 +403,7 @@ services:
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
       IONOS_OPENAI_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
-      IONOS_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
+      IONOS_API_KEY: ${IONOS_API_TOKEN:-${IONOS_API_KEY:?IONOS_API_TOKEN or IONOS_API_KEY is required}}
       IONOS_CHAT_MODEL_DEFAULT: ${IONOS_CHAT_MODEL_DEFAULT:-mistralai/Mistral-Small-24B-Instruct}
       IONOS_CHAT_MODEL_REASONING: ${IONOS_CHAT_MODEL_REASONING:-openai/gpt-oss-120b}
       IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
@@ -459,13 +438,12 @@ services:
       KB_STATE_PATH: /state/kb-sync-state.json
       QDRANT_URL: http://qdrant:6333
       IONOS_OPENAI_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
-      IONOS_API_KEY: ${IONOS_API_KEY:?IONOS_API_KEY is required}
+      IONOS_API_KEY: ${IONOS_API_TOKEN:-${IONOS_API_KEY:?IONOS_API_TOKEN or IONOS_API_KEY is required}}
       IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
       KB_SYNC_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
       KB_ADMIN_API_URL: http://kb-admin-api:8092
       KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
       KB_SYNC_URL: http://kb-sync:8093
-      RERANKER_URL: http://reranker:80
       HYBRID_COLLECTION_ALIAS: vinci_knowledge
       KB_SYNC_DEBOUNCE_SECONDS: "2"
       KB_SYNC_RECONCILE_INTERVAL_SECONDS: "300"
@@ -509,7 +487,6 @@ volumes:
   qdrant_data: {}
   document_worker_data: {}
   clamav_data: {}
-  reranker_data: {}
 
 networks:
   appnet:

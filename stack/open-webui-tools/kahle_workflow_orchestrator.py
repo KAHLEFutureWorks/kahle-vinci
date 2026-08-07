@@ -974,7 +974,6 @@ class Tools:
         PORTAL_API_URL: str = Field(default="http://kb-admin-api:8092")
         KB_SYNC_URL: str = Field(default="http://kb-sync:8093")
         INTERNAL_API_KEY: str = Field(default="")
-        RERANKER_URL: str = Field(default="http://reranker:80")
         RERANKER_MODEL: str = Field(default="Qwen/Qwen3-VL-Reranker-8B")
         HYBRID_COLLECTION_ALIAS: str = Field(default="vinci_knowledge")
         IONOS_OPENAI_BASE_URL: str = Field(default="", description="Leer nutzt RAG_OPENAI_API_BASE_URL.")

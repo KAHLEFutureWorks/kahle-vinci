@@ -42,7 +42,6 @@ class Tools:
         IONOS_OPENAI_BASE_URL: str = Field(default="")
         IONOS_API_KEY: str = Field(default="")
         IONOS_EMBEDDING_MODEL: str = Field(default="")
-        RERANKER_URL: str = Field(default="http://reranker:80")
         RERANKER_MODEL: str = Field(default="Qwen/Qwen3-VL-Reranker-8B")
         TIMEOUT_S: int = Field(default=60)
 

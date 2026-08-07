@@ -84,7 +84,11 @@ def main() -> int:
     parser.add_argument("--questions", type=Path, default=Path("eval/rag/kahle-document-worker-questions.yml"))
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--base-url", default="https://openai.inference.de-txl.ionos.com/v1")
-    parser.add_argument("--api-key", default=os.getenv("IONOS_API_KEY", ""))
+    # Lokal heisst der Token IONOS_API_TOKEN, auf dem Server IONOS_API_KEY.
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("IONOS_API_TOKEN") or os.getenv("IONOS_API_KEY", ""),
+    )
     parser.add_argument("--model", default="BAAI/bge-m3")
     parser.add_argument("--reranker-url", default=os.getenv("RERANKER_URL", "http://127.0.0.1:8080"))
     # Auf CPU braucht gte-multilingual-reranker-base rund zwei Sekunden je
@@ -92,7 +96,7 @@ def main() -> int:
     parser.add_argument("--reranker-timeout", type=float, default=60.0)
     args = parser.parse_args()
     if not args.api_key:
-        parser.error("--api-key or IONOS_API_KEY is required")
+        parser.error("--api-key, IONOS_API_TOKEN or IONOS_API_KEY is required")
 
     definitions = load_definitions(args.questions)
     expected_files = sorted({item["expected"] for item in definitions if item["expected"]})

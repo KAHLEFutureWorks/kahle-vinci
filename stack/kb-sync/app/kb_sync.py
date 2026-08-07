@@ -63,9 +63,12 @@ def env(name: str, default: str = "") -> str:
 
 
 def load_config() -> Config:
-    api_key = env("IONOS_API_KEY")
+    # Der Token heisst lokal IONOS_API_TOKEN und auf dem Produktionsserver
+    # IONOS_API_KEY. Beide Namen werden akzeptiert, damit derselbe Code in
+    # beiden Umgebungen laeuft; IONOS_API_TOKEN hat Vorrang.
+    api_key = env("IONOS_API_TOKEN") or env("IONOS_API_KEY")
     if not api_key:
-        raise RuntimeError("IONOS_API_KEY is required")
+        raise RuntimeError("IONOS_API_TOKEN or IONOS_API_KEY is required")
 
     collections = tuple(
         item.strip()
