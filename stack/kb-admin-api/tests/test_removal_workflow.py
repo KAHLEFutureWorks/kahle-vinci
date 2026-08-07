@@ -134,3 +134,46 @@ def test_only_portal_admins_delete_immediately_and_legal_hold_still_blocks():
         assert deleted.status_code == 200, deleted.text
         remaining = [item["document_id"] for item in client.get("/portal/admin/removals").json()["trash"]]
         assert normal not in remaining and held in remaining
+
+
+def test_withdrawn_cases_leave_no_orphan_draft_in_the_document_list():
+    """
+    Wer einen Vorgang verwirft, erwartet, dass nichts zurueckbleibt. Der Entwurf
+    stand danach weiter im Bestand und liess sich nur noch in den Papierkorb
+    schieben.
+    """
+    import tempfile
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from test_portal_api import identity, load_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "portal", kb.knowledgebase_id, can_read=True, can_upload=True,
+        )
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal",
+            target_knowledgebase_id=kb.knowledgebase_id, title="Verworfen",
+            original_filename="weg.md", original_file_id="weg",
+            original_sha256="b" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        module.DOCUMENT_LIFECYCLE.record_analysis(
+            case_id=case.case_id, normalized_sha256="c" * 64, markdown_sha256="d" * 64,
+            analysis=module.Analysis(),
+        )
+        titles = lambda: [item["title"] for item in client.get("/portal/documents").json()["documents"]]
+        assert "Verworfen" in titles()
+
+        module.DOCUMENT_LIFECYCLE.choose_action(
+            case_id=case.case_id, actor_user_id="portal", action="discard",
+        )
+        assert "Verworfen" not in titles()

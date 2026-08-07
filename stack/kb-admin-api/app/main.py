@@ -1156,6 +1156,15 @@ def portal_list_documents(
                  AND d.document_id NOT IN (
                      SELECT document_id FROM document_trash
                      WHERE physically_deleted_at IS NULL)
+                 -- Zurueckgezogene und abgelehnte Vorgaenge sind erledigt. Ohne
+                 -- diesen Filter blieben sie als Entwuerfe im Bestand stehen und
+                 -- sahen aus, als warteten sie noch auf etwas. Der Status haengt
+                 -- an der Version, nicht an active_version_id: ein verworfener
+                 -- Entwurf hat gar keine aktive Version.
+                 AND EXISTS (
+                     SELECT 1 FROM document_versions live
+                     WHERE live.document_id = d.document_id
+                       AND live.status NOT IN ('withdrawn', 'rejected'))
                ORDER BY d.updated_at DESC""".format(",".join("?" for _ in readable) or "NULL"),
             (identity["user_id"], *readable),
         ).fetchall()

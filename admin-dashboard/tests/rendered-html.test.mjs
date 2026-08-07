@@ -100,6 +100,13 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /Wirklich endgültig löschen/);
   assert.match(portal, /isPortalAdmin&&!item\.legal_hold/);
 
+  // Endgültiges Entfernen setzt ein Archiv voraus und braucht archivierte Bereiche zur Auswahl.
+  assert.match(portal, /knowledgebase_must_be_archived_first/);
+  assert.match(portal, /kind==="delete"\?base\.status==="archived"/);
+  // Anträge nutzen die Breite und nennen Aktion, Bereich und Person im Klartext.
+  assert.match(portal, /changeKindText\[change\.kind\]/);
+  assert.match(portal, /userNames\[change\.requested_by\]/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);
