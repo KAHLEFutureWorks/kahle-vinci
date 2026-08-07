@@ -63,6 +63,18 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   // Beschriftung über dem Feld, sonst überlappt der Fokusrahmen den Text.
   assert.match(styles, /\.wp-form>label\{[^}]*flex-direction:column/);
 
+  // Der Dateiname belegt den Titel vor, statt ihn abtippen zu lassen.
+  assert.match(portal, /function titleFromFilename/);
+  assert.match(portal, /if \(next && !title\.trim\(\)\) setTitle\(titleFromFilename/);
+  // Entscheider sehen, warum ein Vorgang bei ihnen liegt.
+  assert.match(portal, /reviewReason\[task\.status\]/);
+  // Auditeinträge zeigen Klarnamen statt roher Benutzer-IDs.
+  assert.match(portal, /nameOf\(entry\.actor_user_id\)/);
+  // Kein rohes JSON im Qualitätsdashboard.
+  assert.doesNotMatch(portal, /<pre>\{JSON\.stringify/);
+  // Dokumentkacheln lassen sich wieder schließen.
+  assert.match(portal, /current === documentId \? "" : documentId/);
+
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
   assert.match(portal, /isAdmin \? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"/);
