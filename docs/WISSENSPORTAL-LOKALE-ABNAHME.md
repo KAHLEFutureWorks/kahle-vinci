@@ -19,7 +19,7 @@ Die Abhängigkeiten stehen in `stack/requirements-dev.txt`. Die Suiten laufen be
 | Bereich | Nachweis | Ergebnis |
 |---|---|---|
 | Portal-Backend | `stack/kb-admin-api/tests` | 89 Tests bestanden |
-| Stack, Verträge und Sicherheit | `stack/tests` | 240 Tests bestanden |
+| Stack, Verträge und Sicherheit | `stack/tests` | 242 Tests bestanden |
 | Hybridindex und Synchronisierung | `stack/kb-sync/tests` | 10 Tests bestanden |
 | Portal-UI | `npm test` in `admin-dashboard` | Build und 3 Rendering-, UX- und Sicherheitstests bestanden |
 | Routing | `caddy validate` mit lokalen Platzhalterwerten | gültig |
@@ -82,7 +82,7 @@ Die Ampel der Aufbereitungsqualität, die Fehlermeldungen und die Begriffe sind 
 
 Das entspricht 0,26 Prozent des Vier-Stunden-Budgets. 6000 Chunks wurden neu indexiert.
 
-Einschränkung: Der gemessene Indexneuaufbau verwendet deterministische lokale Embeddings, nicht den IONOS-Endpunkt. Der reale Neuaufbau ist dadurch deutlich langsamer als die gemessenen 0,20 Sekunden. Diese Teilmessung wird nachgezogen, sobald der Embedding-Zugang funktioniert; die übrigen Schritte sind davon unberührt.
+Einschränkung: Der gemessene Indexneuaufbau verwendet deterministische lokale Embeddings, nicht den IONOS-Endpunkt. Der reale Neuaufbau ist dadurch deutlich langsamer als die gemessenen 0,20 Sekunden. Der Embedding-Zugang funktioniert inzwischen; die Teilmessung mit echten IONOS-Embeddings über 6000 Chunks steht noch aus. Die übrigen Schritte sind davon unberührt, und selbst mit erheblichem Aufschlag bleibt der Abstand zum Vier-Stunden-Budget groß.
 
 **RPO 24 Stunden: eingehalten, ohne Puffer.** `backup_worker.py` prüft stündlich und erzeugt genau eine Sicherung je Kalendertag. Der größtmögliche Abstand zwischen zwei erfolgreichen Sicherungen beträgt damit 24 Stunden, der maximale Datenverlust entsprechend knapp 24 Stunden. Ein einzelner fehlgeschlagener Backupzyklus verletzt den RPO deshalb unmittelbar. Der Worker meldet jeden Fehlschlag sofort als Admin-Incident; ein zeitlicher Puffer besteht nicht.
 
