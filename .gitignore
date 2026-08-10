@@ -95,3 +95,9 @@ worktrees/
 # Local manual backup copies
 * - Kopie.*
 * - Copy.*
+
+# Die OpenWebUI-Tools werden aus mehreren Quelldateien zusammengebaut und
+# von Hand in OpenWebUI eingefuegt. Nur die gebaute Fassung ist lauffaehig,
+# deshalb gehoert sie ins Repository trotz der generischen dist/-Regel.
+!stack/open-webui-tools/dist/
+!stack/open-webui-tools/dist/*.py
