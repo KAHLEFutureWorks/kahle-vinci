@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import traceback
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -9,12 +10,12 @@ from zoneinfo import ZoneInfo
 import requests
 
 try:
-    from .mail_delivery import MicrosoftGraphMailTransport, OutboxDispatcher
+    from .mail_delivery import LocalMailCaptureTransport, MicrosoftGraphMailTransport, OutboxDispatcher
     from .maintenance import MaintenanceService, is_workday
     from .portal_governance import SQLiteGovernanceStore
     from .quality_cases import QualityCaseService
 except ImportError:  # pragma: no cover
-    from mail_delivery import MicrosoftGraphMailTransport, OutboxDispatcher
+    from mail_delivery import LocalMailCaptureTransport, MicrosoftGraphMailTransport, OutboxDispatcher
     from maintenance import MaintenanceService, is_workday
     from portal_governance import SQLiteGovernanceStore
     from quality_cases import QualityCaseService
@@ -27,9 +28,10 @@ SYNC_URL = os.getenv("KB_SYNC_URL", "http://kb-sync:8093").rstrip("/")
 SYNC_KEY = os.getenv("KB_SYNC_INTERNAL_API_KEY", "")
 
 
-def reindex() -> None:
+def sync_document(document_id: str) -> None:
     response = requests.post(
-        f"{SYNC_URL}/reindex-all", headers={"X-API-Key": SYNC_KEY}, timeout=300,
+        f"{SYNC_URL}/hybrid/documents/sync", json={"document_id": document_id},
+        headers={"X-API-Key": SYNC_KEY}, timeout=180,
     )
     response.raise_for_status()
 
@@ -50,9 +52,12 @@ def run_once(service: MaintenanceService, dispatcher: OutboxDispatcher | None,
     service.process_pending_approvals()
     changed = service.expire_due_versions()
     trash = service.process_trash(FILES_ROOT)
+    migration_expired = service.process_migration_deadlines()
     service.enforce_retention()
-    if changed or trash["deleted"]:
-        reindex()
+    # Expiry and final deletion are document-local changes. Legacy transition
+    # entries are not part of the canonical portal index until approved.
+    for document_id in dict.fromkeys([*changed, *trash["deleted"]]):
+        sync_document(document_id)
     if dispatcher:
         dispatcher.dispatch()
 
@@ -68,6 +73,8 @@ def main() -> None:
     )
     if all(graph):
         dispatcher = OutboxDispatcher(service, MicrosoftGraphMailTransport(*graph))
+    elif capture_path := os.getenv("KB_MAIL_CAPTURE_PATH", "").strip():
+        dispatcher = OutboxDispatcher(service, LocalMailCaptureTransport(Path(capture_path)))
     last_expiry_digest: date | None = None
     while True:
         now = datetime.now(BERLIN)
@@ -78,6 +85,7 @@ def main() -> None:
                 last_expiry_digest = now.date()
         except Exception as exc:
             print(f"maintenance_cycle_failed error={exc}", flush=True)
+            traceback.print_exc()
         time.sleep(max(60, int(os.getenv("KB_MAINTENANCE_INTERVAL_SECONDS", "300"))))
 
 

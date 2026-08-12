@@ -78,7 +78,17 @@ class DocumentChangeService:
             if not request: raise DocumentChangeError("unknown_document_change")
             if request["status"] == "pending_manager":
                 if actor_user_id != request["manager_user_id"]: raise DocumentChangeError("manager_required")
-                next_status="pending_admin" if approve else "rejected"
+                if not approve:
+                    next_status="rejected"
+                elif request["kind"] == "renewal":
+                    publication_count = db.execute(
+                        "SELECT COUNT(*) FROM document_publications "
+                        "WHERE document_id=? AND status!='inactive'",
+                        (request["document_id"],),
+                    ).fetchone()[0]
+                    next_status="pending_admin" if publication_count > 1 else "approved"
+                else:
+                    next_status="pending_admin"
             elif request["status"] == "pending_admin":
                 if actor.role not in {"admin","portal_admin"}: raise DocumentChangeError("admin_required")
                 next_status="approved" if approve else "rejected"

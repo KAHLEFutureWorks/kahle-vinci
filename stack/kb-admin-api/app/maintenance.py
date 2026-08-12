@@ -65,6 +65,7 @@ class OutboxMessage:
 
 
 class MaintenanceService:
+    TRASH_RECOVERY_DAYS = 30
     REMINDER_STAGES = (15, 10, 5, 1)
 
     def __init__(self, store: SQLiteGovernanceStore, *, today: Callable[[], date] = date.today,
@@ -293,6 +294,10 @@ class MaintenanceService:
                    LEFT JOIN canonical_documents d ON d.document_id = t.document_id
                    WHERE t.physically_deleted_at IS NULL ORDER BY t.trashed_at"""
             ).fetchall()]
+        for item in trash:
+            eligible_on = date.fromisoformat(item["trashed_at"]) + timedelta(days=self.TRASH_RECOVERY_DAYS)
+            item["delete_eligible_on"] = eligible_on.isoformat()
+            item["can_delete"] = self.today() >= eligible_on and not bool(item["legal_hold"])
         return {"requests": requests, "trash": trash}
 
     def restore_from_trash(self, document_id: str, actor_user_id: str, reason: str) -> None:
@@ -368,6 +373,23 @@ class MaintenanceService:
                         if message:
                             reminders.append(message.message_id)
         return {"reminders": reminders, "deleted": deleted}
+
+    def process_migration_deadlines(self) -> list[str]:
+        """Deactivate unresolved legacy inventory after its 30-workday transition."""
+        with self.store.connect() as db:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_inventory'").fetchone():
+                return []
+            rows = db.execute("""SELECT path FROM migration_inventory
+                                 WHERE transition_status='pending' AND transition_deadline<=?
+                                 AND status NOT IN ('staged','quarantine','transition_expired','excluded')""",
+                              (self.today().isoformat(),)).fetchall()
+            paths = [row["path"] for row in rows]
+            if paths:
+                placeholders = ",".join("?" for _ in paths)
+                db.execute(f"""UPDATE migration_inventory SET status='transition_expired',
+                              transition_status='expired',updated_at=? WHERE path IN ({placeholders})""",
+                           (self.now(), *paths))
+        return paths
 
     def _physically_delete(self, db, trash_row, file_root: Path | None) -> None:
         document_id = trash_row["document_id"]
@@ -456,11 +478,11 @@ class MaintenanceService:
     def delete_now(self, document_id: str, actor_user_id: str, reason: str,
                    file_root: Path | None = None) -> None:
         """
-        Sofortige physische Loeschung durch einen Portal-Admin.
+        Manuelle physische Loeschung nach der 30-taegigen Wiederherstellungsfrist.
 
-        Der regulaere Weg loescht erst nach 90 Tagen. Ein Portal-Admin darf das
-        abkuerzen; ein Legal Hold bleibt auch fuer ihn bindend, denn er dient
-        gerade dazu, eine Loeschung auszusetzen.
+        Admins und Portal-Admins duerfen den Auftrag ab Tag 30 ausfuehren. Bis
+        dahin bleibt das Dokument zwingend wiederherstellbar. Ein Legal Hold
+        setzt auch danach jede Loeschung aus.
         """
         if len(reason.strip()) < 3:
             raise MaintenanceError("deletion_reason_required")
@@ -468,8 +490,8 @@ class MaintenanceService:
             actor = db.execute(
                 "SELECT role FROM portal_users WHERE user_id=? AND active=1", (actor_user_id,)
             ).fetchone()
-            if not actor or actor["role"] != "portal_admin":
-                raise MaintenanceError("portal_admin_required")
+            if not actor or actor["role"] not in {"admin", "portal_admin"}:
+                raise MaintenanceError("admin_required")
             row = db.execute(
                 "SELECT * FROM document_trash WHERE document_id=? AND physically_deleted_at IS NULL",
                 (document_id,),
@@ -478,4 +500,7 @@ class MaintenanceService:
                 raise MaintenanceError("trash_entry_not_found")
             if row["legal_hold"]:
                 raise MaintenanceError("legal_hold_blocks_deletion")
+            eligible_on = date.fromisoformat(row["trashed_at"]) + timedelta(days=self.TRASH_RECOVERY_DAYS)
+            if self.today() < eligible_on:
+                raise MaintenanceError("trash_recovery_period_active")
             self._physically_delete(db, row, file_root)

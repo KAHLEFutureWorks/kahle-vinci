@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import time
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Protocol
 
 import requests
@@ -59,6 +62,26 @@ class MicrosoftGraphMailTransport:
             timeout=self.timeout,
         )
         response.raise_for_status()
+
+
+@dataclass
+class LocalMailCaptureTransport:
+    """Append locally delivered messages as JSON lines for development evidence."""
+
+    path: Path
+
+    def send(self, message: OutboxMessage) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "message_id": message.message_id,
+            "recipient": message.recipient,
+            "subject": message.subject,
+            "body": message.body,
+            "kind": message.kind,
+        }
+        with self.path.open("a", encoding="utf-8") as capture:
+            capture.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 class OutboxDispatcher:

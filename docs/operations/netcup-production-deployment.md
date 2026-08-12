@@ -1,6 +1,6 @@
 ﻿# KAHLE-Vinci Netcup Production Deployment
 
-This runbook publishes KAHLE-Vinci as an internal employee system on a Linux netcup server. Customer-facing use is explicitly out of scope.
+This runbook prepares and tests KAHLE-Vinci as an internal employee system on a Linux netcup server. A successful server test is not yet the productive go-live. Customer-facing use is explicitly out of scope.
 
 ## Target Architecture
 
@@ -14,12 +14,15 @@ This runbook publishes KAHLE-Vinci as an internal employee system on a Linux net
 ## Required Inputs
 
 - Server IPv4/IPv6 and initial SSH user.
-- Target domain, for example `vinci.kahle.de`, with DNS A/AAAA records pointing to the server.
+- Target domain `vinci.kahle.de` with DNS A/AAAA records pointing to the server.
 - Microsoft Entra tenant ID.
-- Microsoft app registration client ID and client secret.
+- Microsoft app registration client ID and client secret with both required redirect URIs.
+- Microsoft Graph application credentials with `Mail.Send` and the mailbox `vinci@kahle.de`.
 - Allowed login domain, usually `kahle.de`.
 - IONOS API key and existing KAHLE-Vinci runtime secrets.
-- Decision whether existing local Open WebUI/Qdrant/n8n data must be migrated or whether production starts fresh.
+- An external absolute backup target and a newly generated backup encryption key.
+
+The product decision for the first server test is a fresh knowledge setup. Existing Knowledgebases are not copied to the server. Every test document enters through the new portal workflow.
 
 ## Server Hardening
 
@@ -68,6 +71,7 @@ Create an app registration:
 - Supported account type: single tenant only
 - Redirect URI type: Web
 - Redirect URI: `https://<vinci-domain>/oauth/microsoft/callback`
+- Additional redirect URI: `https://<vinci-domain>/wissen/api/portal/auth/step-up/callback`
 
 Record:
 
@@ -88,60 +92,54 @@ sudo mkdir -p /opt/kahle-vinci
 sudo chown deploy:deploy /opt/kahle-vinci
 cd /opt/kahle-vinci
 git clone <repo-url> .
-cp stack/env.production.template stack/.env.production
-chmod 600 stack/.env.production
-nano stack/.env.production
+sudo stack/scripts/prepare-production-env.sh stack/.env.smoke stack/.env.production.pending
+sudo nano stack/.env.production.pending
+sudo mv stack/.env.production.pending stack/.env.production
+sudo chmod 600 stack/.env.production
 ```
 
-Start production:
+Validate every required value, placeholder, redirect URI and the complete Compose model without starting services:
 
 ```bash
-docker compose \
-  --env-file stack/.env.production \
-  -f stack/docker-compose.yml \
-  -f stack/docker-compose.prod.yml \
-  up -d --build
+sudo stack/scripts/start-production.sh stack/.env.production --check-only
 ```
 
-Check:
+Only after the check succeeds, start the server test stack. The script always enables the encrypted operations backup profile:
 
 ```bash
-docker compose --env-file stack/.env.production -f stack/docker-compose.yml -f stack/docker-compose.prod.yml ps
-curl -I https://<vinci-domain>
-docker logs --tail 100 caddy
-docker logs --tail 100 open-webui
+sudo stack/scripts/start-production.sh stack/.env.production
+curl -I https://vinci.kahle.de/healthz
+sudo docker logs --tail 100 caddy
+sudo docker logs --tail 100 open-webui
 ```
 
-## Data Migration
+## Fresh Knowledge Setup
 
-For a full migration from the current local host, move these items:
+Do not copy the local Knowledgebases, Qdrant volume or portal database into the first server test. Preserve the existing server state in an encrypted backup before replacing anything. Then:
 
-- `knowledgebases/`
-- `kb-sync-state/`
-- `assets/`
-- `n8n/`
-- Docker volume `open-webui`
-- Docker volume `qdrant_data`
-- Docker volume `document_worker_data` if generated worker files should be preserved
+1. Sign in with the designated Portal-Admin account.
+2. Synchronize the required OpenWebUI users.
+3. Assign Portal-Admin, Admin, manager and employee roles.
+4. Create the initial Knowledgebases and read/upload permissions.
+5. Upload a small representative acceptance corpus through the portal.
+6. Verify sources in Vinci before adding further documents.
 
-Prefer a maintenance window:
+The local legacy inventory remains a test fixture only. Its 51 open migration tasks are not a prerequisite for the fresh server setup.
 
-```bash
-docker compose -f stack/docker-compose.yml down
-docker run --rm -v open-webui:/from -v "$PWD/backups:/backup" alpine tar czf /backup/open-webui.tgz -C /from .
-docker run --rm -v qdrant_data:/from -v "$PWD/backups:/backup" alpine tar czf /backup/qdrant_data.tgz -C /from .
-```
+## Mandatory Server Tests
 
-Restore on the server before first production start:
+Before inviting further employees, record the following checks in `docs/WISSENSPORTAL-LOKALE-ABNAHME.md`:
 
-```bash
-docker volume create open-webui
-docker volume create kahle-vinci_qdrant_data
-docker run --rm -v open-webui:/to -v "$PWD/backups:/backup" alpine sh -c 'tar xzf /backup/open-webui.tgz -C /to'
-docker run --rm -v kahle-vinci_qdrant_data:/to -v "$PWD/backups:/backup" alpine sh -c 'tar xzf /backup/qdrant_data.tgz -C /to'
-```
-
-If the project name differs, verify the real qdrant volume name with `docker volume ls`.
+- Microsoft login and fresh step-up for critical admin actions.
+- Employee, manager, Admin and Portal-Admin routing with separate real accounts.
+- Graph emails for upload, approval, rejection, escalation and publication.
+- Read isolation between two Knowledgebases and protected original links.
+- Clean area upload, KAHLE-Allgemein approval, duplicate/version case and critical two-stage case.
+- Concurrent approvals and background publication queue.
+- Removal from Vinci after trashing and notification of affected readers.
+- Full 21-question runtime evaluation including negative, follow-up, multi-source and conflict questions.
+- Desktop and mobile UX timing with employees and managers.
+- Encrypted backup, external copy and documented restore verification.
 
 ## Go-Live Checklist
 
@@ -154,7 +152,8 @@ If the project name differs, verify the real qdrant volume name with `docker vol
 - `/files/download?...` links work through the public hostname.
 - n8n and Qdrant are not reachable from the internet.
 - IONOS connectivity check succeeds.
-- A backup exists before inviting employees.
+- A backup exists and a restore has been verified before inviting employees.
+- The 21-question runtime evaluation and multi-user role test are documented as passed.
 
 ## References
 

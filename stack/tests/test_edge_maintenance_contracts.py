@@ -24,3 +24,11 @@ def test_maintenance_caddyfile_never_proxies_to_the_application():
     assert "reverse_proxy" not in src
     assert "Content-Security-Policy" in src
     assert "Cache-Control \"no-store\"" in src
+
+
+def test_maintenance_uses_the_portal_data_file_owner_without_extra_capabilities():
+    compose = (STACK / "docker-compose.yml").read_text(encoding="utf-8")
+    block = compose.split("  kb-maintenance:", 1)[1].split("\n  kb-backup:", 1)[0]
+
+    assert 'user: "1000:1000"' in block
+    assert "cap_drop:\n      - ALL" in block

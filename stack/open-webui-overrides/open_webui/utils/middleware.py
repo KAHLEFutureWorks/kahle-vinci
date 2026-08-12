@@ -528,6 +528,37 @@ def _looks_like_internal_rag_request(text: str) -> bool:
     )
 
 
+def _build_native_rag_fallback(
+    tools: dict[str, Any],
+    user_message: str,
+    tool_calls: list,
+    output: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Force internal knowledge questions through RAG when native FC skips it.
+
+    Tool-capable models are allowed to answer without selecting a tool.  For an
+    internal KAHLE question that would bypass the mandatory permission-filtered
+    retriever.  Only the initial response is eligible; an existing tool result
+    proves the RAG loop already ran and prevents recursion.
+    """
+    if tool_calls or 'rag_chat' not in tools or not _looks_like_internal_rag_request(user_message):
+        return []
+    if any(item.get('type') == 'function_call_output' for item in output):
+        return []
+    return [
+        [
+            {
+                'id': f'call_{uuid4().hex[:24]}',
+                'index': 0,
+                'function': {
+                    'name': 'rag_chat',
+                    'arguments': json.dumps({'query': user_message}, ensure_ascii=False),
+                },
+            }
+        ]
+    ]
+
+
 def _split_tool_calls(
     tool_calls: list[dict],
 ) -> list[dict]:
@@ -3098,6 +3129,56 @@ def get_reasoning_format(model: dict) -> str | None:
     if provider == 'llama.cpp':
         return 'reasoning_content'
     return None
+
+
+def _extract_kahle_rag_sources(tool_result: Any) -> list[dict[str, Any]]:
+    text = tool_result if isinstance(tool_result, str) else ''
+    match = re.search(r'SOURCES_JSON:\s*(\[.*?\])\s*(?:\n|$)', text, re.DOTALL)
+    if not match:
+        return []
+    try:
+        sources = json.loads(match.group(1))
+    except (TypeError, ValueError):
+        return []
+    return [
+        source
+        for source in sources
+        if isinstance(source, dict)
+        and str(source.get('source_url') or '').startswith('/wissen/api/portal/sources/')
+    ]
+
+
+def _append_canonical_rag_source_links(output: list[dict[str, Any]], sources: list[dict[str, Any]]) -> None:
+    if not sources:
+        return
+    message = next((item for item in reversed(output) if item.get('type') == 'message'), None)
+    if not message:
+        return
+    parts = message.get('content') or []
+    text_part = next((part for part in reversed(parts) if part.get('type') == 'output_text'), None)
+    if not text_part:
+        return
+    text = str(text_part.get('text') or '').rstrip()
+    # Models must never turn an authenticated relative portal URL into an
+    # invented host. Remove any model-authored source link and append the
+    # canonical links from the trusted tool result below.
+    text = re.sub(
+        r'\[([^\]]+)\]\((?:(?:https?://[^)\s]+/)|/)(?:wissen/)?api/portal/sources/[^)\s]+\)',
+        r'\1',
+        text,
+        flags=re.IGNORECASE,
+    ).rstrip()
+    links = []
+    seen = set()
+    for source in sources:
+        url = str(source.get('source_url') or '')
+        if url in seen:
+            continue
+        seen.add(url)
+        title = str(source.get('title') or 'Originalquelle').replace('[', '').replace(']', '')
+        links.append(f'- [{title}]({url})')
+    if links:
+        text_part['text'] = f"{text}\n\nQuellen:\n" + '\n'.join(links)
 
 
 def process_messages_with_output(
@@ -5816,7 +5897,20 @@ async def streaming_chat_response_handler(response, ctx):
                 tool_call_retries = 0
                 tool_call_sources = []  # Track citation sources from tool results
                 all_tool_call_sources = []  # Accumulated sources across all iterations
+                canonical_rag_sources = []  # Trusted original links from KAHLE_RAG_RESULT
                 user_message = get_last_user_message(form_data['messages'])
+                tools = metadata.get('tools', {})
+
+                native_rag_fallback = _build_native_rag_fallback(
+                    tools, user_message or '', tool_calls, output
+                )
+                if native_rag_fallback:
+                    # Discard the model's unsupported direct answer. The next
+                    # response is generated from the permission-filtered tool
+                    # result and becomes the only visible assistant answer.
+                    output = [item for item in output if item.get('type') != 'message']
+                    content = ''
+                    tool_calls.extend(native_rag_fallback)
 
                 # Check if citations are enabled for this model
                 citations_enabled = (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get(
@@ -5864,8 +5958,6 @@ async def streaming_chat_response_handler(response, ctx):
                             },
                         }
                     )
-
-                    tools = metadata.get('tools', {})
 
                     results = []
                     final_notice = ''
@@ -5965,6 +6057,8 @@ async def streaming_chat_response_handler(response, ctx):
                             metadata,
                             user,
                         )
+                        if tool_function_name == 'rag_chat':
+                            canonical_rag_sources.extend(_extract_kahle_rag_sources(tool_result))
                         # Signed download URLs are opaque data. Never send a
                         # successful file result back through the model for a
                         # second, streamed response: even a one-character model
@@ -6413,6 +6507,8 @@ async def streaming_chat_response_handler(response, ctx):
                         except Exception as e:
                             log.debug(e)
                             break
+
+                _append_canonical_rag_source_links(output, canonical_rag_sources)
 
                 # Mark all in-progress items as completed
                 for item in output:

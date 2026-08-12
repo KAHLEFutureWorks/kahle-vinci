@@ -66,3 +66,20 @@ def test_scope_fails_closed_for_unknown_inactive_or_unassigned_user():
         assert client.post(
             "/portal/internal/retrieval-scope", headers=headers, json={"user_id": "employee"}
         ).status_code == 403
+
+
+def test_internal_retrieval_event_is_authenticated_and_visible_in_dashboard():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module.MAINTENANCE_API_KEY = "internal-secret"
+        client = TestClient(module.app)
+        payload = {"user_id": "employee", "query_hash": "d" * 64, "found": False,
+                   "source_count": 0, "latency_ms": 425, "error_code": "Timeout"}
+        assert client.post("/portal/internal/retrieval-events", json=payload).status_code == 401
+        response = client.post("/portal/internal/retrieval-events",
+                               headers={"X-API-Key": "internal-secret"}, json=payload)
+        assert response.status_code == 200 and response.json() == {"ok": True}
+        metrics = module.QUALITY_DASHBOARD.snapshot()["retrieval"]
+        assert metrics["requests"] == 1
+        assert metrics["error_rate_percent"] == 100.0
+        assert module.QUALITY_DASHBOARD.snapshot()["open_incidents"] == 1

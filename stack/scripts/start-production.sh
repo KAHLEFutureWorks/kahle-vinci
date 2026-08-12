@@ -31,6 +31,8 @@ required=(
   N8N_ENCRYPTION_KEY SEARXNG_SECRET_KEY FILE_LINK_SECRET
   OWUI_FILE_PROXY_API_KEY DOC_WORKER_API_KEY
   OAUTH_SESSION_TOKEN_ENCRYPTION_KEY OAUTH_CLIENT_INFO_ENCRYPTION_KEY
+  KB_ADMIN_UNLOCK_CODE_HASH KB_ADMIN_UNLOCK_SESSION_SECRET
+  KB_PORTAL_STEP_UP_SECRET KB_PORTAL_ENTRA_REDIRECT_URI PORTAL_ALLOWED_EMAIL_DOMAINS
   KB_MAIL_TENANT_ID KB_MAIL_CLIENT_ID KB_MAIL_CLIENT_SECRET KB_MAIL_SENDER
   KB_BACKUP_ENCRYPTION_KEY KAHLE_BACKUP_SECONDARY_ROOT
 )
@@ -75,6 +77,9 @@ client_info_key="$(env_value OAUTH_CLIENT_INFO_ENCRYPTION_KEY)"
 mail_tenant_id="$(env_value KB_MAIL_TENANT_ID)"
 mail_client_id="$(env_value KB_MAIL_CLIENT_ID)"
 mail_sender="$(env_value KB_MAIL_SENDER)"
+portal_step_up_secret="$(env_value KB_PORTAL_STEP_UP_SECRET)"
+portal_redirect_uri="$(env_value KB_PORTAL_ENTRA_REDIRECT_URI)"
+portal_allowed_domains="$(env_value PORTAL_ALLOWED_EMAIL_DOMAINS)"
 
 if [[ "${public_hostname}" != "vinci.kahle.de" || "${webui_url}" != "https://vinci.kahle.de" ]]; then
   echo "ERROR: production identity must be vinci.kahle.de over HTTPS." >&2
@@ -83,6 +88,16 @@ fi
 
 if [[ "${redirect_uri}" != "${webui_url}/oauth/microsoft/callback" ]]; then
   echo "ERROR: MICROSOFT_REDIRECT_URI must exactly match ${webui_url}/oauth/microsoft/callback." >&2
+  exit 1
+fi
+
+if [[ "${portal_redirect_uri}" != "${webui_url}/wissen/api/portal/auth/step-up/callback" ]]; then
+  echo "ERROR: KB_PORTAL_ENTRA_REDIRECT_URI must exactly match ${webui_url}/wissen/api/portal/auth/step-up/callback." >&2
+  exit 1
+fi
+
+if (( ${#portal_step_up_secret} < 43 )); then
+  echo "ERROR: KB_PORTAL_STEP_UP_SECRET must contain at least 43 characters." >&2
   exit 1
 fi
 
@@ -114,6 +129,11 @@ fi
 
 if [[ ",${allowed_domains}," != *",kahle.de,"* ]]; then
   echo "ERROR: OAUTH_ALLOWED_DOMAINS must include kahle.de." >&2
+  exit 1
+fi
+
+if [[ ",${portal_allowed_domains}," != *",kahle.de,"* ]]; then
+  echo "ERROR: PORTAL_ALLOWED_EMAIL_DOMAINS must include kahle.de." >&2
   exit 1
 fi
 

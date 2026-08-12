@@ -52,6 +52,7 @@ class Analysis:
     malware_safe: bool = True
     conversion_quality: str = "good"
     notes: tuple[str, ...] = ()
+    restricted_terms: tuple[str, ...] = ()
 
 
 
@@ -122,6 +123,8 @@ class DocumentLifecycle:
         now: Callable[[], str] = lambda: datetime.now().astimezone().isoformat(),
         identifier: Callable[[], str] = lambda: str(uuid.uuid4()),
         holidays: set[date] | None = None,
+        auto_activation_enabled: Callable[[], bool] = lambda: False,
+        general_knowledgebase_slug: str = "kahleallgemein",
     ):
         self.store = store
         self.governance = governance
@@ -129,6 +132,8 @@ class DocumentLifecycle:
         self.now = now
         self.identifier = identifier
         self.holidays = set(holidays) if holidays is not None else None
+        self.auto_activation_enabled = auto_activation_enabled
+        self.general_knowledgebase_slug = general_knowledgebase_slug
         self._initialize()
 
     def _initialize(self) -> None:
@@ -217,6 +222,30 @@ class DocumentLifecycle:
                     event_type TEXT NOT NULL,
                     details_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS portal_case_notifications (
+                    notification_id TEXT PRIMARY KEY,
+                    recipient_user_id TEXT NOT NULL REFERENCES portal_users(user_id),
+                    case_id TEXT NOT NULL REFERENCES document_cases(case_id),
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    read_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS portal_notifications (
+                    notification_id TEXT PRIMARY KEY,
+                    recipient_user_id TEXT NOT NULL REFERENCES portal_users(user_id),
+                    subject_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    subject_title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    read_at TEXT
                 );
                 """
             )
@@ -360,22 +389,58 @@ class DocumentLifecycle:
         case = self.submission(case_id)
         if case.status not in {"quarantine", "processing", "needs_correction"}:
             raise LifecycleError("analysis_not_allowed")
+        with self.store.connect() as db:
+            kb = db.execute(
+                "SELECT slug FROM knowledgebases WHERE knowledgebase_id=?",
+                (case.target_knowledgebase_id,),
+            ).fetchone()
+        clean = not any((
+            analysis.exact_duplicate_document_id,
+            analysis.normalized_duplicate_document_id,
+            analysis.same_kb_similarity != "none",
+            analysis.cross_kb_matches,
+            analysis.contradiction_document_ids,
+            analysis.version_candidate_document_ids,
+            analysis.prompt_injection_risk != "none",
+            not analysis.malware_safe,
+            analysis.conversion_quality != "good",
+            analysis.notes,
+            analysis.restricted_terms,
+        ))
+        auto_ready = bool(
+            clean and kb and kb["slug"] != self.general_knowledgebase_slug
+            and self.auto_activation_enabled()
+        )
+        requires_admin = bool(
+            analysis.contradiction_document_ids
+            or analysis.prompt_injection_risk in {"medium", "high", "critical"}
+            or analysis.conversion_quality == "low"
+            or analysis.restricted_terms
+        )
+        needs_uploader_action = bool(
+            analysis.exact_duplicate_document_id
+            or analysis.normalized_duplicate_document_id
+            or analysis.same_kb_similarity != "none"
+            or analysis.cross_kb_matches
+            or analysis.version_candidate_document_ids
+        )
         if not analysis.malware_safe:
             next_status = "security_blocked"
-        elif analysis.prompt_injection_risk in {"medium", "high", "critical"}:
-            next_status = "pending_admin_approval"
         elif analysis.conversion_quality == "failed":
             next_status = "needs_correction"
         elif analysis.exact_duplicate_document_id or analysis.normalized_duplicate_document_id:
             next_status = "duplicate_blocked"
+        elif needs_uploader_action:
+            next_status = "pending_employee_decision"
+        elif requires_admin:
+            next_status = "pending_manager_approval"
+        elif auto_ready:
+            next_status = "ready_to_activate"
+        elif clean:
+            next_status = "pending_manager_approval"
         else:
             next_status = "pending_employee_decision"
-        requires_admin = bool(
-            analysis.cross_kb_matches
-            or analysis.contradiction_document_ids
-            or analysis.prompt_injection_risk in {"medium", "high", "critical"}
-            or analysis.conversion_quality == "low"
-        )
+        requested_action = "create" if next_status in {"ready_to_activate", "pending_manager_approval"} else None
         payload = {
             "exact_duplicate_document_id": analysis.exact_duplicate_document_id,
             "normalized_duplicate_document_id": analysis.normalized_duplicate_document_id,
@@ -387,6 +452,7 @@ class DocumentLifecycle:
             "malware_safe": analysis.malware_safe,
             "conversion_quality": analysis.conversion_quality,
             "notes": list(analysis.notes),
+            "restricted_terms": list(analysis.restricted_terms),
         }
         with self.store.connect() as db:
             db.execute(
@@ -400,10 +466,10 @@ class DocumentLifecycle:
             db.execute(
                 """
                 UPDATE document_cases
-                SET status = ?, requires_admin = ?, analysis_json = ?, updated_at = ?
+                SET status = ?, requested_action = ?, requires_admin = ?, analysis_json = ?, updated_at = ?
                 WHERE case_id = ?
                 """,
-                (next_status, int(requires_admin), json.dumps(payload, sort_keys=True), self.now(), case_id),
+                (next_status, requested_action, int(requires_admin), json.dumps(payload, sort_keys=True), self.now(), case_id),
             )
             self._event(db, case_id, actor_user_id, "analysis_recorded", {"status": next_status, **payload})
         return self.submission(case_id)
@@ -466,8 +532,8 @@ class DocumentLifecycle:
             raise LifecycleError("exact_duplicate_action_forbidden")
         if action == "discard":
             next_status = "withdrawn"
-        elif case.requires_admin or action == "publish_existing":
-            next_status = "pending_admin_approval"
+        elif action == "publish_existing":
+            next_status = "pending_manager_approval"
         else:
             if not case.manager_user_id:
                 next_status = "pending_admin_approval"
@@ -477,9 +543,9 @@ class DocumentLifecycle:
             db.execute(
                 """
                 UPDATE document_cases
-                SET requested_action = ?, status = ?, updated_at = ? WHERE case_id = ?
+                SET requested_action = ?, status = ?, requires_admin = ?, updated_at = ? WHERE case_id = ?
                 """,
-                (action, next_status, self.now(), case_id),
+                (action, next_status, int(case.requires_admin or action == "publish_existing"), self.now(), case_id),
             )
             db.execute(
                 "UPDATE document_versions SET status = ? WHERE version_id = ?",
@@ -498,20 +564,26 @@ class DocumentLifecycle:
     ) -> Submission:
         case = self.submission(case_id)
         actor = self.governance.identity(actor_user_id)
-        reason = self._required(reason, "decision_reason")
         if decision not in {"approve", "reject", "escalate"}:
             raise LifecycleError("invalid_decision")
+        reason = reason.strip()
+        if decision != "approve":
+            reason = self._required(reason, "decision_reason")
         if case.status == "pending_manager_approval":
+            is_portal_override = actor.role == "portal_admin"
             is_assigned_manager = actor_user_id == case.manager_user_id
             is_routed_delegate = (
                 not is_assigned_manager
                 and self.governance.may_approve_for_manager(actor_user_id, case.manager_user_id)
                 and any(task.case_id == case_id for task in self.tasks_for(actor_user_id))
             )
-            if not is_assigned_manager and not is_routed_delegate:
+            if not is_portal_override and not is_assigned_manager and not is_routed_delegate:
                 raise LifecycleError("manager_required")
             if decision == "approve":
-                next_status = "pending_admin_approval"
+                next_status = (
+                    "ready_to_activate" if is_portal_override or not case.requires_admin
+                    else "pending_admin_approval"
+                )
             elif decision == "escalate":
                 next_status = "pending_admin_approval"
             else:
@@ -539,7 +611,11 @@ class DocumentLifecycle:
                 """,
                 (case_id, actor_user_id, actor.role, decision, reason, self.now()),
             )
-            self._event(db, case_id, actor_user_id, "decision_recorded", {"decision": decision, "status": next_status})
+            self._event(db, case_id, actor_user_id, "decision_recorded", {
+                "decision": decision, "status": next_status,
+                "portal_admin_override": actor.role == "portal_admin" and case.status == "pending_manager_approval",
+                "reason": reason,
+            })
         return self.submission(case_id)
 
     def publish_existing(self, *, case_id: str, actor_user_id: str = "indexer") -> tuple[Submission, str, str | None]:
@@ -731,25 +807,33 @@ class DocumentLifecycle:
         today = self.today().isoformat()
         with self.store.connect() as db:
             if actor.role in {"admin", "portal_admin"}:
+                manager_clause = ""
+                manager_params: tuple[str, ...] = ()
+                if actor.role == "portal_admin":
+                    manager_clause = (
+                        " OR (status='pending_manager_approval' "
+                        "AND (manager_user_id = ? OR uploaded_by_user_id = ? OR requires_admin=1))"
+                    )
+                    manager_params = (actor_user_id, actor_user_id)
                 rows = db.execute(
                     # Die eigenen offenen Uploads gehoeren dazu: Ohne sie findet
                     # ein Admin, der selbst hochlaedt, seinen Vorgang nirgends
                     # wieder und das Dokument bleibt unbemerkt Entwurf.
                     """SELECT case_id FROM document_cases
                        WHERE status IN ('pending_admin_approval','security_blocked','needs_correction','error')
-                          OR (status='pending_manager_approval' AND requires_admin=1)
                           OR (uploaded_by_user_id = ?
                               AND status IN ('pending_employee_decision','duplicate_blocked'))
-                       ORDER BY updated_at""",
-                    (actor_user_id,),
+                       """ + manager_clause + " ORDER BY updated_at",
+                    (actor_user_id, *manager_params),
                 ).fetchall()
             else:
                 rows = db.execute(
                     """SELECT case_id FROM document_cases
                        WHERE (uploaded_by_user_id = ? AND status IN ('pending_employee_decision','duplicate_blocked'))
+                          OR (uploaded_by_user_id = ? AND status = 'needs_correction')
                           OR (manager_user_id = ? AND status = 'pending_manager_approval')
                        ORDER BY updated_at""",
-                    (actor_user_id, actor_user_id),
+                    (actor_user_id, actor_user_id, actor_user_id),
                 ).fetchall()
                 delegated = db.execute(
                     """SELECT manager_user_id FROM manager_delegates

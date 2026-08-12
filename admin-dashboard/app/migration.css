@@ -1,0 +1,314 @@
+.wp-migration-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(190px, 240px) minmax(220px, 1fr);
+  align-items: end;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.wp-migration-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wp-migration-toolbar :where(button, input, select),
+.wp-action-button,
+.wp-outline-button {
+  min-height: 44px;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.wp-migration-toolbar input,
+.wp-migration-toolbar select {
+  width: 100%;
+  border: 1px solid #bfc9d1;
+  background: #fff;
+  padding: 0 12px;
+}
+
+.wp-toolbar-button,
+.wp-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--blue);
+  background: var(--blue);
+  color: #fff;
+  padding: 0 18px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.wp-toolbar-button svg,
+.wp-action-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.wp-toolbar-button:disabled,
+.wp-action-button:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.wp-doc-list > article {
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.wp-doc-list > article.selected {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(0, 107, 182, .09);
+}
+
+.wp-doc-head {
+  min-height: 92px;
+}
+
+.wp-doc-head:hover {
+  background: #f6faff;
+}
+
+/* Dokumentkopf mit eigenständigem Quellenlink: Aufklappen und Original öffnen
+   bleiben zwei klar getrennte Aktionen. */
+.wp-doc-head-row {
+  display: flex;
+  align-items: center;
+  background: #fff;
+}
+
+.wp-doc-head-row .wp-doc-head {
+  flex: 1;
+  min-width: 0;
+}
+
+.wp-original-link {
+  margin-right: 18px;
+  white-space: nowrap;
+  border: 1px solid #b9d5e8;
+  border-radius: 5px;
+  padding: 9px 13px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.wp-original-link:hover {
+  background: #eef7fc;
+  border-color: var(--blue);
+}
+
+.wp-info-box {
+  margin-top: 14px;
+  padding: 13px 15px;
+  border-left: 3px solid var(--blue);
+  background: #eef7fc;
+  color: #285f80;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .wp-doc-head-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .wp-original-link {
+    margin: 0 18px 14px;
+    text-align: center;
+  }
+}
+
+.wp-select-hint {
+  color: var(--blue) !important;
+  font-weight: 700;
+}
+
+.wp-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.wp-preview-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.wp-outline-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #bfc9d1;
+  background: #fff;
+  color: var(--blue);
+  padding: 0 16px;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.wp-outline-button:hover {
+  border-color: var(--blue);
+  background: #f5fafe;
+}
+
+.wp-migration-status {
+  margin: 0 0 8px;
+  color: #43515c;
+  font-size: 12px;
+}
+
+.wp-doc-panel > .wp-action-button {
+  margin-top: 18px;
+}
+
+.wp-migration-editor {
+  margin-top: 20px;
+  padding: 22px;
+  border: 1px solid #c6ddea;
+  border-radius: 8px;
+  background: #f8fbfd;
+}
+
+.wp-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wp-editor-heading span:first-child {
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.wp-editor-heading h2 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+.wp-editor-intro {
+  margin: 9px 0 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.wp-migration-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.wp-migration-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.wp-migration-fields :where(select, textarea) {
+  width: 100%;
+  border: 1px solid #bfc9d1;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px 12px;
+}
+
+.wp-migration-fields select {
+  min-height: 44px;
+}
+
+.wp-migration-fields textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.wp-migration-fields small,
+.wp-migration-fields label > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.wp-field-wide {
+  grid-column: 1 / -1;
+}
+
+.wp-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #d9e4ea;
+}
+
+.wp-editor-footer > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.wp-disposition {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr) auto;
+  align-items: end;
+  gap: 16px;
+  margin-top: 22px;
+  padding: 18px;
+  border: 1px solid #d9e1e6;
+  border-radius: 8px;
+  background: #f7f8f9;
+}
+
+.wp-disposition strong { color: var(--ink); font-size: 13px; }
+.wp-disposition p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.wp-disposition label { display: flex; flex-direction: column; gap: 7px; color: var(--ink); font-size: 12px; font-weight: 750; }
+.wp-disposition input { min-height: 44px; border: 1px solid #bfc9d1; border-radius: 6px; background: #fff; padding: 0 12px; }
+.wp-disposition button { cursor: pointer; }
+.wp-disposition button:disabled { cursor: wait; opacity: .55; }
+
+@media (max-width: 760px) {
+  .wp-migration-toolbar,
+  .wp-migration-fields,
+  .wp-disposition {
+    grid-template-columns: 1fr;
+  }
+
+  .wp-field-wide {
+    grid-column: auto;
+  }
+
+  .wp-toolbar-button,
+  .wp-action-button,
+  .wp-outline-button {
+    width: 100%;
+  }
+
+  .wp-editor-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

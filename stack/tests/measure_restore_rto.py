@@ -34,6 +34,7 @@ for module_dir in (STACK_ROOT / "kb-admin-api" / "app", STACK_ROOT / "kb-sync" /
 from backup_restore import create_backup, restore_backup, validate_restored_portal  # noqa: E402
 from canonical_inventory import load_portal_inventory  # noqa: E402
 from hybrid_sync import HybridIndexBuilder  # noqa: E402
+from kb_sync import IonosEmbeddings  # noqa: E402
 
 RTO_SECONDS = 4 * 60 * 60
 TODAY = date(2026, 8, 6)
@@ -68,6 +69,18 @@ class MemoryQdrant:
 class DeterministicEmbeddings:
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [[float(len(text) % 17), float(text.count("Service")), 1.0] for text in texts]
+
+
+class BatchedEmbeddings:
+    def __init__(self, inner: IonosEmbeddings, batch_size: int) -> None:
+        self.inner = inner
+        self.batch_size = batch_size
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for offset in range(0, len(texts), self.batch_size):
+            vectors.extend(self.inner.embed(texts[offset:offset + self.batch_size]))
+        return vectors
 
 
 @contextmanager
@@ -135,7 +148,25 @@ def main() -> int:
     parser.add_argument("--sections", type=int, default=12)
     parser.add_argument("--original-kb", type=int, default=800,
                         help="Groesse je Originaldatei in KB (typisches DOCX/PDF)")
+    parser.add_argument("--real-ionos-embeddings", action="store_true",
+                        help="misst den Indexneuaufbau mit echten IONOS-Embeddings")
+    parser.add_argument("--ionos-api-key-env", default="IONOS_API_TOKEN")
+    parser.add_argument("--ionos-base-url", default="https://openai.inference.de-txl.ionos.com/v1")
+    parser.add_argument("--embedding-model", default="BAAI/bge-m3")
+    parser.add_argument("--embedding-batch-size", type=int, default=64)
     args = parser.parse_args()
+
+    embeddings = DeterministicEmbeddings()
+    embedding_mode = "deterministisch lokal"
+    if args.real_ionos_embeddings:
+        api_key = os.getenv(args.ionos_api_key_env, "").strip()
+        if not api_key:
+            parser.error(f"Umgebungsvariable {args.ionos_api_key_env} ist leer")
+        embeddings = BatchedEmbeddings(
+            IonosEmbeddings(args.ionos_base_url.rstrip("/"), api_key, args.embedding_model),
+            args.embedding_batch_size,
+        )
+        embedding_mode = f"IONOS {args.embedding_model}, Batch {args.embedding_batch_size}"
 
     results: dict[str, float] = {}
     with tempfile.TemporaryDirectory() as directory:
@@ -165,7 +196,7 @@ def main() -> int:
         qdrant = MemoryQdrant()
         with measured("Hybridindex neu aufbauen", results):
             report = HybridIndexBuilder(
-                qdrant, DeterministicEmbeddings(), alias="vinci_rto",
+                qdrant, embeddings, alias="vinci_rto",
                 snapshot_path=root / "bm25.json",
             ).rebuild(list(inventory.documents), today=TODAY)
 
@@ -182,6 +213,7 @@ def main() -> int:
         print(f"Nutzdaten:            {payload_bytes / 1024 / 1024:.1f} MB")
         print(f"Backupdatei:          {backup.stat().st_size / 1024 / 1024:.1f} MB")
         print(f"Indexierte Chunks:    {report['chunks']}")
+        print(f"Embeddings:           {embedding_mode}")
         print()
         for label, seconds in results.items():
             print(f"  {label:<26} {seconds:8.2f} s")

@@ -11,12 +11,14 @@ from fastapi.testclient import TestClient
 from test_portal_api import identity, load_app
 
 
-def test_portal_upload_uses_account_owner_and_creates_quarantined_case():
+def test_clean_general_upload_uses_account_owner_and_is_activated_by_manager():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         module = load_app(root)
         # load_app creates the module before this test overrides its storage adapter.
         module.SECURE_INGEST.storage.root = (root / "portal-files").resolve()
+        module.PORTAL_FILES_ROOT = module.SECURE_INGEST.storage.root
+        module.RAG_METADATA.files_root = module.SECURE_INGEST.storage.root
         current = {"user": identity("portal", "admin")}
         module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
         client = TestClient(module.app)
@@ -24,6 +26,11 @@ def test_portal_upload_uses_account_owner_and_creates_quarantined_case():
 
         current["user"] = identity("employee")
         assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="manager", email="manager@kahle.de", display_name="Leitung",
+        )
+        module.PORTAL_GOVERNANCE.set_role("portal", "manager", "manager")
+        module.PORTAL_GOVERNANCE.assign_manager("portal", "employee", "manager")
         created = module.PORTAL_GOVERNANCE.request_knowledgebase_change("portal", "create", payload={"slug": "kahleallgemein", "label": "Allgemeines Wissen", "purpose": "Testwissen"})
         module.PORTAL_GOVERNANCE.grant_access(
             "portal", "employee", created.knowledgebase_id, can_read=True, can_upload=True
@@ -53,18 +60,136 @@ def test_portal_upload_uses_account_owner_and_creates_quarantined_case():
         assert response.status_code == 201, response.text
         payload = response.json()
         assert payload["owner_email"] == "employee@kahle.de"
-        assert payload["status"] == "pending_employee_decision"
+        assert payload["status"] == "pending_manager_approval"
         assert payload["prompt_injection_risk"] == "none"
+        module._trigger_hybrid_reindex = lambda: {"ok": True}
+        module._trigger_hybrid_document_sync = lambda _document_id: {"ok": True}
+        module._trigger_hybrid_version_sync = lambda _version_id: {"ok": True}
+        current["user"] = identity("manager")
+        decided = client.post(
+            f"/portal/cases/{payload['case_id']}/decision",
+            json={"decision": "approve", "reason": ""},
+        )
+        assert decided.status_code == 202, decided.text
+        completed = client.get(f"/portal/decision-jobs/{decided.json()['job_id']}")
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["status"] == "completed"
+        assert completed.json()["result"]["case"]["status"] == "active"
+
+
+def test_restricted_term_upload_is_stopped_for_admin_review_with_visible_finding():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); module = load_app(root)
+        module.SECURE_INGEST.storage.root = (root / "portal-files").resolve()
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        current["user"] = identity("portal", "admin")
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="manager", email="manager@kahle.de", display_name="Leitung",
+        )
+        module.PORTAL_GOVERNANCE.set_role("portal", "manager", "manager")
+        module.PORTAL_GOVERNANCE.assign_manager("portal", "employee", "manager")
+        current["user"] = identity("employee")
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"}
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "employee", kb.knowledgebase_id, can_read=True, can_upload=True
+        )
+        module.SECURE_INGEST.scanner = SimpleNamespace(scan=lambda *_: None)
+        module.SECURE_INGEST.converter = SimpleNamespace(
+            convert=lambda *_: "# Interne Anleitung\n\nDiese TPI verweist auf einen Reparaturleitfaden.\n"
+        )
+        response = client.post(
+            "/portal/documents",
+            data={"knowledgebase_id":kb.knowledgebase_id,"title":"Interne Anleitung",
+                  "valid_workdays":"60","confidentiality":"internal"},
+            files={"file":("anleitung.md",b"Original","text/markdown")},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["status"] == "pending_manager_approval"
+        assert response.json()["restricted_terms"] == ["Reparaturleitfaden", "TPI"]
+        assert "Gesperrte Begriffe gefunden: Reparaturleitfaden, TPI" in response.json()["confidentiality_reason"]
+        current["user"] = identity("manager")
+        tasks = client.get("/portal/tasks").json()["tasks"]
+        task = next(item for item in tasks if item["case_id"] == response.json()["case_id"])
+        assert task["restricted_terms"] == ["Reparaturleitfaden", "TPI"]
+        approved = client.post(
+            f"/portal/cases/{task['case_id']}/decision",
+            json={"decision":"approve","reason":"Fachlich geprüft"},
+        )
+        assert approved.status_code == 202
+        completed = client.get(f"/portal/decision-jobs/{approved.json()['job_id']}").json()
+        assert completed["status"] == "completed"
+        assert completed["result"]["case"]["status"] == "pending_admin_approval"
+        current["user"] = identity("portal", "admin")
+        assert task["case_id"] in {
+            item["case_id"] for item in client.get("/portal/tasks").json()["tasks"]
+        }
+
+
+def test_clean_area_upload_is_automatically_active_and_retrievable_when_switch_is_on():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); module = load_app(root)
+        files_root = (root / "portal-files").resolve()
+        module.SECURE_INGEST.storage.root = files_root
+        module.PORTAL_FILES_ROOT = files_root
+        module.RAG_METADATA.files_root = files_root
+        module.DOCUMENT_LIFECYCLE.auto_activation_enabled = lambda: True
+        module._trigger_hybrid_reindex = lambda: {"ok": True}
+        module._trigger_hybrid_document_sync = lambda _document_id: {"ok": True}
+        module._trigger_hybrid_version_sync = lambda _version_id: {"ok": True}
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app); assert client.get("/portal/session").status_code == 200
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug":"service","label":"Service"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "employee", kb.knowledgebase_id, can_read=True, can_upload=True,
+        )
+        module.SECURE_INGEST.scanner = SimpleNamespace(scan=lambda *_: None)
+        module.SECURE_INGEST.converter = SimpleNamespace(
+            convert=lambda *_: "# Reifenwechsel\n\nRäder mit dem vorgeschriebenen Drehmoment montieren.\n",
+        )
+        response = client.post(
+            "/portal/documents",
+            data={"knowledgebase_id":kb.knowledgebase_id,"title":"Reifenwechsel",
+                  "valid_workdays":"60","confidentiality":"internal"},
+            files={"file":("reifenwechsel.md",b"Original","text/markdown")},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["status"] == "active"
+        assert client.get(f"/portal/sources/{response.json()['version_id']}").status_code == 200
+        notifications = client.get("/portal/notifications").json()["notifications"]
+        assert notifications[0]["status"] == "active"
+        assert notifications[0]["document_title"] == "Reifenwechsel"
+        assert notifications[0]["read_at"] is None
+        assert "veröffentlicht und in Vinci abrufbar" in notifications[0]["message"]
+        assert client.post(
+            f"/portal/notifications/{notifications[0]['notification_id']}/read"
+        ).status_code == 200
+        assert client.get("/portal/notifications").json()["notifications"][0]["read_at"]
 
 
 
 
-def test_docx_http_flow_activates_and_exposes_original_only_to_read_authorized_user():
+def test_clean_area_docx_is_automatically_active_and_exposes_original_only_to_read_authorized_user():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory); module = load_app(root)
         module.SECURE_INGEST.storage.root = (root / "portal-files").resolve()
         module.PORTAL_FILES_ROOT = module.SECURE_INGEST.storage.root
         module.RAG_METADATA.files_root = module.SECURE_INGEST.storage.root
+        module.DOCUMENT_LIFECYCLE.auto_activation_enabled = lambda: True
+        module._trigger_hybrid_reindex = lambda: {"ok": True}
+        module._trigger_hybrid_document_sync = lambda _document_id: {"ok": True}
+        module._trigger_hybrid_version_sync = lambda _version_id: {"ok": True}
         current = {"user": identity("portal", "admin")}
         module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
         client = TestClient(module.app)
@@ -100,16 +225,7 @@ def test_docx_http_flow_activates_and_exposes_original_only_to_read_authorized_u
         )
         assert uploaded.status_code == 201, uploaded.text
         payload = uploaded.json()
-        assert client.post(f"/portal/cases/{payload['case_id']}/action", json={"action": "create"}).status_code == 200
-        current["user"] = identity("manager")
-        assert client.post(f"/portal/cases/{payload['case_id']}/decision",
-                           json={"decision": "approve", "reason": "Fachlich geprüft"}).status_code == 200
-        module._trigger_hybrid_reindex = lambda: {"ok": True}
-        current["user"] = identity("portal", "admin")
-        activated = client.post(f"/portal/cases/{payload['case_id']}/decision",
-                                json={"decision": "approve", "reason": "Final freigegeben"})
-        assert activated.status_code == 200, activated.text
-        assert activated.json()["case"]["status"] == "active"
+        assert payload["status"] == "active"
 
         current["user"] = identity("employee")
         source = client.get(f"/portal/sources/{payload['version_id']}")

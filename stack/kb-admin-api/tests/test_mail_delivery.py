@@ -1,7 +1,9 @@
 import tempfile
 from pathlib import Path
 
-from app.mail_delivery import OutboxDispatcher
+import json
+
+from app.mail_delivery import LocalMailCaptureTransport, OutboxDispatcher
 from app.maintenance import MaintenanceService
 from test_document_lifecycle import setup
 
@@ -41,3 +43,25 @@ def test_outbox_keeps_failed_message_for_retry():
         )
         assert OutboxDispatcher(service, FakeTransport(fail=True)).dispatch() == {"sent": 0, "failed": 1}
         assert len(service.pending_messages()) == 1
+
+
+def test_local_mail_capture_writes_auditable_jsonl_and_marks_sent():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        governance, _, _ = setup(root)
+        service = MaintenanceService(governance.store)
+        service.enqueue_notification(
+            "owner@kahle.de", "expiry_digest", "Ablaufwarnungen", "Datei A: 10 Arbeitstage",
+            dedupe_key="expiry-owner-2026-08-10",
+        )
+        capture = root / "mail-capture.jsonl"
+
+        assert OutboxDispatcher(service, LocalMailCaptureTransport(capture)).dispatch() == {
+            "sent": 1, "failed": 0,
+        }
+
+        delivered = json.loads(capture.read_text(encoding="utf-8").strip())
+        assert delivered["recipient"] == "owner@kahle.de"
+        assert delivered["subject"] == "Ablaufwarnungen"
+        assert delivered["kind"] == "expiry_digest"
+        assert service.pending_messages() == []

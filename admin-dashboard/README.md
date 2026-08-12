@@ -1,6 +1,6 @@
-# KAHLE Vector Admin-Dashboard
+# KAHLE-Vinci Wissensportal
 
-Interne Verwaltungsoberfläche für die Quelldateien der KAHLE-Vinci-Knowledgebases und ihren daraus erzeugten Qdrant-Index.
+Rollenbasierte Anwendung für Upload, Prüfung, Freigabe und Verwaltung der KAHLE-Vinci-Knowledge-Bases.
 
 ## Lokal starten
 
@@ -9,13 +9,13 @@ npm ci
 npm run dev
 ```
 
-Ohne erreichbare Admin-API zeigt `localhost` bewusst einen Demo-Datensatz. In Produktion wird das Dashboard unter `/admin/vector/` gebaut und ausschließlich über Caddy bereitgestellt.
+Im vollständigen lokalen Stack wird die Anwendung über Caddy unter `http://localhost:3004/wissen/` bereitgestellt. Der Produktionspfad lautet `/wissen/`.
 
 ## Sicherheit
 
 - Die UI enthält keine Qdrant- oder IONOS-Zugangsdaten.
 - API-Aufrufe übernehmen die bestehende Open-WebUI-Sitzung.
-- Die API erlaubt ausschließlich Open-WebUI-Administratoren.
+- Die API prüft nach der OpenWebUI-Anmeldung die Portalrolle und die jeweiligen Knowledge-Base-Rechte.
 - Quelldateien bleiben führend; `kb-sync` aktualisiert Qdrant.
 
 Die vollständige Betriebsdokumentation liegt unter `docs/operations/kb-admin-dashboard.md`.

@@ -67,7 +67,7 @@ Die letzte Zeile ist der wichtigste Ertrag des Tests. Jeder Begriff, den eine Pe
 
 ## 4. Aufgabe für Führungskräfte
 
-Vorbereitung: je Führungskraft ein bereits erzeugter, normaler Freigabefall ohne Dublette, ohne Widerspruch und ohne Adminpflicht. Der Fall stammt von einer Person, für die die Führungskraft zuständig ist.
+Vorbereitung: je Führungskraft ein bereits erzeugter Freigabefall für KAHLE-Allgemein oder ein Bereichsdokument mit Dublette, Versionskandidat oder unklarer Dokumentenpriorität. Der Fall stammt von einer Person, für die die Führungskraft zuständig ist.
 
 Wörtlich vorzulesen:
 
@@ -86,7 +86,7 @@ Wörtlich vorzulesen:
 | Begründung für die Entscheidung | wörtlich |
 | Wusste die Person, was ihre Freigabe auslöst | ja / nein |
 
-Die letzte Zeile prüft eine Kernannahme des PRD: Die Freigabe der Führungskraft ist der Moment, in dem das Dokument für alle Berechtigten in Vinci wirksam wird. Wenn eine Führungskraft das nicht weiß, ist die Zeitmessung wertlos, egal wie gut sie ausfällt.
+Die letzte Zeile prüft eine Kernannahme des PRD: Bei einem Fall der Stufe 2 ist die Freigabe der Führungskraft der Moment, in dem das Dokument für alle Berechtigten in Vinci wirksam wird. Bei einem kritischen Fall der Stufe 3 folgt dagegen noch die Adminprüfung. Die Oberfläche muss diesen Unterschied eindeutig anzeigen.
 
 ## 5. Auswertung
 

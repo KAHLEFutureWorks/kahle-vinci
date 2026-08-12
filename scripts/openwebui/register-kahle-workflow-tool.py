@@ -15,7 +15,9 @@ from typing import Any
 
 
 SCRIPT_PATH = Path(__file__).resolve()
-ROOT = SCRIPT_PATH.parents[2] if len(SCRIPT_PATH.parents) > 2 else Path.cwd()
+ROOT = Path(os.environ["KAHLE_REPO_ROOT"]).resolve() if "KAHLE_REPO_ROOT" in os.environ else (
+    SCRIPT_PATH.parents[2] if len(SCRIPT_PATH.parents) > 2 else Path.cwd()
+)
 DB_PATH = Path(os.environ["OWUI_DB_PATH"]) if "OWUI_DB_PATH" in os.environ else ROOT / "stack" / "openwebui_data" / "webui.db"
 TOOLS_DIR = ROOT / "stack" / "open-webui-tools"
 FUNCTIONS_DIR = ROOT / "stack" / "open-webui-functions"
@@ -340,11 +342,7 @@ KAHLE_TASK_ADMIN_SPECS = [
 TOOL_DEFINITIONS = {
     "rag_chat": {
         "name": "RAG Chat KAHLE",
-        "path": TOOLS_DIR / "rag_chat_hybrid_tool.py",
-        "dependencies": [
-            TOOLS_DIR / "hybrid_retrieval.py",
-            TOOLS_DIR / "hybrid_retrieval_adapters.py",
-        ],
+        "path": TOOLS_DIR / "dist" / "rag_chat_hybrid_tool.py",
         "specs": [
             {
                 "name": "rag_chat",
@@ -368,8 +366,7 @@ TOOL_DEFINITIONS = {
     },
     "kahle_workflow": {
         "name": "KAHLE Workflow",
-        "path": TOOLS_DIR / "kahle_workflow_orchestrator.py",
-        "dependencies": [TOOLS_DIR / "hybrid_retrieval.py", TOOLS_DIR / "hybrid_retrieval_adapters.py"],
+        "path": TOOLS_DIR / "dist" / "kahle_workflow_orchestrator.py",
         "specs": KAHLE_WORKFLOW_SPECS,
         "description": "Deterministischer KAHLE Workflow-Orchestrator fuer Tasks, RAG/Web und strukturierte Ausgaben.",
         "version": "0.1.0",

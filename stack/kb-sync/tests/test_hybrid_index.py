@@ -1,7 +1,7 @@
 from app.hybrid_index import BM25Corpus, ParentChildChunker, german_tokens
 
 
-def test_german_bm25_preserves_identifiers_and_rewards_rare_terms():
+def test_german_bm25_preserves_identifiers_and_delegates_idf_to_qdrant():
     documents = ["Service Aktion A1b Reifen", "Service Termin Reifen", "Verkauf Fahrzeug Reifen"]
     corpus = BM25Corpus(documents)
     query = corpus.query_vector("Welche Aktion A1b gilt?")
@@ -10,7 +10,7 @@ def test_german_bm25_preserves_identifiers_and_rewards_rare_terms():
     reifen_value = corpus.query_vector("Reifen").values[0]
     a1b_value = corpus.query_vector("A1b").values[0]
     assert a1b_index in query.indices
-    assert a1b_value > reifen_value
+    assert a1b_value == reifen_value == 1.0
     assert "welche" not in german_tokens("Welche Aktion gilt?")
 
 
@@ -37,3 +37,24 @@ Schritt eins. Schritt zwei.
     assert table_chunks[0].heading_path == ("Service", "Aktionen")
     assert chunks[-1].heading_path == ("Service", "Ablauf")
     assert all(chunk.parent_id.startswith("doc-1:p") for chunk in chunks)
+
+
+def test_parent_child_chunking_never_indexes_yaml_frontmatter_as_knowledge():
+    markdown = """---
+document_id: "doc-1"
+owner_email: "owner@kahle.de"
+valid_until: "2026-11-03"
+---
+
+# KI-Compliance
+
+## 1. Begriffe
+
+KI bezeichnet ein maschinengestütztes System.
+"""
+
+    chunks = ParentChildChunker().chunk("doc-1", markdown)
+
+    assert chunks
+    assert all("owner_email:" not in chunk.parent_content for chunk in chunks)
+    assert chunks[0].heading_path == ("KI-Compliance", "1. Begriffe")

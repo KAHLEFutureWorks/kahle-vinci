@@ -18,7 +18,9 @@ except ImportError:  # pragma: no cover
     from bm25_snapshot import BM25Snapshot
 
 
-HYBRID_SCHEMA_VERSION = 2
+HYBRID_SCHEMA_VERSION = 3
+HYBRID_BUILD_ID = "vinci-hybrid-v3"
+BM25_REFERENCE_LENGTH = 100.0
 
 
 class HybridSyncError(RuntimeError):
@@ -85,7 +87,7 @@ class QdrantHybridClient:
     def create_staging(self, name: str) -> None:
         self.request("PUT", f"/collections/{name}", json={
             "vectors": {"dense": {"size": self.dense_dimension, "distance": "Cosine"}},
-            "sparse_vectors": {"bm25": {}},
+            "sparse_vectors": {"bm25": {"modifier": "idf"}},
             "on_disk_payload": True,
         })
         for field, schema in (
@@ -105,6 +107,48 @@ class QdrantHybridClient:
             actions.append({"delete_alias": {"alias_name": alias}})
         actions.append({"create_alias": {"collection_name": staging, "alias_name": alias}})
         self.request("POST", "/collections/aliases", json={"actions": actions})
+
+    def active_collection(self, alias: str) -> str:
+        aliases = self.request("GET", "/aliases").get("result", {}).get("aliases", [])
+        for item in aliases:
+            if item.get("alias_name") == alias:
+                return str(item["collection_name"])
+        raise HybridSyncError("hybrid_alias_unavailable")
+
+    @staticmethod
+    def _document_filter(document_id: str, exclude_version_id: str | None = None) -> dict[str, Any]:
+        value: dict[str, Any] = {"must": [{"key": "document_id", "match": {"value": document_id}}]}
+        if exclude_version_id:
+            value["must_not"] = [{"key": "version_id", "match": {"value": exclude_version_id}}]
+        return value
+
+    def set_publication(self, collection: str, *, published: bool,
+                        point_ids: list[str] | None = None, document_id: str | None = None,
+                        exclude_version_id: str | None = None) -> None:
+        selector: dict[str, Any]
+        if point_ids is not None:
+            selector = {"points": point_ids}
+        elif document_id:
+            selector = {"filter": self._document_filter(document_id, exclude_version_id)}
+        else:  # pragma: no cover - programmer error
+            raise HybridSyncError("publication_selector_required")
+        self.request("POST", f"/collections/{collection}/points/payload?wait=true", json={
+            "payload": {"published": published}, **selector,
+        })
+
+    def delete_document_versions(self, collection: str, document_id: str,
+                                 *, exclude_version_id: str | None = None) -> None:
+        self.request("POST", f"/collections/{collection}/points/delete?wait=true", json={
+            "filter": self._document_filter(document_id, exclude_version_id),
+        })
+
+    def delete_version(self, collection: str, document_id: str, version_id: str) -> None:
+        self.request("POST", f"/collections/{collection}/points/delete?wait=true", json={
+            "filter": {"must": [
+                {"key": "document_id", "match": {"value": document_id}},
+                {"key": "version_id", "match": {"value": version_id}},
+            ]},
+        })
 
 
 class HybridIndexBuilder:
@@ -126,7 +170,7 @@ class HybridIndexBuilder:
         chunks: list[tuple[CanonicalIndexDocument, Any]] = []
         for document in documents:
             chunks.extend((document, chunk) for chunk in self.chunker.chunk(document.document_id, document.markdown))
-        corpus = BM25Corpus(chunk.content for _, chunk in chunks)
+        corpus = BM25Corpus((chunk.content for _, chunk in chunks), average_length=BM25_REFERENCE_LENGTH)
         self.qdrant.create_staging(staging)
         for offset in range(0, len(chunks), 16):
             batch = chunks[offset:offset + 16]
@@ -137,7 +181,7 @@ class HybridIndexBuilder:
             for (document, chunk), dense_vector in zip(batch, dense):
                 payload = {
                     "schema_version": HYBRID_SCHEMA_VERSION,
-                    "build_id": staging,
+                    "build_id": HYBRID_BUILD_ID,
                     "document_id": document.document_id,
                     "version_id": document.version_id,
                     "title": document.title,
@@ -168,9 +212,61 @@ class HybridIndexBuilder:
         # Publish the sparse vocabulary first. Until the alias switches, queries fail closed
         # on the build-id filter instead of mixing generations.
         if self.snapshot_path:
-            BM25Snapshot.from_corpus(staging, corpus).save_atomic(self.snapshot_path)
+            BM25Snapshot.from_corpus(HYBRID_BUILD_ID, corpus).save_atomic(self.snapshot_path)
         self.qdrant.activate_alias(self.alias, staging)
         return {"alias": self.alias, "collection": staging, "documents": len(documents), "chunks": len(chunks)}
+
+    def sync_document(self, document: CanonicalIndexDocument, *, today: date | None = None) -> dict[str, Any]:
+        """Replace one document in-place without rebuilding unrelated vectors."""
+        document.validate(today or date.today())
+        collection = self.qdrant.active_collection(self.alias)
+        chunks = self.chunker.chunk(document.document_id, document.markdown)
+        dense_vectors = self.embeddings.embed([chunk.content for chunk in chunks])
+        if len(dense_vectors) != len(chunks):
+            raise HybridSyncError("embedding_count_mismatch")
+        corpus = BM25Corpus((chunk.content for chunk in chunks), average_length=BM25_REFERENCE_LENGTH)
+        points: list[dict[str, Any]] = []
+        for chunk, dense_vector in zip(chunks, dense_vectors):
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{document.version_id}:{chunk.child_id}"))
+            points.append({
+                "id": point_id,
+                "vector": {"dense": dense_vector, "bm25": corpus.document_vector(chunk.content).qdrant()},
+                "payload": {
+                    "schema_version": HYBRID_SCHEMA_VERSION, "build_id": HYBRID_BUILD_ID,
+                    "document_id": document.document_id, "version_id": document.version_id,
+                    "title": document.title, "owner_email": document.owner_email,
+                    "knowledgebase_ids": list(document.knowledgebase_ids), "status": "active",
+                    "published": False, "valid_from": document.valid_from,
+                    "valid_until": document.valid_until, "confidentiality": document.confidentiality,
+                    "authority": document.authority, "source_id": document.source_id,
+                    "source_url": document.source_url, "child_id": chunk.child_id,
+                    "parent_id": chunk.parent_id, "chunk_order": chunk.order,
+                    "heading_path": list(chunk.heading_path), "content": chunk.content,
+                    "parent_content": chunk.parent_content, "chunk_kind": chunk.kind,
+                },
+            })
+        point_ids = [point["id"] for point in points]
+        self.qdrant.upsert(collection, points)
+        old_hidden = False
+        try:
+            self.qdrant.set_publication(
+                collection, published=False, document_id=document.document_id,
+                exclude_version_id=document.version_id,
+            )
+            old_hidden = True
+            self.qdrant.set_publication(collection, published=True, point_ids=point_ids)
+            self.qdrant.delete_document_versions(
+                collection, document.document_id, exclude_version_id=document.version_id,
+            )
+        except Exception:
+            if old_hidden:
+                self.qdrant.set_publication(
+                    collection, published=True, document_id=document.document_id,
+                    exclude_version_id=document.version_id,
+                )
+            self.qdrant.delete_version(collection, document.document_id, document.version_id)
+            raise
+        return {"alias": self.alias, "collection": collection, "documents": 1, "chunks": len(chunks)}
 
 
 def parse_frontmatter(markdown: str) -> tuple[dict[str, Any], str]:

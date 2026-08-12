@@ -24,6 +24,21 @@ class Qdrant:
     def activate_alias(self, alias, staging): self.activated = (alias, staging)
 
 
+class IncrementalQdrant(Qdrant):
+    def __init__(self):
+        super().__init__(); self.calls = []
+    def active_collection(self, alias): return "vinci-live"
+    def set_publication(self, collection, *, published, point_ids=None, document_id=None, exclude_version_id=None):
+        self.calls.append(("publish", published, point_ids, document_id, exclude_version_id))
+    def delete_document_versions(self, collection, document_id, *, exclude_version_id=None):
+        self.calls.append(("delete", document_id, exclude_version_id))
+    def delete_version(self, collection, document_id, version_id):
+        self.calls.append(("delete_version", document_id, version_id))
+    def upsert(self, collection, points):
+        self.calls.append(("upsert", collection, [point["payload"]["published"] for point in points]))
+        super().upsert(collection, points)
+
+
 def canonical(**changes):
     values = dict(
         document_id="doc-1", version_id="v-1", title="Service", markdown="# Service\n\nAktion A1b gilt.",
@@ -38,7 +53,7 @@ def canonical(**changes):
 def test_rebuild_writes_dense_sparse_acl_and_source_payload_before_alias_switch():
     qdrant = Qdrant()
     report = HybridIndexBuilder(qdrant, Embeddings()).rebuild([canonical()], today=date(2026, 8, 6))
-    assert qdrant.created.startswith("vinci_knowledge_v2_")
+    assert qdrant.created.startswith("vinci_knowledge_v3_")
     assert qdrant.activated == ("vinci_knowledge", qdrant.created)
     point = qdrant.points[0]
     assert set(point["vector"]) == {"dense", "bm25"}
@@ -46,6 +61,18 @@ def test_rebuild_writes_dense_sparse_acl_and_source_payload_before_alias_switch(
     assert point["payload"]["status"] == "active"
     assert point["payload"]["source_url"] == "/wissen/sources/src-1"
     assert report["chunks"] >= 1
+
+
+def test_incremental_sync_only_embeds_one_document_and_switches_visibility_fail_closed():
+    qdrant = IncrementalQdrant()
+    report = HybridIndexBuilder(qdrant, Embeddings()).sync_document(canonical(), today=date(2026, 8, 6))
+    assert report["collection"] == "vinci-live"
+    assert [call[0] for call in qdrant.calls] == ["upsert", "publish", "publish", "delete"]
+    assert qdrant.calls[0][2] == [False]
+    assert qdrant.calls[1][1:] == (False, None, "doc-1", "v-1")
+    assert qdrant.calls[2][1] is True
+    assert qdrant.calls[3] == ("delete", "doc-1", "v-1")
+    assert all(point["payload"]["build_id"] == "vinci-hybrid-v3" for point in qdrant.points)
 
 
 def test_expired_or_nonactive_document_can_never_be_activated():

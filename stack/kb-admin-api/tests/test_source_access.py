@@ -12,12 +12,8 @@ def activate(lifecycle, kb_id):
         case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
         analysis=lifecycle_module.Analysis(),
     )
-    lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="create")
     lifecycle.decide(
         case_id=case.case_id, actor_user_id="manager", decision="approve", reason="Fachlich geprüft"
-    )
-    lifecycle.decide(
-        case_id=case.case_id, actor_user_id="admin", decision="approve", reason="Portalfreigabe"
     )
     return lifecycle.activate(case_id=case.case_id)
 
@@ -47,9 +43,6 @@ def test_superseded_version_is_not_exposed_to_normal_source_endpoint():
         lifecycle.choose_action(case_id=second.case_id, actor_user_id="employee", action="replace")
         lifecycle.decide(
             case_id=second.case_id, actor_user_id="manager", decision="approve", reason="Neue Version"
-        )
-        lifecycle.decide(
-            case_id=second.case_id, actor_user_id="admin", decision="approve", reason="Portalfreigabe"
         )
         lifecycle.activate(case_id=second.case_id)
         with pytest.raises(lifecycle_module.LifecycleError, match="source_not_available"):

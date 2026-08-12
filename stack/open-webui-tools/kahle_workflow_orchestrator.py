@@ -980,6 +980,7 @@ class Tools:
         KB_SYNC_URL: str = Field(default="http://kb-sync:8093")
         INTERNAL_API_KEY: str = Field(default="")
         RERANKER_MODEL: str = Field(default="Qwen/Qwen3-VL-Reranker-8B")
+        MINIMUM_RERANK_SCORE: float = Field(default=0.25, ge=0, le=1)
         HYBRID_COLLECTION_ALIAS: str = Field(default="vinci_knowledge")
         IONOS_OPENAI_BASE_URL: str = Field(default="", description="Leer nutzt RAG_OPENAI_API_BASE_URL.")
         IONOS_API_KEY: str = Field(default="", description="Leer nutzt RAG_OPENAI_API_KEY/OPENAI_API_KEY.")
@@ -1316,7 +1317,7 @@ class Tools:
                 self.valves.QDRANT_URL, self.valves.HYBRID_COLLECTION_ALIAS,
                 RemoteSparseQueryEncoder(self.valves.KB_SYNC_URL, internal_key),
                 IonosReranker(base_url, api_key, self.valves.RERANKER_MODEL),
-                timeout=int(self.valves.TIMEOUT_S),
+                timeout=int(self.valves.TIMEOUT_S), minimum_rerank_score=self.valves.MINIMUM_RERANK_SCORE,
             )
             chunks = retriever.retrieve(query, vector, scope, result_limit=min(8, max(5, int(self.valves.RAG_MAX_CHUNKS))))
         except Exception as exc:

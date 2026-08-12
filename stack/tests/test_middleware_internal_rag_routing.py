@@ -29,6 +29,30 @@ def load_rag_routing_helpers():
     return namespace["_looks_like_internal_rag_request"]
 
 
+def load_native_rag_fallback():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    wanted = {
+        "_ascii_fold",
+        "_contains_token",
+        "_looks_like_raw_email_text",
+        "_has_explicit_internal_lookup_intent",
+        "_looks_like_internal_rag_request",
+        "_build_native_rag_fallback",
+    }
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    module = ast.Module(body=nodes, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "Any": Any,
+        "re": re,
+        "unicodedata": unicodedata,
+        "uuid4": lambda: type("FixedUuid", (), {"hex": "a" * 32})(),
+        "json": __import__("json"),
+    }
+    exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
+    return namespace["_build_native_rag_fallback"]
+
+
 def load_function_from_middleware(name: str):
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
@@ -37,6 +61,17 @@ def load_function_from_middleware(name: str):
     namespace = {"re": re}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace[name]
+
+
+def load_canonical_rag_source_helpers():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    wanted = {"_extract_kahle_rag_sources", "_append_canonical_rag_source_links"}
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    module = ast.Module(body=nodes, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {"Any": Any, "re": re, "json": __import__("json")}
+    exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
+    return namespace
 
 
 def test_stream_strip_hides_json_toolcall():
@@ -142,6 +177,54 @@ def test_internal_rag_routing_still_detects_explicit_internal_policy_questions()
     looks_internal = load_rag_routing_helpers()
 
     assert looks_internal("Was sagt unsere interne Richtlinie zur Nutzung von Kundendaten in Mails?") is True
+
+
+def test_native_function_calling_cannot_bypass_internal_rag():
+    fallback = load_native_rag_fallback()
+
+    calls = fallback(
+        {"rag_chat": object()},
+        "Was sagt unsere interne Richtlinie zur Nutzung von Kundendaten?",
+        [],
+        [{"type": "message", "content": [{"type": "output_text", "text": "Geraten"}]}],
+    )
+
+    assert calls[0][0]["function"]["name"] == "rag_chat"
+    assert "interne Richtlinie" in calls[0][0]["function"]["arguments"]
+
+
+def test_native_rag_fallback_does_not_repeat_after_tool_result():
+    fallback = load_native_rag_fallback()
+
+    assert fallback(
+        {"rag_chat": object()},
+        "Was sagt unsere interne Richtlinie?",
+        [],
+        [{"type": "function_call_output"}],
+    ) == []
+
+
+def test_canonical_source_link_replaces_model_invented_host():
+    helpers = load_canonical_rag_source_helpers()
+    tool_result = (
+        'KAHLE_RAG_RESULT\nFOUND: true\nSOURCES_JSON: '
+        '[{"title":"Policy","source_url":"/wissen/api/portal/sources/v1"}]\n'
+        'FEEDBACK_LINK: x'
+    )
+    sources = helpers["_extract_kahle_rag_sources"](tool_result)
+    output = [{
+        "type": "message",
+        "content": [{
+            "type": "output_text",
+            "text": "Details: [Policy](https://kahle.wissen/api/portal/sources/v1)",
+        }],
+    }]
+
+    helpers["_append_canonical_rag_source_links"](output, sources)
+
+    text = output[0]["content"][0]["text"]
+    assert "https://kahle.wissen" not in text
+    assert "[Policy](/wissen/api/portal/sources/v1)" in text
 
 
 def load_fallback_tool_helpers():

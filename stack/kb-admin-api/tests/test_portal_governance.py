@@ -74,6 +74,24 @@ def test_portal_deactivation_is_not_undone_by_identity_sync():
         assert synced.active is False
         assert synced.display_name == "Neuer Anzeigename"
 
+
+def test_admin_is_assigned_to_portal_admin_and_portal_admin_needs_no_manager():
+    with tempfile.TemporaryDirectory() as directory:
+        portal = portal_at(Path(directory))
+        bootstrap(portal)
+        assert portal.identity("admin").manager_user_id == "owner"
+        assert portal.identity("owner").manager_user_id is None
+        try:
+            portal.assign_manager("owner", "admin", None)
+            raise AssertionError("an admin must keep a portal-admin manager")
+        except module.GovernanceError as exc:
+            assert str(exc) == "admin_portal_manager_required"
+        try:
+            portal.assign_manager("owner", "admin", "manager")
+            raise AssertionError("an admin manager must be a portal admin")
+        except module.GovernanceError as exc:
+            assert str(exc) == "admin_portal_manager_required"
+
 def test_manager_delegation_and_separate_read_upload_access():
     with tempfile.TemporaryDirectory() as directory:
         portal = portal_at(Path(directory))

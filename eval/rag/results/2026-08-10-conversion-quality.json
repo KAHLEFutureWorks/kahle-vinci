@@ -1,0 +1,105 @@
+{
+  "files": 12,
+  "successful": 12,
+  "success_rate_percent": 100.0,
+  "within_five_minutes": 12,
+  "max_seconds": 0.923,
+  "results": [
+    {
+      "path": "KAHLE_KI-Compliance-System_v1.0.pdf",
+      "bytes": 93824,
+      "ok": true,
+      "markdown_chars": 5864,
+      "issues": [],
+      "seconds": 0.923
+    },
+    {
+      "path": "assets/templates/docx/KAHLE-DOCX-VORLAGE.docx",
+      "bytes": 36919,
+      "ok": true,
+      "markdown_chars": 101,
+      "issues": [],
+      "seconds": 0.045
+    },
+    {
+      "path": "assets/templates/pdf/KAHLE-PDF-VORLAGE.pdf",
+      "bytes": 196406,
+      "ok": true,
+      "markdown_chars": 141,
+      "issues": [],
+      "seconds": 0.146
+    },
+    {
+      "path": "use-cases/Pilotprojekte_Buchhaltung_Copilot.xlsx",
+      "bytes": 9672,
+      "ok": true,
+      "markdown_chars": 1483,
+      "issues": [],
+      "seconds": 0.827
+    },
+    {
+      "path": "use-cases/Pilotprojekte_Disposition_Copilot.xlsx",
+      "bytes": 9652,
+      "ok": true,
+      "markdown_chars": 1530,
+      "issues": [],
+      "seconds": 0.197
+    },
+    {
+      "path": "use-cases/Pilotprojekte_HR_Copilot.xlsx",
+      "bytes": 9632,
+      "ok": true,
+      "markdown_chars": 1403,
+      "issues": [],
+      "seconds": 0.118
+    },
+    {
+      "path": "use-cases/Pilotprojekte_Marketing_Copilot.xlsx",
+      "bytes": 9681,
+      "ok": true,
+      "markdown_chars": 1474,
+      "issues": [],
+      "seconds": 0.212
+    },
+    {
+      "path": "use-cases/Pilotprojekte_Service_Copilot.xlsx",
+      "bytes": 9755,
+      "ok": true,
+      "markdown_chars": 1658,
+      "issues": [],
+      "seconds": 0.23
+    },
+    {
+      "path": "use-cases/Pilotprojekte_Teiledienst_Copilot.xlsx",
+      "bytes": 9600,
+      "ok": true,
+      "markdown_chars": 1469,
+      "issues": [],
+      "seconds": 0.192
+    },
+    {
+      "path": "use-cases/Pilotprojekte_Vertrieb_Copilot.xlsx",
+      "bytes": 9714,
+      "ok": true,
+      "markdown_chars": 1622,
+      "issues": [],
+      "seconds": 0.207
+    },
+    {
+      "path": "use-cases/Pilotprojekte_Werkstatt_Copilot.xlsx",
+      "bytes": 8726,
+      "ok": true,
+      "markdown_chars": 1571,
+      "issues": [],
+      "seconds": 0.322
+    },
+    {
+      "path": "use-cases/Use-Case-Katalog_Autohaus_KAHLE - Kopie.xlsx",
+      "bytes": 10265,
+      "ok": true,
+      "markdown_chars": 2335,
+      "issues": [],
+      "seconds": 0.222
+    }
+  ]
+}

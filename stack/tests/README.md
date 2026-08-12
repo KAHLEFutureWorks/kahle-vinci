@@ -47,3 +47,7 @@ Requires `IONOS_API_KEY` in the process environment. The script never prints the
 ```powershell
 python stack/tests/ionos_connectivity_check.py
 ```
+
+Ohne `--api-key-env` gilt dieselbe Priorität wie im Stack: `IONOS_API_TOKEN`
+vor `IONOS_API_KEY`. So prüft der Befehl genau den Token, den OpenWebUI und
+die IONOS-Dienste zur Laufzeit verwenden.

@@ -51,10 +51,20 @@ knowledgebases:
       expected_topic: "Kennungs- und Dateinamensuche"
       expected_sources: ["Hannover"]
   kahlerichtlinien:
+    - question: "Was steht in unserer KI-Compliance v1.2? Gib mir einen vollständigen Überblick."
+      expected_topic: "Dokumentzentrierter Überblick über das vollständige KI-Compliance-System"
+      expected_sources: ["compliance_v1.2"]
+      must_have_terms: ["Betriebsrat", "Datenminimierung", "Monitoring", "Incident", "Entscheidungsbefugnis"]
     - question: "Welche Regeln gelten fuer Datenschutz und den Umgang mit personenbezogenen Daten?"
       expected_topic: "Datenschutz und personenbezogene Daten"
       expected_sources: ["Datenschutz"]
       must_have_terms: ["Datenschutz", "personenbezogen"]
+      conversation: "datenschutz-folgefrage"
+    - question: "Und wann muss dabei an einen Menschen eskaliert werden?"
+      expected_topic: "Kurze Folgefrage mit Gesprächskontext"
+      expected_sources: ["Compliance"]
+      must_have_terms: ["eskalieren"]
+      conversation: "datenschutz-folgefrage"
     - question: "Welche Inhalte duerfen nicht erfunden werden, wenn keine Quelle vorliegt?"
       expected_topic: "Vermeidung von Halluzinationen"
       expected_sources: ["richtlinie"]

@@ -22,6 +22,7 @@ __pycache__/
 *.py[cod]
 node_modules/
 .pytest_cache/
+.venv-test/
 .mypy_cache/
 .ruff_cache/
 dist/
@@ -88,6 +89,8 @@ worktrees/
 /.admin-dashboard-git-metadata/
 /backups/
 /release/
+/kb-portal-data/
+eval/rag/results/rag-runtime-eval-*.jsonl
 /*-AKTUALISIERT.py
 /OWUI-File-Proxy-KURZE-DOWNLOADLINKS.py
 *.tsbuildinfo

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import math
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -37,10 +36,12 @@ class SparseVector:
 
 
 class BM25Corpus:
-    def __init__(self, documents: Iterable[str], *, k1: float = 1.2, b: float = 0.75):
+    def __init__(self, documents: Iterable[str], *, k1: float = 1.2, b: float = 0.75,
+                 average_length: float | None = None):
         tokenized = [german_tokens(document) for document in documents]
         self.document_count = len(tokenized)
-        self.average_length = sum(map(len, tokenized)) / self.document_count if self.document_count else 1.0
+        measured_average = sum(map(len, tokenized)) / self.document_count if self.document_count else 1.0
+        self.average_length = average_length or measured_average
         self.document_frequency: Counter[str] = Counter()
         for tokens in tokenized:
             self.document_frequency.update(set(tokens))
@@ -58,10 +59,9 @@ class BM25Corpus:
         return self._vector(weights)
 
     def query_vector(self, query: str) -> SparseVector:
-        weights: dict[str, float] = {}
-        for token in set(german_tokens(query)):
-            frequency = self.document_frequency.get(token, 0)
-            weights[token] = math.log(1 + (self.document_count - frequency + 0.5) / (frequency + 0.5))
+        # Qdrant's IDF modifier maintains corpus statistics as points are added
+        # and removed. Query vectors therefore carry term frequency only.
+        weights = {token: 1.0 for token in set(german_tokens(query))}
         return self._vector(weights)
 
     @staticmethod
@@ -98,7 +98,7 @@ class ParentChildChunker:
         self.child_max_chars, self.parent_max_chars = child_max_chars, parent_max_chars
 
     def chunk(self, document_id: str, markdown: str) -> list[ChildChunk]:
-        sections = self._sections(markdown)
+        sections = self._sections(self._without_frontmatter(markdown))
         chunks: list[ChildChunk] = []
         order = 0
         for section_index, (heading_path, body) in enumerate(sections):
@@ -111,6 +111,14 @@ class ParentChildChunker:
                 ))
                 order += 1
         return chunks
+
+    @staticmethod
+    def _without_frontmatter(markdown: str) -> str:
+        clean = (markdown or "").lstrip("\ufeff")
+        if not clean.startswith("---"):
+            return clean
+        match = re.match(r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)", clean, flags=re.S)
+        return clean[match.end():] if match else clean
 
     def _sections(self, markdown: str) -> list[tuple[tuple[str, ...], str]]:
         headings: list[str] = []

@@ -70,6 +70,10 @@ upsert_env MICROSOFT_CLIENT_TENANT_ID ""
 upsert_env MICROSOFT_REDIRECT_URI https://vinci.kahle.de/oauth/microsoft/callback
 upsert_env MICROSOFT_OAUTH_SCOPE "openid email profile offline_access"
 upsert_env DEFAULT_USER_ROLE pending
+upsert_env PORTAL_ALLOWED_EMAIL_DOMAINS kahle.de
+
+upsert_env KB_PORTAL_STEP_UP_SECRET "$(openssl rand -hex 48)"
+upsert_env KB_PORTAL_ENTRA_REDIRECT_URI https://vinci.kahle.de/wissen/api/portal/auth/step-up/callback
 
 upsert_env KB_MAIL_TENANT_ID ""
 upsert_env KB_MAIL_CLIENT_ID ""

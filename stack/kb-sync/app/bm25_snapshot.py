@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,8 +25,7 @@ class BM25Snapshot:
     def encode_query(self, query: str) -> dict[str, Any]:
         by_index: dict[int, float] = {}
         for token in set(german_tokens(query)):
-            frequency = self.document_frequency.get(token, 0)
-            value = math.log(1 + (self.document_count - frequency + 0.5) / (frequency + 0.5))
+            value = 1.0
             index = stable_term_index(token)
             by_index[index] = by_index.get(index, 0.0) + value
         items = sorted(by_index.items())

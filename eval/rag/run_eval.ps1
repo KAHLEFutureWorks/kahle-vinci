@@ -7,7 +7,9 @@ param(
     [string]$ApiKey,
     [string]$ApiKeyEnv = "OPENWEBUI_API_KEY",
     [string]$ChatPath = "/api/chat/completions",
-    [int]$TimeoutSec = 120
+    [int]$TimeoutSec = 120,
+    [int]$MaxQuestions = 0,
+    [string[]]$ToolIds = @("rag_chat")
 )
 
 Set-StrictMode -Version Latest
@@ -53,6 +55,7 @@ function Read-RagQuestions {
                 question = $Matches[1]
                 expected_topic = ""
                 must_have_terms = @()
+                conversation = ""
             }
             continue
         }
@@ -69,6 +72,10 @@ function Read-RagQuestions {
                 }
             }
             $current.must_have_terms = $terms
+            continue
+        }
+        if ($null -ne $current -and $line -match '^\s{6}conversation:\s+"(.*)"\s*$') {
+            $current.conversation = $Matches[1]
         }
     }
 
@@ -85,7 +92,8 @@ function Invoke-RagQuestion {
         [string]$ModelName,
         [object]$Question,
         [string]$Token,
-        [int]$Timeout
+        [int]$Timeout,
+        [object[]]$History = @()
     )
 
     $headers = @{
@@ -104,25 +112,53 @@ Erwarteter Themenbereich fuer die Evaluation: $($Question.expected_topic)
 Frage: $($Question.question)
 "@
 
+    $messages = New-Object System.Collections.Generic.List[object]
+    $messages.Add(@{ role = "system"; content = "Du bist ein vorsichtiger deutschsprachiger RAG-Evaluationsassistent." })
+    foreach ($message in $History) { $messages.Add($message) }
+    $messages.Add(@{ role = "user"; content = $prompt })
+
+    $messageArray = @($messages | ForEach-Object { $_ })
     $body = @{
         model = $ModelName
-        messages = @(
-            @{ role = "system"; content = "Du bist ein vorsichtiger deutschsprachiger RAG-Evaluationsassistent." },
-            @{ role = "user"; content = $prompt }
-        )
+        messages = $messageArray
         temperature = 0
+        tool_ids = $ToolIds
+        stream = $false
     } | ConvertTo-Json -Depth 8
 
-    return Invoke-RestMethod -Method Post -Uri $Url -Headers $headers -Body $body -TimeoutSec $Timeout
+    Add-Type -AssemblyName System.Net.Http
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds($Timeout)
+    try {
+        $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Post, $Url)
+        if (-not [string]::IsNullOrWhiteSpace($Token)) {
+            $request.Headers.Authorization = New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $Token)
+        }
+        $request.Content = New-Object System.Net.Http.StringContent($body, [Text.Encoding]::UTF8, "application/json")
+        $httpResponse = $client.SendAsync($request).GetAwaiter().GetResult()
+        $rawBytes = $httpResponse.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        $rawJson = [Text.Encoding]::UTF8.GetString($rawBytes)
+        if (-not $httpResponse.IsSuccessStatusCode) {
+            throw "HTTP $([int]$httpResponse.StatusCode): $rawJson"
+        }
+        return $rawJson | ConvertFrom-Json
+    }
+    finally {
+        $client.Dispose()
+    }
 }
 
 $questions = Read-RagQuestions -Path $QuestionsFile
+if ($MaxQuestions -gt 0) {
+    $questions = @($questions | Select-Object -First $MaxQuestions)
+}
 $base = $BaseUrl.TrimEnd("/")
 $chatUrl = "$base$ChatPath"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $jsonlPath = Join-Path $OutputDir "rag-eval-$timestamp.jsonl"
 $mdPath = Join-Path $OutputDir "rag-eval-$timestamp.md"
 $token = Get-ApiKey -ExplicitKey $ApiKey -EnvName $ApiKeyEnv
+$conversationHistory = @{}
 
 Write-Host "RAG eval template"
 Write-Host "Base URL: $base"
@@ -159,17 +195,34 @@ foreach ($q in $questions) {
     $status = "ok"
     $answer = ""
     $sources = @()
+    $toolCalls = @()
     $errorMessage = ""
 
     try {
-        $response = Invoke-RagQuestion -Url $chatUrl -ModelName $Model -Question $q -Token $token -Timeout $TimeoutSec
+        $history = @()
+        if (-not [string]::IsNullOrWhiteSpace($q.conversation) -and $conversationHistory.ContainsKey($q.conversation)) {
+            $history = @($conversationHistory[$q.conversation])
+        }
+        $response = Invoke-RagQuestion -Url $chatUrl -ModelName $Model -Question $q -Token $token -Timeout $TimeoutSec -History $history
         $answer = [string]$response.choices[0].message.content
+        if ($response.choices[0].message.PSObject.Properties.Name -contains "tool_calls") {
+            $toolCalls = @($response.choices[0].message.tool_calls)
+        }
         if ($response.PSObject.Properties.Name -contains "sources") { $sources = @($response.sources) }
         elseif ($response.choices[0].message.PSObject.Properties.Name -contains "sources") { $sources = @($response.choices[0].message.sources) }
+        if (-not [string]::IsNullOrWhiteSpace($q.conversation)) {
+            $conversationHistory[$q.conversation] = @($history) + @(
+                @{ role = "user"; content = $q.question },
+                @{ role = "assistant"; content = $answer }
+            )
+        }
     }
     catch {
         $status = "error"
         $errorMessage = $_.Exception.Message
+        if (-not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+            $errorMessage += " " + $_.ErrorDetails.Message
+        }
     }
 
     $record = [pscustomobject]@{
@@ -178,9 +231,12 @@ foreach ($q in $questions) {
         knowledgebase = $q.knowledgebase
         question = $q.question
         expected_topic = $q.expected_topic
+        conversation = $q.conversation
+        elapsed_ms = [Math]::Round(((Get-Date) - $started).TotalMilliseconds)
         must_have_terms = $q.must_have_terms
         answer = $answer
         sources = $sources
+        tool_calls = $toolCalls
         error = $errorMessage
     }
 

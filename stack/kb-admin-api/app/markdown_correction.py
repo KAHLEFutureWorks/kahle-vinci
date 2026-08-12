@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -50,10 +50,12 @@ class IonosMarkdownCorrector:
 class MarkdownCorrectionService:
     def __init__(self, governance: PortalGovernance, lifecycle: DocumentLifecycle,
                  analyzer: GlobalDocumentAnalyzer, corpus: GlobalCorpus, storage: QuarantineStorage,
-                 corrector: IonosMarkdownCorrector | None = None):
+                 corrector: IonosMarkdownCorrector | None = None,
+                 restricted_term_matcher: Callable[[str], tuple[str, ...]] | None = None):
         self.governance, self.lifecycle, self.analyzer, self.corpus = governance, lifecycle, analyzer, corpus
         self.storage, self.corrector = storage, corrector
         self.injection = PromptInjectionInspector()
+        self.restricted_term_matcher = restricted_term_matcher or (lambda _text: ())
 
     def review(self, case_id: str, actor_user_id: str) -> dict[str, Any]:
         case = self.lifecycle.submission(case_id); actor = self.governance.identity(actor_user_id)
@@ -112,6 +114,7 @@ class MarkdownCorrectionService:
                     if old.target_knowledgebase_id not in match.knowledgebase_ids),
                 contradiction_document_ids=result.contradiction_document_ids,
                 prompt_injection_risk=finding.risk,
+                restricted_terms=self.restricted_term_matcher(corrected),
             ), actor_user_id=actor_user_id,
         )
         self.corpus.upsert(CorpusDocument(revised.document_id, revised.version_id, revised.title,

@@ -1,0 +1,45 @@
+.wp-user-admin-layout { display:grid; grid-template-columns:minmax(240px,320px) minmax(0,1fr); gap:20px; align-items:start; }
+.wp-user-directory,.wp-user-detail,.wp-absence-section { border:1px solid var(--line); border-radius:10px; background:#fff; overflow:hidden; }
+.wp-section-head { padding:18px 20px; border-bottom:1px solid var(--line); }
+.wp-section-head span,.wp-user-detail-head>div>span { color:var(--blue); font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+.wp-section-head strong { display:block; margin-top:4px; color:var(--ink); font-size:16px; }
+.wp-section-head h2 { margin:5px 0; font-size:20px; }
+.wp-section-head p { margin:0; color:var(--muted); font-size:12px; line-height:1.5; }
+.wp-user-directory>button { width:100%; display:grid; grid-template-columns:42px 1fr 18px; gap:12px; align-items:center; border:0; border-top:1px solid var(--line); background:#fff; padding:14px 16px; text-align:left; cursor:pointer; }
+.wp-user-directory>button:hover { background:#f7fafc; }
+.wp-user-directory>button.selected { background:#eef7fc; box-shadow:inset 3px 0 0 var(--blue); }
+.wp-user-directory>button>span:nth-child(2) { min-width:0; display:flex; flex-direction:column; gap:2px; }
+.wp-user-directory small,.wp-user-directory em { overflow:hidden; color:var(--muted); font-size:10px; font-style:normal; text-overflow:ellipsis; white-space:nowrap; }
+.wp-user-directory em { color:var(--blue); font-weight:700; }
+.wp-avatar.large { width:52px; height:52px; font-size:14px; }
+.wp-user-detail-head { display:grid; grid-template-columns:52px 1fr auto; gap:14px; align-items:center; padding:22px; border-bottom:1px solid var(--line); }
+.wp-user-detail-head h2 { margin:3px 0; font-size:20px; }
+.wp-user-detail-head p { margin:0; color:var(--muted); font-size:12px; }
+.wp-settings-section { padding:22px; border-bottom:1px solid var(--line); }
+.wp-settings-section h3 { margin:0 0 6px; font-size:16px; }
+.wp-settings-section>p { margin:0 0 16px; color:var(--muted); font-size:12px; }
+.wp-settings-section label,.wp-absence-form label { display:flex; flex-direction:column; gap:7px; color:var(--ink); font-size:12px; font-weight:750; }
+.wp-settings-section :where(select,input),.wp-absence-form :where(select,input) { width:100%; min-height:44px; border:1px solid #bfc9d1; border-radius:6px; background:#fff; padding:0 12px; }
+.wp-settings-section small { color:var(--muted); font-size:10px; font-weight:400; line-height:1.4; }
+.wp-check-row { flex-direction:row!important; align-items:flex-start; gap:10px!important; margin-top:18px; }
+.wp-check-row input { width:17px; min-height:17px; margin-top:2px; }
+.wp-check-row span { display:flex; flex-direction:column; gap:3px; }
+.wp-access-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.wp-access-grid article { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:14px; align-items:center; border:1px solid var(--line); border-radius:8px; padding:14px; }
+.wp-access-grid article>div { min-width:0; display:flex; flex-direction:column; gap:3px; }
+.wp-access-grid article>div small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wp-access-grid article label { flex-direction:row; align-items:center; font-weight:600; }
+.wp-access-grid article input { width:17px; min-height:17px; }
+.wp-savebar { position:sticky; bottom:0; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 22px; background:#f7fafc; border-top:1px solid var(--line); }
+.wp-savebar span { color:var(--muted); font-size:11px; }
+.wp-savebar .wp-primary { width:auto; margin:0; }
+.wp-absence-section { margin-top:24px; }
+.wp-absence-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; padding:22px; }
+.wp-absence-form .wide { grid-column:1/-1; }
+.wp-absence-form .wp-primary { width:max-content; margin:0; align-self:end; }
+.wp-absence-list { display:grid; gap:10px; padding:0 22px 22px; }
+.wp-absence-list article { display:grid; grid-template-columns:42px 1fr auto; gap:12px; align-items:center; border:1px solid var(--line); border-radius:8px; padding:14px; }
+.wp-absence-list article>div:nth-child(2) { display:flex; flex-direction:column; gap:3px; }
+.wp-absence-list span,.wp-absence-list small { color:var(--muted); font-size:11px; }
+@media(max-width:900px){.wp-user-admin-layout{grid-template-columns:1fr}.wp-user-directory{max-height:320px;overflow:auto}.wp-access-grid{grid-template-columns:1fr}}
+@media(max-width:640px){.wp-absence-form{grid-template-columns:1fr}.wp-absence-form .wide{grid-column:auto}.wp-user-detail-head{grid-template-columns:52px 1fr}.wp-user-detail-head>.wp-badge{grid-column:1/-1}.wp-savebar{align-items:stretch;flex-direction:column}.wp-savebar .wp-primary{width:100%}.wp-absence-list article{grid-template-columns:42px 1fr}.wp-absence-list .wp-outline-button{grid-column:1/-1;width:100%}}

@@ -8,7 +8,7 @@ from pathlib import Path
 from backup_restore import create_backup, restore_backup, validate_restored_portal
 from bm25_snapshot import BM25Snapshot
 from canonical_inventory import load_portal_inventory
-from hybrid_sync import HybridIndexBuilder
+from hybrid_sync import HYBRID_BUILD_ID, HybridIndexBuilder
 
 
 class MemoryQdrant:
@@ -97,4 +97,5 @@ def test_encrypted_restore_rebuilds_authoritative_hybrid_index(tmp_path: Path):
     assert qdrant.points[0]["payload"]["source_url"] == "/wissen/api/portal/sources/version-1"
     assert qdrant.points[0]["payload"]["knowledgebase_ids"] == ["service"]
     assert qdrant.points[0]["vector"]["bm25"]["indices"]
-    assert BM25Snapshot.load(snapshot).build_id == report["collection"]
+    assert BM25Snapshot.load(snapshot).build_id == HYBRID_BUILD_ID
+    assert qdrant.points[0]["payload"]["build_id"] == HYBRID_BUILD_ID

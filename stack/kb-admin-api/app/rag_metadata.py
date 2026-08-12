@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 try:
@@ -82,5 +83,12 @@ class RAGMetadataWriter:
         content = frontmatter + body.rstrip() + "\n"
         temporary = path.with_suffix(".md.tmp")
         temporary.write_text(content, encoding="utf-8", newline="\n")
-        temporary.replace(path)
+        for attempt in range(3):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
         return path

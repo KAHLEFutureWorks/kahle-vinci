@@ -83,7 +83,9 @@ def test_pending_environment_has_fixed_public_identity_and_empty_entra_values():
 
 
 def test_oauth_encryption_keys_are_generated_independently():
-    assert PREPARE_SCRIPT.count('"$(openssl rand -hex 48)"') == 2
+    assert 'upsert_env OAUTH_SESSION_TOKEN_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
+    assert 'upsert_env OAUTH_CLIENT_INFO_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
+    assert 'upsert_env KB_PORTAL_STEP_UP_SECRET "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
 
 
 def test_production_start_validates_exact_entra_and_sso_configuration():
@@ -208,3 +210,25 @@ def test_production_always_starts_encrypted_portal_backup_profile():
     assert "KAHLE_BACKUP_SECONDARY_ROOT=/mnt/kahle-vinci-backups" in production_template
     assert "upsert_env KB_BACKUP_ENCRYPTION_KEY \"\"" in PREPARE_SCRIPT
     assert "upsert_env KAHLE_BACKUP_SECONDARY_ROOT /mnt/kahle-vinci-backups" in PREPARE_SCRIPT
+
+
+def test_production_overlay_does_not_resurrect_removed_local_reranker():
+    assert "\n  reranker:" not in PROD_COMPOSE
+
+
+def test_production_requires_portal_step_up_and_domain_configuration():
+    production_template = (STACK_DIR / "env.production.template").read_text(encoding="utf-8")
+    legacy_example = (STACK_DIR / ".env.production.example").read_text(encoding="utf-8")
+    required = (
+        "KB_PORTAL_STEP_UP_SECRET",
+        "KB_PORTAL_ENTRA_REDIRECT_URI",
+        "PORTAL_ALLOWED_EMAIL_DOMAINS",
+    )
+    for name in required:
+        assert f"{name}: ${{{name}:?" in PROD_COMPOSE
+        assert name in START_SCRIPT
+        assert name in PREPARE_SCRIPT
+        assert name in production_template
+        assert name in legacy_example
+    assert "ENABLE_LOGIN_FORM=False" in legacy_example
+    assert "ENABLE_PASSWORD_AUTH=False" in legacy_example

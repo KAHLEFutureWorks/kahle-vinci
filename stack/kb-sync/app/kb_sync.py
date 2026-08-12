@@ -28,10 +28,10 @@ except ImportError:  # pragma: no cover
 
 try:
     from .canonical_inventory import CanonicalInventory, load_canonical_inventory, load_portal_inventory, write_inventory_report
-    from .hybrid_sync import HybridIndexBuilder, QdrantHybridClient
+    from .hybrid_sync import HYBRID_BUILD_ID, HybridIndexBuilder, HybridSyncError, QdrantHybridClient
 except ImportError:  # pragma: no cover
     from canonical_inventory import CanonicalInventory, load_canonical_inventory, load_portal_inventory, write_inventory_report
-    from hybrid_sync import HybridIndexBuilder, QdrantHybridClient
+    from hybrid_sync import HYBRID_BUILD_ID, HybridIndexBuilder, HybridSyncError, QdrantHybridClient
 
 
 EMBEDDING_DIMENSION = 1024
@@ -403,6 +403,49 @@ class KnowledgebaseSync:
                 f"documents={report['documents']} chunks={report['chunks']}", flush=True,
             )
 
+    def reconcile_hybrid_version(self, version_id: str) -> dict[str, Any]:
+        """Update exactly one active portal version in the live hybrid index."""
+        with self.hybrid_lock:
+            snapshot = BM25Snapshot.load(self.config.hybrid_snapshot_path)
+            if snapshot.build_id != HYBRID_BUILD_ID:
+                raise HybridSyncError("hybrid_schema_migration_required")
+            inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
+            document = next((item for item in inventory.documents if item.version_id == version_id), None)
+            if document is None:
+                raise HybridSyncError("active_version_not_indexable")
+            report = self.hybrid_builder.sync_document(document)
+            hybrid_state = self.state.data.setdefault("hybrid", {})
+            hybrid_state.update({
+                "digest": inventory.digest, "status": "active",
+                "collection": report["collection"],
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "last_incremental_version_id": version_id,
+            })
+            self.state.save()
+            return report
+
+    def reconcile_hybrid_document(self, document_id: str) -> dict[str, Any]:
+        """Synchronize current state of one document, including deactivation."""
+        with self.hybrid_lock:
+            snapshot = BM25Snapshot.load(self.config.hybrid_snapshot_path)
+            if snapshot.build_id != HYBRID_BUILD_ID:
+                raise HybridSyncError("hybrid_schema_migration_required")
+            inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
+            document = next((item for item in inventory.documents if item.document_id == document_id), None)
+            if document:
+                report = self.hybrid_builder.sync_document(document)
+            else:
+                collection = self.hybrid_builder.qdrant.active_collection(self.hybrid_builder.alias)
+                self.hybrid_builder.qdrant.delete_document_versions(collection, document_id)
+                report = {"collection": collection, "documents": 0, "chunks": 0}
+            self.state.data.setdefault("hybrid", {}).update({
+                "digest": inventory.digest, "status": "active", "collection": report["collection"],
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "last_incremental_document_id": document_id,
+            })
+            self.state.save()
+            return report
+
     def reconcile_collection(self, collection: str) -> None:
         with self.reconcile_lock:
             collection_root = self.config.kb_root / collection
@@ -535,6 +578,44 @@ class ReindexRequestHandler(BaseHTTPRequestHandler):
             return
         if not self._is_authorized():
             self._json_response(401, {"ok": False, "error": "internal_api_key_required"})
+            return
+        if self.path == "/hybrid/versions/sync":
+            try:
+                length = min(int(self.headers.get("Content-Length", "0")), 8192)
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                version_id = str(payload.get("version_id") or "").strip()
+                if not version_id:
+                    self._json_response(422, {"ok": False, "error": "version_id_required"})
+                    return
+                started = time.monotonic()
+                report = self.sync_service.reconcile_hybrid_version(version_id)
+                self._json_response(200, {
+                    "ok": True, "scope": "version", "version_id": version_id,
+                    "chunks": report["chunks"],
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                })
+            except Exception as exc:
+                print(f"hybrid_incremental_sync_failed error={exc}", flush=True)
+                self._json_response(500, {"ok": False, "error": str(exc)})
+            return
+        if self.path == "/hybrid/documents/sync":
+            try:
+                length = min(int(self.headers.get("Content-Length", "0")), 8192)
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                document_id = str(payload.get("document_id") or "").strip()
+                if not document_id:
+                    self._json_response(422, {"ok": False, "error": "document_id_required"})
+                    return
+                started = time.monotonic()
+                report = self.sync_service.reconcile_hybrid_document(document_id)
+                self._json_response(200, {
+                    "ok": True, "scope": "document", "document_id": document_id,
+                    "documents": report["documents"], "chunks": report["chunks"],
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                })
+            except Exception as exc:
+                print(f"hybrid_incremental_document_sync_failed error={exc}", flush=True)
+                self._json_response(500, {"ok": False, "error": str(exc)})
             return
         if self.path == "/reindex-all":
             try:

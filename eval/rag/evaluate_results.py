@@ -26,21 +26,38 @@ def score(questions_path: Path, results_path: Path) -> dict:
         patterns = [str(value).casefold() for value in definition.get("expected_sources", [])]
         must_terms = [str(value).casefold() for value in definition.get("must_have_terms", [])]
         expect_no_answer = bool(definition.get("expect_no_answer"))
-        no_answer = "keine verlässliche freigegebene information" in answer.casefold() or "information in den quellen fehlt" in answer.casefold()
+        normalized_answer = answer.casefold()
+        no_answer = any(phrase in normalized_answer for phrase in (
+            "keine verlässliche freigegebene information",
+            "information in den quellen fehlt",
+            "nicht in den freigegebenen quellen",
+            "keine freigegebene quelle",
+        ))
         document_hit = (all(pattern in serialized_sources for pattern in patterns) if patterns else bool(sources))
         if expect_no_answer:
             document_hit = no_answer and not sources
         source_links = [str(source.get("source_url") or source.get("url") or "") for source in sources if isinstance(source, dict)]
         linked = expect_no_answer or bool(source_links and all(link.startswith("/wissen/api/portal/sources/") for link in source_links))
         term_hit = expect_no_answer or not must_terms or all(term in answer.casefold() for term in must_terms)
+        unsupported_answer = expect_no_answer and not (no_answer and not sources)
         scored.append({"question": record.get("question"), "document_hit": document_hit,
-                       "source_link_ok": linked, "term_hit": term_hit, "expect_no_answer": expect_no_answer})
+                       "source_link_ok": linked, "term_hit": term_hit, "expect_no_answer": expect_no_answer,
+                       "unsupported_answer": unsupported_answer, "conversation": definition.get("conversation", ""),
+                       "elapsed_ms": record.get("elapsed_ms")})
     count = len(scored) or 1
+    negative = [item for item in scored if item["expect_no_answer"]]
+    unsupported_rate = (
+        sum(item["unsupported_answer"] for item in negative) / len(negative) if negative else 1.0
+    )
+    conversations = {item["conversation"] for item in scored if item["conversation"]}
     return {
         "questions": len(scored),
         "document_hit_rate": sum(item["document_hit"] for item in scored) / count,
         "source_link_rate": sum(item["source_link_ok"] for item in scored) / count,
         "term_hit_rate": sum(item["term_hit"] for item in scored) / count,
+        "negative_questions": len(negative),
+        "unsupported_answer_rate": unsupported_rate,
+        "conversation_tests": len(conversations),
         "details": scored,
     }
 
@@ -56,7 +73,14 @@ def main() -> int:
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True); args.report.write_text(output, encoding="utf-8")
     print(output)
-    return 0 if report["questions"] and report["document_hit_rate"] >= .90 and report["source_link_rate"] >= .95 else 1
+    passed = (
+        report["questions"]
+        and report["document_hit_rate"] >= .90
+        and report["source_link_rate"] >= .95
+        and report["unsupported_answer_rate"] <= .05
+        and report["conversation_tests"] >= 1
+    )
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

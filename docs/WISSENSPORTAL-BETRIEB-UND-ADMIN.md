@@ -5,7 +5,7 @@ Stand: 6. August 2026. Diese Anleitung beschreibt den lokalen Abnahmebetrieb. Ei
 ## 1. Rollen und Verantwortungen
 
 - Mitarbeiter laden Dokumente nur in freigegebene Wissensbereiche, prüfen Treffer und wählen die gewünschte Aktion.
-- Führungskräfte prüfen Inhalt, erkannte Ähnlichkeiten und die vorgeschlagene Aktion ihrer zugeordneten Mitarbeiter. Sie können unklare Fälle an einen Admin weiterleiten.
+- Führungskräfte prüfen Uploads für KAHLE-Allgemein, fachlich auffällige Dokumente und die erste Stufe kritischer Fälle ihrer zugeordneten Mitarbeiter. Sie können unklare Fälle an einen Admin weiterleiten.
 - Admins bearbeiten Freigaben, Qualitätsfälle, Benutzerzuordnungen und Knowledge Bases. Änderungen an Knowledge Bases benötigen die Freigabe eines Portal-Admins.
 - Portal-Admins besitzen sämtliche Rechte und dürfen Knowledge-Base- sowie Adminänderungen direkt ausführen. Kritische Aktionen verlangen eine frische Microsoft-Anmeldung.
 
@@ -26,13 +26,17 @@ Systemfehler werden automatisch als Incident angelegt und per E-Mail gemeldet. N
 
 ## 3. Dokumentfreigabe
 
-Der normale Weg lautet: Upload → Sicherheits- und Prompt-Injection-Prüfung → Document-Worker-Konvertierung → globale Dubletten-, Versions-, Ähnlichkeits- und Widerspruchsprüfung → Auswahl durch Mitarbeiter → Freigabe durch Führungskraft → Freigabe durch Admin → atomare Indexaktivierung.
+Der normale Weg lautet: Upload → Sicherheits- und Prompt-Injection-Prüfung → Document-Worker-Konvertierung → globale Dubletten-, Versions-, Ähnlichkeits- und Widerspruchsprüfung → Auswahl durch Mitarbeiter → automatische Zuordnung der Freigabestufe → atomare Indexaktivierung nach Erfüllung dieser Stufe.
+
+- Sauberes Dokument für genau eine Bereichs-Knowledgebase: direkte Aktivierung ohne menschliche Freigabe.
+- KAHLE-Allgemein, Dublette, Versionskandidat oder unklare Dokumentenpriorität: Freigabe durch die Führungskraft.
+- Widerspruch, kritischer Sicherheitsbefund, kritischer Prompt-Injection-Treffer, Veröffentlichung in mehreren Wissensbereichen, unsichere Konvertierung oder sonstiger kritischer Fall: zuerst Führungskraft, anschließend Admin oder Portal-Admin.
 
 Abweichungen:
 
 - Exakte Dubletten werden blockiert.
-- Knowledge-Base-übergreifende Treffer und Widersprüche gehen direkt an einen Admin.
-- Prompt-Injection- oder Malwaretreffer bleiben in Quarantäne.
+- Ein Knowledgebase-übergreifender Ähnlichkeitstreffer allein verlangt die Führungskraftprüfung. Erst eine Veröffentlichung in mehreren Wissensbereichen oder ein fachlicher Widerspruch verlangt zusätzlich die Adminfreigabe.
+- Malware, ausführbare Schadbestandteile und technisch nicht sicher prüfbare Dateien bleiben ohne Override-Möglichkeit in Quarantäne. Kritische Inhalts- oder Prompt-Injection-Befunde in technisch sicher untersuchten Dateien durchlaufen Führungskraft und Admin.
 - Schlägt der Neuindex nach einer Freigabe fehl, wird die vorherige aktive Version wiederhergestellt.
 - Der Retrieval-Filter akzeptiert ausschließlich aktive Versions-IDs, die der Portal-API für den angemeldeten Nutzer freigibt. Ein veralteter Index allein kann deshalb keine gesperrte Version ausliefern.
 
@@ -43,6 +47,7 @@ Abweichungen:
 - Verlängerungen benötigen die Bestätigung des Owners, anschließend die Führungskraft und einen Admin.
 - Abgelaufene Dokumente werden deaktiviert und aus dem aktiven Retrievalumfang entfernt.
 - Entfernte Dokumente bleiben im Papierkorb. Ab Tag 30 erhält der Admin einen Löschauftrag, danach alle 10 Tage eine Erinnerung. Drei Tage vor Tag 90 folgt die letzte Warnung. An Tag 90 wird ohne Legal Hold physisch gelöscht.
+- Beim Verschieben in den Papierkorb erhalten alle aktiven Nutzer mit bisherigem Lesezugriff eine Portal-Mitteilung und eine E-Mail. Der Empfängerkreis wird vor dem Entzug der Veröffentlichung ermittelt.
 - Eine Wiederherstellung ist nur mit gültiger, bereits genehmigter Version möglich. Andernfalls ist eine neue Freigabe erforderlich.
 
 ## 5. Knowledge Bases und Benutzer
@@ -50,6 +55,8 @@ Abweichungen:
 Benutzer stammen aus OpenWebUI und werden anhand ihrer stabilen Benutzer-ID sowie Microsoft-E-Mail synchronisiert. Führungskräfte, Vertretungen, Rollen und getrennte Lese-/Uploadrechte werden im Portal manuell verwaltet.
 
 Normale Admins können Änderungen an Knowledge Bases vorbereiten. Anlegen, Umbenennen, Archivieren oder endgültiges Entfernen wird erst nach Portal-Admin-Freigabe wirksam. Portal-Admins können diese Aktionen nach Microsoft-Step-up direkt ausführen.
+
+Bei Archivierung oder endgültiger Entfernung einer Knowledge Base werden alle aktiven Nutzer mit bisherigem Leserecht sowie Admins und Portal-Admins über Portal und E-Mail informiert.
 
 ## 6. Backup und Wiederherstellung
 
@@ -71,7 +78,15 @@ Ein Restore erfolgt immer in ein leeres, isoliertes Ziel. Der Restore prüft vor
 
 Danach wird der Hybridindex vollständig aus den wiederhergestellten Quelldaten neu aufgebaut. Ein Backup oder Restore-Test mit Fehler erzeugt automatisch einen Admin-Incident. Produktive Daten dürfen niemals probeweise über eine laufende Instanz zurückgespielt werden.
 
-## 7. Lokale technische Abnahme
+## 7. Freigabewarteschlange
+
+Aktivierung und Hybridindexwechsel werden global über die persistente Tabelle `decision_jobs` serialisiert. Gleichzeitig eingehende Entscheidungen verschiedener Nutzer bleiben erhalten und werden in Eingangsreihenfolge verarbeitet. Sobald die Entscheidung dauerhaft gespeichert ist, bestätigt das Portal sie sofort und verschiebt den Vorgang sichtbar nach „Veröffentlichung läuft“; der Nutzer kann weiterarbeiten und erhält nach Abschluss eine Mitteilung.
+
+Im Tagesbetrieb synchronisiert `kb-sync` ausschließlich das betroffene Dokument. Neue Chunks werden zunächst mit `published=false` geschrieben, die alte Version wird ausgeblendet und erst danach wird die neue Version freigeschaltet. Schlägt dieser Wechsel fehl, wird die alte Version wieder sichtbar. Ein kompletter Neuaufbau aller Dokumente ist nur für die einmalige Schema-Migration, Restore, Modell-/Chunking-Wechsel oder eine ausdrücklich gestartete Wartung vorgesehen.
+
+Ein aktiver Verarbeitungsschritt besitzt eine zeitlich begrenzte Lease. Läuft diese nach einem Prozessabbruch ab, kann der Job beim nächsten Worker-Lauf erneut übernommen werden. Bei einer auffällig lange stehenden Warteschlange sind API- und Sync-Erreichbarkeit, der letzte `decision_queue`-Incident und der Status der Jobs zu prüfen; Jobs dürfen nicht manuell aus der SQLite-Datenbank gelöscht oder auf `completed` gesetzt werden.
+
+## 8. Lokale technische Abnahme
 
 Die automatisierten Prüfungen werden aus dem Repository-Stamm ausgeführt:
 
@@ -88,7 +103,7 @@ npm test
 
 Zusätzlich sind die 20 Abnahmeszenarien des PRDs, die Retrieval-Evaluation unter `eval/rag` und ein isolierter Restore mit vollständigem Neuindex auszuführen. Die Ergebnisse werden mit Datum, Commit, Testdaten und Konfiguration protokolliert.
 
-## 8. Go-live-Sperre
+## 9. Go-live-Sperre
 
 Kein Produktionsrollout bei:
 

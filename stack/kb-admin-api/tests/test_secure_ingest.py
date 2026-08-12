@@ -57,6 +57,7 @@ def test_binary_text_and_unsafe_filename_are_rejected():
         ("../evil.md", b"hello", "invalid_filename"),
         ("evil.md", b"a\x00b", "file_type_mismatch"),
         ("evil.exe", b"MZ", "file_type_not_allowed"),
+        ("tabelle.csv", b"spalte;wert\nA;1", "file_type_not_allowed"),
     ]:
         with pytest.raises(IngestError, match=error):
             inspector.inspect(name, data)

@@ -84,7 +84,7 @@ def pending_case(governance, lifecycle, kb_id):
         case_id=case.case_id, normalized_sha256="b" * 64,
         markdown_sha256="c" * 64, analysis=Analysis(),
     )
-    return lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="create")
+    return case
 
 
 def test_pending_approval_reminds_delegates_and_escalates_after_2_4_6_workdays(tmp_path: Path):
@@ -106,7 +106,7 @@ def test_pending_approval_reminds_delegates_and_escalates_after_2_4_6_workdays(t
     with governance.store.connect() as db:
         db.execute("UPDATE document_cases SET created_at='2026-07-29T09:00:00+00:00' WHERE case_id=?", (case.case_id,))
     assert service.process_pending_approvals()["escalated"]
-    assert lifecycle.tasks_for("admin")[0].case_id == case.case_id
+    assert lifecycle.tasks_for("portal")[0].case_id == case.case_id
 
 
 def test_active_absence_routes_new_case_to_configured_delegate_immediately(tmp_path: Path):

@@ -67,7 +67,6 @@ class SecureFileInspector:
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "txt": "text/plain",
         "md": "text/markdown",
-        "csv": "text/csv",
     }
 
     def __init__(self, max_bytes: int = 50 * 1024 * 1024, max_pdf_pages: int = 200):

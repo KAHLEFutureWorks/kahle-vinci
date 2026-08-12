@@ -70,9 +70,11 @@ try:
     from .document_changes import DocumentChangeError, DocumentChangeService
     from .ownership import OwnershipError, OwnershipService
     from .upload_jobs import UploadJobError, UploadJobService
+    from .decision_jobs import DecisionJobError, DecisionJobQueue
     from .document_authority import AuthorityError, DocumentAuthorityService
     from .rag_metadata import RAGMetadataWriter
     from .content_classification import ContentConfidentialityClassifier
+    from .restricted_terms import RestrictedTermError, RestrictedTermService
     from .global_analysis import (
         CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
     )
@@ -91,9 +93,11 @@ except ImportError:  # pragma: no cover
     from document_changes import DocumentChangeError, DocumentChangeService
     from ownership import OwnershipError, OwnershipService
     from upload_jobs import UploadJobError, UploadJobService
+    from decision_jobs import DecisionJobError, DecisionJobQueue
     from document_authority import AuthorityError, DocumentAuthorityService
     from rag_metadata import RAGMetadataWriter
     from content_classification import ContentConfidentialityClassifier
+    from restricted_terms import RestrictedTermError, RestrictedTermService
     from global_analysis import (
         CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
     )
@@ -155,13 +159,21 @@ PORTAL_DB_PATH = Path(
     os.getenv("KB_PORTAL_DB_PATH", "/portal-data/wissensportal.sqlite3")
 ).resolve()
 PORTAL_GOVERNANCE = PortalGovernance(SQLiteGovernanceStore(PORTAL_DB_PATH))
-DOCUMENT_LIFECYCLE = DocumentLifecycle(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
+_AUTO_ACTIVATION_DEFAULT = os.getenv("KB_PORTAL_AUTO_ACTIVATION_ENABLED", "false").strip().lower() == "true"
+DOCUMENT_LIFECYCLE = DocumentLifecycle(
+    PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE,
+    auto_activation_enabled=lambda: PORTAL_GOVERNANCE.setting_bool(
+        "auto_activation_enabled", default=_AUTO_ACTIVATION_DEFAULT,
+    ),
+)
 MAINTENANCE = MaintenanceService(PORTAL_GOVERNANCE.store)
 AUDIT_EXPORTER = AuditExporter(PORTAL_GOVERNANCE.store)
 QUALITY_CASES = QualityCaseService(PORTAL_GOVERNANCE.store)
+RESTRICTED_TERMS = RestrictedTermService(PORTAL_GOVERNANCE)
 DOCUMENT_CHANGES = DocumentChangeService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
 OWNERSHIP = OwnershipService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
 UPLOAD_JOBS = UploadJobService(PORTAL_GOVERNANCE.store)
+DECISION_JOBS = DecisionJobQueue(PORTAL_GOVERNANCE.store)
 DOCUMENT_AUTHORITY = DocumentAuthorityService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
 GLOBAL_CORPUS = GlobalCorpus(PORTAL_GOVERNANCE.store)
 GLOBAL_ANALYZER = GlobalDocumentAnalyzer(
@@ -180,7 +192,8 @@ SECURE_INGEST = SecureIngestPipeline(
 )
 LEGACY_MIGRATION = LegacyMigrationService(
     PORTAL_GOVERNANCE, DOCUMENT_LIFECYCLE, GLOBAL_ANALYZER, GLOBAL_CORPUS,
-    QuarantineStorage(PORTAL_FILES_ROOT),
+    QuarantineStorage(PORTAL_FILES_ROOT), SECURE_INGEST,
+    restricted_term_matcher=RESTRICTED_TERMS.matches,
 )
 MARKDOWN_CORRECTION = MarkdownCorrectionService(
     PORTAL_GOVERNANCE, DOCUMENT_LIFECYCLE, GLOBAL_ANALYZER, GLOBAL_CORPUS,
@@ -189,6 +202,7 @@ MARKDOWN_CORRECTION = MarkdownCorrectionService(
         IONOS_BASE_URL, IONOS_API_KEY,
         os.getenv("IONOS_CHAT_MODEL_DEFAULT", "mistralai/Mistral-Small-24B-Instruct"),
     ) if IONOS_API_KEY else None,
+    restricted_term_matcher=RESTRICTED_TERMS.matches,
 )
 QUALITY_DASHBOARD = QualityDashboard(PORTAL_GOVERNANCE.store, Path(os.getenv("KB_BACKUP_STATE_PATH", "/backups/primary/backup-state.json")))
 STEP_UP_AUTHORITY: StepUpAuthority | None = None
@@ -304,6 +318,7 @@ class PortalDelegationRequest(BaseModel):
 
 class PortalAbsenceRequest(BaseModel):
     manager_user_id: str = Field(..., min_length=1, max_length=100)
+    delegate_user_id: str | None = Field(default=None, min_length=1, max_length=100)
     absent_from: str | None = None
     absent_until: str | None = None
     reason: str = Field(..., max_length=1000)
@@ -326,6 +341,15 @@ class PortalRagFeedbackRequest(BaseModel):
     request_id: str = Field(..., min_length=1, max_length=200)
 
 
+class PortalRetrievalEventRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=100)
+    query_hash: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
+    found: bool
+    source_count: int = Field(..., ge=0, le=30)
+    latency_ms: int = Field(..., ge=0, le=300_000)
+    error_code: str | None = Field(default=None, max_length=100)
+
+
 class PortalIncidentCommentRequest(BaseModel):
     comment: str = Field(..., min_length=3, max_length=2000)
 
@@ -334,12 +358,27 @@ class PortalMigrationStageRequest(BaseModel):
     path: str = Field(..., min_length=1, max_length=500)
 
 
+class PortalMigrationDispositionRequest(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalRestrictedTermRequest(BaseModel):
+    term: str = Field(..., min_length=2, max_length=120)
+
+
+class PortalAutoActivationRequest(BaseModel):
+    enabled: bool
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
 class PortalMigrationMetadataRequest(BaseModel):
     path: str = Field(..., min_length=1, max_length=500)
     owner_email: str = Field(..., min_length=3, max_length=320)
     confidentiality: str = Field(..., pattern=r"^(internal|restricted|confidential)$")
     authority_type: str = Field(..., min_length=3, max_length=80)
     authority_level: int = Field(..., ge=1, le=6)
+    knowledgebase_id: str | None = Field(default=None, min_length=1, max_length=100)
     scope: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -435,7 +474,7 @@ class PortalCaseActionRequest(BaseModel):
 
 class PortalCaseDecisionRequest(BaseModel):
     decision: str = Field(..., pattern=r"^(approve|reject|escalate)$")
-    reason: str = Field(..., min_length=3, max_length=2000)
+    reason: str = Field(default="", max_length=2000)
 
 
 class PortalUploadResponse(BaseModel):
@@ -451,6 +490,7 @@ class PortalUploadResponse(BaseModel):
     owner_confirmation_required: bool = False
     conversion_quality: str = "good"
     conversion_issues: list[str] = Field(default_factory=list)
+    restricted_terms: list[str] = Field(default_factory=list)
     exact_duplicate_document_id: str | None = None
     matches: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -951,6 +991,37 @@ def _trigger_hybrid_reindex() -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+def _trigger_hybrid_version_sync(version_id: str) -> dict[str, Any]:
+    """Publish one canonical version; full rebuilds are reserved for maintenance."""
+    try:
+        response = requests.post(
+            f"{KB_SYNC_URL}/hybrid/versions/sync",
+            json={"version_id": version_id},
+            headers={"X-API-Key": KB_SYNC_INTERNAL_API_KEY},
+            timeout=180,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "error": f"kb_sync_http_{response.status_code}"}
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"ok": True}
+    except (requests.RequestException, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _trigger_hybrid_document_sync(document_id: str) -> dict[str, Any]:
+    try:
+        response = requests.post(
+            f"{KB_SYNC_URL}/hybrid/documents/sync", json={"document_id": document_id},
+            headers={"X-API-Key": KB_SYNC_INTERNAL_API_KEY}, timeout=180,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "error": f"kb_sync_http_{response.status_code}"}
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"ok": True}
+    except (requests.RequestException, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def _document_summary(path: Path, collection: str, state: dict[str, Any]) -> dict[str, Any]:
     relative_path = path.relative_to(KB_ROOT / collection).as_posix()
     meta = _metadata(path)
@@ -1117,6 +1188,23 @@ def portal_internal_retrieval_scope(
             "active_version_ids": active_version_ids}
 
 
+@app.post("/portal/internal/retrieval-events")
+def portal_internal_retrieval_event(
+    payload: PortalRetrievalEventRequest,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+) -> dict[str, bool]:
+    if not MAINTENANCE_API_KEY or not hmac.compare_digest(x_api_key, MAINTENANCE_API_KEY):
+        raise HTTPException(status_code=401, detail="internal_api_key_required")
+    QUALITY_DASHBOARD.record_retrieval(
+        user_id=payload.user_id, query_hash=payload.query_hash, found=payload.found,
+        source_count=payload.source_count, latency_ms=payload.latency_ms,
+        error_code=payload.error_code,
+    )
+    if payload.error_code:
+        QUALITY_CASES.system_incident("retrieval", {"error_type": payload.error_code})
+    return {"ok": True}
+
+
 @app.get("/portal/session")
 def portal_session(
     identity: dict[str, Any] = Depends(require_portal_identity),
@@ -1147,12 +1235,25 @@ def portal_list_documents(
     readable = PORTAL_GOVERNANCE.allowed_knowledgebases(identity["user_id"], "read")
     with PORTAL_GOVERNANCE.store.connect() as db:
         rows = db.execute(
-            """SELECT DISTINCT d.document_id, d.title, d.owner_user_id, d.active_version_id,
-                              v.status, v.valid_until, p.knowledgebase_id
+            """SELECT d.document_id, d.title, d.owner_user_id, d.active_version_id,
+                              v.status, v.valid_until,
+                              (SELECT first_case.target_knowledgebase_id
+                               FROM document_cases first_case
+                               WHERE first_case.document_id=d.document_id
+                               ORDER BY first_case.created_at,first_case.case_id LIMIT 1)
+                              AS primary_knowledgebase_id
+                              ,(SELECT latest_case.case_id
+                                FROM document_cases latest_case
+                                WHERE latest_case.document_id=d.document_id
+                                ORDER BY latest_case.created_at DESC,latest_case.case_id DESC LIMIT 1)
+                               AS latest_case_id
                FROM canonical_documents d
                LEFT JOIN document_versions v ON v.version_id=d.active_version_id
-               LEFT JOIN document_publications p ON p.document_id=d.document_id
-               WHERE (d.owner_user_id=? OR p.knowledgebase_id IN ({}))
+               WHERE (d.owner_user_id=? OR EXISTS (
+                   SELECT 1 FROM document_publications readable_publication
+                   WHERE readable_publication.document_id=d.document_id
+                     AND readable_publication.status!='inactive'
+                     AND readable_publication.knowledgebase_id IN ({})))
                  AND d.document_id NOT IN (
                      SELECT document_id FROM document_trash
                      WHERE physically_deleted_at IS NULL)
@@ -1168,7 +1269,47 @@ def portal_list_documents(
                ORDER BY d.updated_at DESC""".format(",".join("?" for _ in readable) or "NULL"),
             (identity["user_id"], *readable),
         ).fetchall()
-    return {"documents": [dict(row) for row in rows]}
+        document_ids = [row["document_id"] for row in rows]
+        publications = []
+        if document_ids:
+            placeholders = ",".join("?" for _ in document_ids)
+            publications = db.execute(
+                f"""SELECT p.document_id,p.knowledgebase_id,k.label,p.created_at
+                       FROM document_publications p
+                       JOIN knowledgebases k ON k.knowledgebase_id=p.knowledgebase_id
+                       WHERE p.document_id IN ({placeholders}) AND p.status!='inactive'
+                       ORDER BY p.created_at,k.label""",
+                document_ids,
+            ).fetchall()
+    by_document: dict[str, list[dict[str, str]]] = {}
+    for publication in publications:
+        by_document.setdefault(publication["document_id"], []).append({
+            "knowledgebase_id": publication["knowledgebase_id"],
+            "label": publication["label"],
+        })
+    documents = []
+    for row in rows:
+        item = dict(row)
+        publication_items = by_document.get(row["document_id"], [])
+        primary_id = item.pop("primary_knowledgebase_id", None)
+        primary = next(
+            (base for base in publication_items if base["knowledgebase_id"] == primary_id),
+            publication_items[0] if publication_items else None,
+        )
+        item["primary_knowledgebase"] = primary
+        item["additional_knowledgebases"] = [
+            base for base in publication_items if not primary
+            or base["knowledgebase_id"] != primary["knowledgebase_id"]
+        ]
+        if item.get("active_version_id"):
+            item["original_url"] = f"/wissen/api/portal/sources/{item['active_version_id']}"
+        elif item.get("latest_case_id"):
+            item["original_url"] = f"/wissen/api/portal/cases/{item['latest_case_id']}/original"
+        else:
+            item["original_url"] = None
+        item.pop("latest_case_id", None)
+        documents.append(item)
+    return {"documents": documents}
 
 
 @app.get("/portal/admin/knowledgebase-overview")
@@ -1201,7 +1342,8 @@ def portal_admin_knowledgebase_overview(
                JOIN canonical_documents d ON d.document_id = p.document_id
                LEFT JOIN document_versions v ON v.version_id = d.active_version_id
                LEFT JOIN portal_users u ON u.user_id = d.owner_user_id
-               WHERE d.document_id NOT IN (
+               WHERE p.status != 'inactive'
+                 AND d.document_id NOT IN (
                    SELECT document_id FROM document_trash
                    WHERE physically_deleted_at IS NULL)
                ORDER BY d.title"""
@@ -1269,7 +1411,7 @@ def portal_admin_set_publication(
         identity["user_id"], "document_publication_changed", "document", document_id,
         {"knowledgebase_id": payload.knowledgebase_id, "active": payload.active},
     )
-    indexing = _trigger_hybrid_reindex()
+    indexing = _trigger_hybrid_document_sync(document_id)
     return {"publications": DOCUMENT_LIFECYCLE.publications_of(document_id), "indexing": indexing}
 
 
@@ -1326,16 +1468,16 @@ async def portal_upload_document(
             valid_workdays=valid_workdays, confidentiality=confidentiality, document_id=document_id,
         )
         result = SECURE_INGEST.ingest(submission.document_id, submission.version_id, filename, data, title)
-        confidentiality_suggestion = CONFIDENTIALITY_CLASSIFIER.classify(
-            result.markdown_path.read_text(encoding="utf-8")
-        )
+        markdown = result.markdown_path.read_text(encoding="utf-8")
+        confidentiality_suggestion = CONFIDENTIALITY_CLASSIFIER.classify(markdown)
+        restricted_terms = RESTRICTED_TERMS.matches(markdown)
         submission = DOCUMENT_LIFECYCLE.apply_automatic_confidentiality(
             case_id=submission.case_id, level=confidentiality_suggestion.level,
             reason=confidentiality_suggestion.reason, signals=confidentiality_suggestion.signals,
         )
         global_result = GLOBAL_ANALYZER.analyze(
             version_id=submission.version_id, title=title,
-            markdown=result.markdown_path.read_text(encoding="utf-8"),
+            markdown=markdown,
         )
         material_matches = tuple(match for match in global_result.matches if match.level in {"identical", "very_high", "medium"})
         cross_kb_matches = tuple(
@@ -1356,19 +1498,43 @@ async def portal_upload_document(
                 prompt_injection_risk=result.injection.risk,
                 conversion_quality=result.conversion_quality,
                 notes=result.conversion_issues,
+                restricted_terms=restricted_terms,
             ),
         )
         RAG_METADATA.write(submission.version_id, result.markdown_path)
         GLOBAL_CORPUS.upsert(CorpusDocument(
             submission.document_id, submission.version_id, title,
-            result.markdown_path.read_text(encoding="utf-8"), (knowledgebase_id,),
-            "pending" if submission.status == "pending_employee_decision" else "quarantine",
+            markdown, (knowledgebase_id,),
+            "pending" if submission.status in {"pending_employee_decision", "ready_to_activate"} else "quarantine",
         ))
         if intended_owner_user_id != identity["user_id"]:
             OWNERSHIP.create_initial_proposal(
                 submission.document_id, submission.case_id, identity["user_id"], intended_owner_user_id,
             )
             submission = DOCUMENT_LIFECYCLE.submission(submission.case_id)
+        elif submission.status == "ready_to_activate":
+            previous_version_id = DOCUMENT_LIFECYCLE.active_version(submission.document_id)
+            submission = DOCUMENT_LIFECYCLE.activate(case_id=submission.case_id, actor_user_id="auto_activation")
+            RAG_METADATA.write(submission.version_id)
+            indexing = _trigger_hybrid_version_sync(submission.version_id)
+            if not indexing.get("ok"):
+                submission = DOCUMENT_LIFECYCLE.rollback_activation(
+                    case_id=submission.case_id, previous_version_id=previous_version_id,
+                    reason=str(indexing.get("error") or "hybrid_reindex_failed"),
+                    actor_user_id="auto_activation",
+                )
+                if previous_version_id:
+                    _trigger_hybrid_version_sync(previous_version_id)
+                _refresh_global_corpus_version(submission.version_id, "pending")
+                if previous_version_id:
+                    _refresh_global_corpus_version(previous_version_id, "active")
+                raise HTTPException(status_code=503, detail="activation_index_failed_previous_version_restored")
+            _refresh_global_corpus_version(submission.version_id, "active")
+            if previous_version_id and previous_version_id != submission.version_id:
+                _refresh_global_corpus_version(previous_version_id, "superseded")
+            _notify_case_status(
+                submission, "Automatische Sicherheits- und Qualitätsprüfung bestanden.",
+            )
     except GovernanceError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except LifecycleError as exc:
@@ -1395,8 +1561,13 @@ async def portal_upload_document(
         prompt_injection_risk=result.injection.risk,
         conversion_quality=result.conversion_quality,
         conversion_issues=list(result.conversion_issues),
+        restricted_terms=list(restricted_terms),
         confidentiality=DOCUMENT_LIFECYCLE.submission(submission.case_id).confidentiality,
-        confidentiality_reason=confidentiality_suggestion.reason,
+        confidentiality_reason=(
+            confidentiality_suggestion.reason
+            + (f" Gesperrte Begriffe gefunden: {', '.join(restricted_terms)}."
+               if restricted_terms else "")
+        ),
         requires_admin=submission.requires_admin,
         exact_duplicate_document_id=global_result.exact_document_id,
         matches=[{
@@ -1704,7 +1875,68 @@ def portal_tasks(identity: dict[str, Any] = Depends(require_portal_identity)) ->
         tasks = DOCUMENT_LIFECYCLE.tasks_for(identity["user_id"])
     except (LifecycleError, GovernanceError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return {"tasks": [asdict(task) for task in tasks]}
+    payload = []
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        for task in tasks:
+            item = asdict(task)
+            row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (task.case_id,)).fetchone()
+            analysis = json.loads(row["analysis_json"] or "{}") if row else {}
+            item["restricted_terms"] = analysis.get("restricted_terms", [])
+            payload.append(item)
+    return {"tasks": payload}
+
+
+@app.get("/portal/notifications")
+def portal_notifications(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        rows = db.execute(
+            "SELECT * FROM ("
+            "SELECT n.notification_id,n.case_id,n.status,n.message,n.reason,n.created_at,n.read_at,"
+            "d.title AS document_title FROM portal_case_notifications n "
+            "JOIN document_cases c ON c.case_id=n.case_id "
+            "JOIN canonical_documents d ON d.document_id=c.document_id "
+            "WHERE n.recipient_user_id=? UNION ALL "
+            "SELECT n.notification_id,NULL AS case_id,n.status,n.message,n.reason,n.created_at,n.read_at,"
+            "n.subject_title AS document_title FROM portal_notifications n "
+            "WHERE n.recipient_user_id=?"
+            ") ORDER BY created_at DESC,notification_id DESC LIMIT 100",
+            (identity["user_id"], identity["user_id"]),
+        ).fetchall()
+    return {"notifications": [dict(row) for row in rows]}
+
+
+@app.post("/portal/notifications/{notification_id}/read")
+def portal_mark_notification_read(
+    notification_id: str,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, int]:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        cursor = db.execute(
+            "UPDATE portal_case_notifications SET read_at=? "
+            "WHERE notification_id=? AND recipient_user_id=? AND read_at IS NULL",
+            (datetime.now().astimezone().isoformat(), notification_id, identity["user_id"]),
+        )
+        exists = db.execute(
+            "SELECT 1 FROM portal_case_notifications "
+            "WHERE notification_id=? AND recipient_user_id=?",
+            (notification_id, identity["user_id"]),
+        ).fetchone()
+        if not exists:
+            cursor = db.execute(
+                "UPDATE portal_notifications SET read_at=? "
+                "WHERE notification_id=? AND recipient_user_id=? AND read_at IS NULL",
+                (datetime.now().astimezone().isoformat(), notification_id, identity["user_id"]),
+            )
+            exists = db.execute(
+                "SELECT 1 FROM portal_notifications "
+                "WHERE notification_id=? AND recipient_user_id=?",
+                (notification_id, identity["user_id"]),
+            ).fetchone()
+    if not exists:
+        raise HTTPException(status_code=404, detail="notification_not_found")
+    return {"marked_read": cursor.rowcount}
 
 
 def _admin_emails() -> list[str]:
@@ -1714,19 +1946,116 @@ def _admin_emails() -> list[str]:
         ).fetchall()]
 
 
-def _notify_case_status(case: Any) -> None:
-    recipients: list[str] = []
-    if case.status == "pending_manager_approval" and case.manager_user_id:
-        recipients.append(PORTAL_GOVERNANCE.identity(case.manager_user_id).email)
-    elif case.status == "pending_admin_approval":
-        recipients.extend(_admin_emails())
-    if not recipients:
-        return
-    subject = "KAHLE-Vinci: Neue Freigabeaufgabe"
-    body = f"F?r den Vorgang '{case.title}' ist eine Entscheidung erforderlich.\n/wissen/?case={case.case_id}"
-    for recipient in dict.fromkeys(recipients):
+def _knowledgebase_readers(knowledgebase_ids: tuple[str, ...]) -> list[dict[str, str]]:
+    if not knowledgebase_ids:
+        return []
+    placeholders = ",".join("?" for _ in knowledgebase_ids)
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        rows = db.execute(
+            f"""SELECT DISTINCT u.user_id,u.email FROM portal_users u
+                LEFT JOIN knowledgebase_access a ON a.user_id=u.user_id
+                WHERE u.active=1 AND (
+                  u.role IN ('admin','portal_admin') OR
+                  (a.can_read=1 AND a.knowledgebase_id IN ({placeholders}))
+                )""",
+            knowledgebase_ids,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _document_access_snapshot(document_id: str) -> tuple[str, list[dict[str, str]]]:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        document = db.execute(
+            "SELECT title FROM canonical_documents WHERE document_id=?", (document_id,),
+        ).fetchone()
+        knowledgebase_ids = tuple(row["knowledgebase_id"] for row in db.execute(
+            "SELECT knowledgebase_id FROM document_publications "
+            "WHERE document_id=? AND status='active'", (document_id,),
+        ).fetchall())
+    return (document["title"] if document else "Dokument", _knowledgebase_readers(knowledgebase_ids))
+
+
+def _knowledgebase_access_snapshot(knowledgebase_id: str) -> tuple[str, list[dict[str, str]]]:
+    knowledgebase = PORTAL_GOVERNANCE.knowledgebase(knowledgebase_id)
+    return knowledgebase.label, _knowledgebase_readers((knowledgebase_id,))
+
+
+def _notify_access_removed(
+    recipients: list[dict[str, str]], *, subject_type: str, subject_id: str,
+    subject_title: str, status: str, message: str, reason: str,
+) -> None:
+    stamp = datetime.now().astimezone().isoformat()
+    clean_reason = reason.strip()
+    queued_emails: list[tuple[str, str]] = []
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        for recipient in recipients:
+            notification_id = hashlib.sha256(
+                f"{subject_type}|{subject_id}|{status}|{recipient['user_id']}|{clean_reason}".encode()
+            ).hexdigest()[:32]
+            db.execute(
+                "INSERT OR IGNORE INTO portal_notifications "
+                "(notification_id,recipient_user_id,subject_type,subject_id,subject_title,status,message,reason,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (notification_id, recipient["user_id"], subject_type, subject_id, subject_title,
+                 status, message, clean_reason, stamp),
+            )
+            queued_emails.append((recipient["email"], notification_id))
+    body = f"{message}\n"
+    if clean_reason:
+        body += f"Begründung: {clean_reason}\n"
+    body += "/wissen/?notifications=1"
+    for recipient_email, notification_id in queued_emails:
         MAINTENANCE.enqueue_notification(
-            recipient, "approval_task", subject, body, dedupe_key=f"{case.case_id}:{case.status}",
+            recipient_email, "access_removed", f"KAHLE-Vinci: {subject_title}", body,
+            dedupe_key=notification_id,
+        )
+
+
+def _notify_case_status(case: Any, reason: str = "") -> None:
+    labels = {
+        "active": "Das Dokument wurde veröffentlicht und in Vinci abrufbar gemacht. Der Zugriff bleibt auf berechtigte Nutzer beschränkt.",
+        "pending_manager_approval": "Das Dokument wurde noch nicht veröffentlicht. Die Führungskraft muss entscheiden.",
+        "pending_admin_approval": "Das Dokument wurde noch nicht veröffentlicht. Eine zusätzliche Adminprüfung ist erforderlich.",
+        "rejected": "Das Dokument wurde abgelehnt und ist nicht in Vinci abrufbar.",
+        "withdrawn": "Der Upload wurde verworfen und ist nicht in Vinci abrufbar.",
+        "needs_correction": "Das Dokument wurde nicht veröffentlicht und muss korrigiert werden.",
+    }
+    message = labels.get(case.status)
+    if not message:
+        return
+    recipient_ids = [case.uploaded_by_user_id]
+    if case.manager_user_id and case.status in {
+        "pending_manager_approval", "pending_admin_approval", "active", "rejected",
+    }:
+        recipient_ids.append(case.manager_user_id)
+    if case.status == "pending_admin_approval":
+        with PORTAL_GOVERNANCE.store.connect() as db:
+            recipient_ids.extend(row["user_id"] for row in db.execute(
+                "SELECT user_id FROM portal_users WHERE active=1 AND role IN ('admin','portal_admin')"
+            ).fetchall())
+    clean_reason = reason.strip()
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        for recipient_user_id in dict.fromkeys(recipient_ids):
+            notification_id = hashlib.sha256(
+                f"{case.case_id}|{case.status}|{recipient_user_id}|{clean_reason}".encode()
+            ).hexdigest()[:32]
+            db.execute(
+                "INSERT OR IGNORE INTO portal_case_notifications "
+                "(notification_id,recipient_user_id,case_id,status,message,reason,created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (notification_id, recipient_user_id, case.case_id, case.status, message,
+                 clean_reason, datetime.now().astimezone().isoformat()),
+            )
+    subject = f"KAHLE-Vinci: {case.title} · {case.status}"
+    body = f"{message}\n"
+    if clean_reason:
+        body += f"Begründung: {clean_reason}\n"
+    body += f"/wissen/?case={case.case_id}"
+    for recipient_user_id in dict.fromkeys(recipient_ids):
+        recipient = PORTAL_GOVERNANCE.identity(recipient_user_id).email
+        MAINTENANCE.enqueue_notification(
+            recipient, "case_status", subject, body,
+            dedupe_key=f"{case.case_id}:{case.status}:{recipient_user_id}:{notification_id}",
         )
 
 
@@ -1818,14 +2147,12 @@ def portal_case_action(
         raise HTTPException(status_code=500, detail=f"system_error:{incident_id}") from exc
     if case.status == "withdrawn":
         GLOBAL_CORPUS.set_status(case.version_id, "withdrawn")
-    _notify_case_status(case)
+    _notify_case_status(case, f"Gewählte Aktion: {payload.action}")
     return {"case": asdict(case)}
 
 
-@app.post("/portal/cases/{case_id}/decision")
-def portal_case_decision(
-    case_id: str, payload: PortalCaseDecisionRequest,
-    identity: dict[str, Any] = Depends(require_portal_identity),
+def _execute_portal_case_decision(
+    case_id: str, payload: PortalCaseDecisionRequest, identity: dict[str, Any],
 ) -> dict[str, Any]:
     try:
         case = DOCUMENT_LIFECYCLE.decide(
@@ -1835,13 +2162,13 @@ def portal_case_decision(
         if case.status == "ready_to_activate" and case.requested_action == "publish_existing":
             case, target_version_id, previous_publication_status = DOCUMENT_LIFECYCLE.publish_existing(case_id=case_id)
             RAG_METADATA.write(target_version_id)
-            indexing = _trigger_hybrid_reindex()
+            indexing = _trigger_hybrid_version_sync(target_version_id)
             if not indexing.get("ok"):
                 case = DOCUMENT_LIFECYCLE.rollback_existing_publication(
                     case_id=case_id, previous_status=previous_publication_status,
                     reason=str(indexing.get("error") or "hybrid_reindex_failed"),
                 )
-                _trigger_hybrid_reindex()
+                _trigger_hybrid_version_sync(target_version_id)
                 _refresh_global_corpus_version(case.version_id, "pending")
                 _refresh_global_corpus_version(target_version_id, "active")
                 raise HTTPException(status_code=503, detail="publication_index_failed_previous_scope_restored")
@@ -1851,14 +2178,15 @@ def portal_case_decision(
             previous_version_id = DOCUMENT_LIFECYCLE.active_version(case.document_id)
             case = DOCUMENT_LIFECYCLE.activate(case_id=case_id)
             RAG_METADATA.write(case.version_id)
-            indexing = _trigger_hybrid_reindex()
+            indexing = _trigger_hybrid_version_sync(case.version_id)
             if not indexing.get("ok"):
                 case = DOCUMENT_LIFECYCLE.rollback_activation(
                     case_id=case_id, previous_version_id=previous_version_id,
                     reason=str(indexing.get("error") or "hybrid_reindex_failed"),
                 )
-                # If the index switch completed but its response was lost, restore the old generation too.
-                _trigger_hybrid_reindex()
+                # Incremental sync is fail-closed and restores the old visible points itself.
+                if previous_version_id:
+                    _trigger_hybrid_version_sync(previous_version_id)
                 _refresh_global_corpus_version(case.version_id, "pending")
                 if previous_version_id:
                     _refresh_global_corpus_version(previous_version_id, "active")
@@ -1872,8 +2200,64 @@ def portal_case_decision(
         raise
     except (LifecycleError, GovernanceError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _notify_case_status(case)
+    _notify_case_status(case, payload.reason)
     return {"case": asdict(case)}
+
+
+def _drain_decision_jobs() -> None:
+    while job := DECISION_JOBS.claim_next():
+        try:
+            result = _execute_portal_case_decision(
+                job["case_id"],
+                PortalCaseDecisionRequest(decision=job["decision"], reason=job["reason"]),
+                {"user_id": job["user_id"]},
+            )
+            DECISION_JOBS.complete(job["job_id"], result)
+        except HTTPException as exc:
+            DECISION_JOBS.fail(job["job_id"], str(exc.detail))
+        except Exception as exc:  # pragma: no cover - last-resort persistent failure record
+            incident_id = _notify_system_error("decision_queue", {
+                "job_id": job["job_id"], "error": type(exc).__name__,
+            })
+            DECISION_JOBS.fail(job["job_id"], f"system_error:{incident_id}")
+
+
+@app.post("/portal/cases/{case_id}/decision", status_code=202)
+def portal_case_decision(
+    case_id: str, payload: PortalCaseDecisionRequest, background_tasks: BackgroundTasks,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    job = DECISION_JOBS.enqueue(
+        case_id, identity["user_id"], payload.decision, payload.reason,
+    )
+    background_tasks.add_task(_drain_decision_jobs)
+    return job
+
+
+@app.get("/portal/decision-jobs/{job_id}")
+def portal_decision_job(
+    job_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        return DECISION_JOBS.get(
+            job_id, identity["user_id"], identity["role"] in {"admin", "portal_admin"},
+        )
+    except DecisionJobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/portal/decision-jobs")
+def portal_decision_jobs(
+    active: bool = True,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    # The first UI iteration deliberately exposes only active work. Completed
+    # outcomes already arrive through the normal notification stream.
+    if not active:
+        return {"jobs": []}
+    return {"jobs": DECISION_JOBS.list_active(
+        identity["user_id"], identity["role"] in {"admin", "portal_admin"},
+    )}
 
 
 @app.get("/portal/auth/step-up/start")
@@ -2000,7 +2384,7 @@ def portal_update_document_authority(
             ).fetchone()
         if version:
             RAG_METADATA.write(version["version_id"])
-            indexing = _trigger_hybrid_reindex()
+            indexing = _trigger_hybrid_document_sync(document_id)
             if not indexing.get("ok"):
                 incident_id = _notify_system_error(
                     "authority_reindex", {"document_id": document_id, "error": indexing.get("error")}
@@ -2086,14 +2470,14 @@ def portal_confirm_owner(
         if status == "completed" and payload.accept:
             with PORTAL_GOVERNANCE.store.connect() as db:
                 version = db.execute(
-                    """SELECT v.version_id FROM owner_reassignment_tasks t
+                    """SELECT v.version_id, t.document_id FROM owner_reassignment_tasks t
                        JOIN canonical_documents d ON d.document_id=t.document_id
                        JOIN document_versions v ON v.document_id=d.document_id
                        WHERE t.task_id=? ORDER BY v.created_at DESC LIMIT 1""", (task_id,),
                 ).fetchone()
             if version:
                 RAG_METADATA.write(version["version_id"])
-                indexing = _trigger_hybrid_reindex()
+                indexing = _trigger_hybrid_document_sync(version["document_id"])
                 if not indexing.get("ok"):
                     incident_id = _notify_system_error(
                         "owner_reindex", {"task_id": task_id, "error": indexing.get("error")}
@@ -2133,7 +2517,12 @@ def portal_decide_document_change(
 ) -> dict[str, Any]:
     try: status=DOCUMENT_CHANGES.decide(request_id,identity["user_id"],payload.approve,payload.reason)
     except DocumentChangeError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
-    if status=="approved": _trigger_hybrid_reindex()
+    if status=="approved":
+        with PORTAL_GOVERNANCE.store.connect() as db:
+            change = db.execute(
+                "SELECT document_id FROM document_change_requests WHERE request_id=?", (request_id,),
+            ).fetchone()
+        if change: _trigger_hybrid_document_sync(change["document_id"])
     return {"status":status}
 
 
@@ -2141,13 +2530,20 @@ def portal_decide_document_change(
 def portal_request_removal(
     payload: PortalRemovalRequest, identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
+    title, readers = _document_access_snapshot(payload.document_id)
     try:
         request_id = MAINTENANCE.request_removal(payload.document_id, identity["user_id"], payload.kind, payload.reason)
     except MaintenanceError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if identity["role"] in {"admin", "portal_admin"}:
-        indexing = _trigger_hybrid_reindex()
+        indexing = _trigger_hybrid_document_sync(payload.document_id)
         if not indexing.get("ok"): raise HTTPException(status_code=503, detail="removal_reindex_failed")
+        _notify_access_removed(
+            readers, subject_type="document", subject_id=payload.document_id,
+            subject_title=title, status="removed",
+            message="Das Dokument wurde aus Vinci entfernt und ist nicht mehr abrufbar.",
+            reason=payload.reason,
+        )
     return {"request_id": request_id}
 
 
@@ -2162,16 +2558,16 @@ def portal_admin_delete_from_trash(
     document_id: str, payload: PortalRestoreRequest,
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
-    """Sofortige endgueltige Loeschung, nur fuer Portal-Admins (PRD 23.3)."""
+    """Endgueltige Loeschung durch Admins ab Tag 30 (PRD 23.3)."""
     try:
         MAINTENANCE.delete_now(
             document_id, identity["user_id"], payload.reason, file_root=PORTAL_FILES_ROOT,
         )
     except MaintenanceError as exc:
-        status = 403 if str(exc) == "portal_admin_required" else 409
+        status = 403 if str(exc) == "admin_required" else 409
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     PORTAL_GOVERNANCE.record_audit(
-        identity["user_id"], "document_deleted_immediately", "document", document_id,
+        identity["user_id"], "document_deleted_from_trash", "document", document_id,
         {"reason": payload.reason},
     )
     return {"document_id": document_id, "status": "deleted"}
@@ -2182,11 +2578,23 @@ def portal_admin_decide_removal(
     request_id: str, payload: PortalRemovalDecisionRequest,
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        removal = db.execute(
+            "SELECT document_id FROM document_removal_requests WHERE request_id=?", (request_id,),
+        ).fetchone()
+    title, readers = _document_access_snapshot(removal["document_id"]) if removal else ("Dokument", [])
     try: MAINTENANCE.decide_removal(request_id, identity["user_id"], payload.approve, payload.reason)
     except MaintenanceError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
     if payload.approve:
-        indexing = _trigger_hybrid_reindex()
+        indexing = _trigger_hybrid_document_sync(removal["document_id"] if removal else "")
         if not indexing.get("ok"): raise HTTPException(status_code=503, detail="removal_reindex_failed")
+        if removal:
+            _notify_access_removed(
+                readers, subject_type="document", subject_id=removal["document_id"],
+                subject_title=title, status="removed",
+                message="Das Dokument wurde aus Vinci entfernt und ist nicht mehr abrufbar.",
+                reason=payload.reason,
+            )
     return {"ok": True}
 
 
@@ -2196,7 +2604,7 @@ def portal_admin_restore_trash(
 ) -> dict[str, Any]:
     try: MAINTENANCE.restore_from_trash(document_id, identity["user_id"], payload.reason)
     except MaintenanceError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
-    indexing = _trigger_hybrid_reindex()
+    indexing = _trigger_hybrid_document_sync(document_id)
     if not indexing.get("ok"): raise HTTPException(status_code=503, detail="restore_reindex_failed")
     return {"ok": True}
 
@@ -2234,6 +2642,47 @@ def portal_admin_migration_inventory(
     return {"items": [asdict(item) for item in LEGACY_MIGRATION.inventory(KB_ROOT)]}
 
 
+@app.get("/portal/admin/migration/inventory")
+def portal_admin_migration_inventory_status(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"items": [asdict(item) for item in LEGACY_MIGRATION.inventory_items()]}
+
+
+@app.get("/portal/admin/migration/tasks")
+def portal_admin_migration_tasks(
+    status: str = "open", identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    try:
+        return {"tasks": LEGACY_MIGRATION.tasks(status)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/portal/admin/migration/file")
+def portal_admin_migration_file(
+    path: str, kind: str,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> FileResponse:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    try:
+        review_file = LEGACY_MIGRATION.review_file(KB_ROOT, path, kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    media_type = "text/markdown; charset=utf-8" if kind == "markdown" else None
+    return FileResponse(
+        review_file,
+        filename=review_file.name,
+        media_type=media_type,
+        content_disposition_type="inline",
+    )
+
+
 @app.put("/portal/admin/migration/metadata")
 def portal_admin_migration_metadata(
     payload: PortalMigrationMetadataRequest,
@@ -2244,6 +2693,7 @@ def portal_admin_migration_metadata(
             payload.path, identity["user_id"], owner_email=payload.owner_email,
             confidentiality=payload.confidentiality, authority_type=payload.authority_type,
             authority_level=payload.authority_level, scope=payload.scope,
+            knowledgebase_id=payload.knowledgebase_id,
         )
     except (GovernanceError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2255,14 +2705,39 @@ def portal_admin_migration_stage(
     payload: PortalMigrationStageRequest, request: Request,
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
-    if identity["role"] != "portal_admin":
-        raise HTTPException(status_code=403, detail="portal_admin_required")
-    require_fresh_step_up(request, identity)
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    if identity["role"] == "portal_admin":
+        require_fresh_step_up(request, identity)
     try:
         case_id = LEGACY_MIGRATION.stage(KB_ROOT, payload.path, identity["user_id"])
     except (ValueError, LifecycleError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"case_id": case_id, "status": "staged"}
+
+
+@app.post("/portal/admin/migration/exclude")
+def portal_admin_migration_exclude(
+    payload: PortalMigrationDispositionRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, str]:
+    try:
+        LEGACY_MIGRATION.exclude(payload.path, identity["user_id"], payload.reason)
+    except (GovernanceError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "excluded"}
+
+
+@app.post("/portal/admin/migration/restore")
+def portal_admin_migration_restore(
+    payload: PortalMigrationDispositionRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, str]:
+    try:
+        LEGACY_MIGRATION.restore_excluded(payload.path, identity["user_id"], payload.reason)
+    except (GovernanceError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "restored"}
 
 
 @app.get("/portal/admin/audit")
@@ -2332,6 +2807,65 @@ def portal_admin_users(
     return {"users": serialize_governance(users)}
 
 
+@app.get("/portal/admin/restricted-terms")
+def portal_admin_restricted_terms(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        return {"terms": RESTRICTED_TERMS.serialized(identity["user_id"])}
+    except RestrictedTermError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.get("/portal/admin/settings/auto-activation")
+def portal_admin_auto_activation_setting(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, bool]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"enabled": PORTAL_GOVERNANCE.setting_bool(
+        "auto_activation_enabled", default=_AUTO_ACTIVATION_DEFAULT,
+    )}
+
+
+@app.put("/portal/admin/settings/auto-activation")
+def portal_admin_set_auto_activation(
+    payload: PortalAutoActivationRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, bool]:
+    if identity["role"] != "portal_admin":
+        raise HTTPException(status_code=403, detail="portal_admin_required")
+    enabled = _portal_call(lambda: PORTAL_GOVERNANCE.set_setting_bool(
+        identity["user_id"], "auto_activation_enabled", payload.enabled, payload.reason,
+    ))
+    return {"enabled": enabled}
+
+
+@app.post("/portal/admin/restricted-terms", status_code=201)
+def portal_admin_add_restricted_term(
+    payload: PortalRestrictedTermRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    try:
+        return {"term": asdict(RESTRICTED_TERMS.add(identity["user_id"], payload.term))}
+    except RestrictedTermError as exc:
+        status = 403 if str(exc) == "admin_required" else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@app.delete("/portal/admin/restricted-terms/{rule_id}")
+def portal_admin_remove_restricted_term(
+    rule_id: str,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, bool]:
+    try:
+        RESTRICTED_TERMS.remove(identity["user_id"], rule_id)
+    except RestrictedTermError as exc:
+        status = 403 if str(exc) == "admin_required" else 404
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return {"removed": True}
+
+
 @app.patch("/portal/admin/users/{target_user_id}/role")
 def portal_admin_set_role(
     target_user_id: str,
@@ -2386,7 +2920,7 @@ def portal_admin_set_absence(
 ) -> dict[str, Any]:
     _portal_call(lambda: PORTAL_GOVERNANCE.set_absence(
         identity["user_id"], payload.manager_user_id, payload.absent_from,
-        payload.absent_until, payload.reason,
+        payload.absent_until, payload.reason, payload.delegate_user_id,
     ))
     return {"ok": True}
 
@@ -2456,6 +2990,9 @@ def portal_admin_request_knowledgebase_change(
 ) -> dict[str, Any]:
     if identity["role"] == "portal_admin":
         require_fresh_step_up(request, identity)
+    access_snapshot = None
+    if payload.kind in {"archive", "delete"} and payload.knowledgebase_id:
+        access_snapshot = _knowledgebase_access_snapshot(payload.knowledgebase_id)
     change = _portal_call(
         lambda: PORTAL_GOVERNANCE.request_knowledgebase_change(
             identity["user_id"],
@@ -2464,6 +3001,15 @@ def portal_admin_request_knowledgebase_change(
             payload=payload.payload,
         )
     )
+    if change.status == "approved" and access_snapshot:
+        label, readers = access_snapshot
+        action = "archiviert" if payload.kind == "archive" else "gelöscht"
+        _notify_access_removed(
+            readers, subject_type="knowledgebase", subject_id=change.knowledgebase_id or payload.knowledgebase_id,
+            subject_title=label, status=f"knowledgebase_{payload.kind}",
+            message=f"Der Wissensbereich wurde {action} und ist in Vinci nicht mehr abrufbar.",
+            reason=str(payload.payload.get("reason") or ""),
+        )
     return {"change": serialize_governance(change)}
 
 @app.post("/portal/admin/knowledgebase-changes/{request_id}/decision")
@@ -2474,6 +3020,10 @@ def portal_admin_decide_knowledgebase_change(
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
     require_fresh_step_up(request, identity)
+    pending_change = _portal_call(lambda: PORTAL_GOVERNANCE.change_request(request_id))
+    access_snapshot = None
+    if pending_change.kind in {"archive", "delete"} and pending_change.knowledgebase_id:
+        access_snapshot = _knowledgebase_access_snapshot(pending_change.knowledgebase_id)
     change = _portal_call(
         lambda: PORTAL_GOVERNANCE.decide_knowledgebase_change(
             identity["user_id"],
@@ -2482,6 +3032,16 @@ def portal_admin_decide_knowledgebase_change(
             reason=payload.reason,
         )
     )
+    if payload.approve and access_snapshot:
+        label, readers = access_snapshot
+        action = "archiviert" if pending_change.kind == "archive" else "gelöscht"
+        _notify_access_removed(
+            readers, subject_type="knowledgebase",
+            subject_id=change.knowledgebase_id or pending_change.knowledgebase_id,
+            subject_title=label, status=f"knowledgebase_{pending_change.kind}",
+            message=f"Der Wissensbereich wurde {action} und ist in Vinci nicht mehr abrufbar.",
+            reason=payload.reason,
+        )
     return {"change": serialize_governance(change)}
 
 @app.get("/unlock/status")
@@ -3102,4 +3662,3 @@ def semantic_search(
             )
     results.sort(key=lambda item: item["score"], reverse=True)
     return {"query": clean_query, "results": results[:limit]}
-

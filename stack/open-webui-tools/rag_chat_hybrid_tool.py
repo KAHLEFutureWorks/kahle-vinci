@@ -8,8 +8,10 @@ description: Berechtigungsgefilterte Dense+BM25-Suche mit RRF, Reranking und Que
 #     python stack/open-webui-tools/build_tools.py
 #     -> stack/open-webui-tools/dist/<diese Datei>
 
+import hashlib
 import json
 import os
+import time
 import requests
 from pydantic import BaseModel, Field
 
@@ -37,6 +39,27 @@ def _hybrid_user_id(user):
     return str(user.get("id") or (user.get("user") or {}).get("id") or "").strip()
 
 
+def _hybrid_record_event(portal_url, internal_key, user_id, query, found,
+                         source_count, started_at, error_code=None):
+    """Best-effort Betriebsmetrik ohne Fragetext oder Dokumentinhalt."""
+    try:
+        requests.post(
+            f"{portal_url.rstrip('/')}/portal/internal/retrieval-events",
+            headers={"X-API-Key": internal_key, "Content-Type": "application/json"},
+            json={
+                "user_id": user_id,
+                "query_hash": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+                "found": bool(found),
+                "source_count": int(source_count),
+                "latency_ms": max(0, round((time.monotonic() - started_at) * 1000)),
+                "error_code": error_code,
+            },
+            timeout=1,
+        )
+    except requests.RequestException:
+        pass
+
+
 class Tools:
     class Valves(BaseModel):
         PORTAL_API_URL: str = Field(default="http://kb-admin-api:8092")
@@ -48,6 +71,7 @@ class Tools:
         IONOS_API_KEY: str = Field(default="")
         IONOS_EMBEDDING_MODEL: str = Field(default="")
         RERANKER_MODEL: str = Field(default="Qwen/Qwen3-VL-Reranker-8B")
+        MINIMUM_RERANK_SCORE: float = Field(default=0.25, ge=0, le=1)
         TIMEOUT_S: int = Field(default=60)
 
     def __init__(self):
@@ -56,6 +80,7 @@ class Tools:
     async def rag_chat(self, query: str = "", __user__: dict | None = None, __chat_id__: str = "", __message_id__: str = "") -> str:
         """Durchsucht ausschließlich freigegebenes Wissen, das der angemeldete Nutzer lesen darf."""
         query = str(query or "").strip()
+        started_at = time.monotonic()
         user_id = _hybrid_user_id(__user__)
         internal_key = self.valves.INTERNAL_API_KEY or _hybrid_setting("KB_ADMIN_MAINTENANCE_API_KEY")
         api_key = self.valves.IONOS_API_KEY or _hybrid_setting("RAG_OPENAI_API_KEY", _hybrid_setting("OPENAI_API_KEY"))
@@ -72,16 +97,20 @@ class Tools:
                 self.valves.QDRANT_URL, self.valves.COLLECTION_ALIAS,
                 RemoteSparseQueryEncoder(self.valves.KB_SYNC_URL, internal_key),
                 IonosReranker(base_url, api_key, self.valves.RERANKER_MODEL),
-                timeout=int(self.valves.TIMEOUT_S),
+                timeout=int(self.valves.TIMEOUT_S), minimum_rerank_score=self.valves.MINIMUM_RERANK_SCORE,
             )
             chunks = retriever.retrieve(query, dense, scope)
         except Exception as exc:
+            _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
+                                 False, 0, started_at, type(exc).__name__)
             return (
                 "KAHLE_RAG_RESULT\nFOUND: false\n"
                 "ANSWER: Dazu habe ich keine verlässliche freigegebene Information.\n"
                 f"ERROR_CODE: {type(exc).__name__}"
             )
         if not chunks:
+            _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
+                                 False, 0, started_at)
             return "KAHLE_RAG_RESULT\nFOUND: false\nANSWER: Dazu habe ich keine verlässliche freigegebene Information."
         context, sources = [], []
         for index, chunk in enumerate(chunks, 1):
@@ -93,6 +122,8 @@ class Tools:
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
             })
         joined_context = "\n\n".join(context)
+        _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
+                             True, len(sources), started_at)
         return (
             "KAHLE_RAG_RESULT\nFOUND: true\n"
             "INSTRUCTION: Antworte nur aus CONTEXT. Belege jede konkrete interne Aussage mit [Quelle N]. "

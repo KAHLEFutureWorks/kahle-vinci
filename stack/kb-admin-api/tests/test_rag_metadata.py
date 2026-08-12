@@ -35,3 +35,24 @@ def test_trusted_frontmatter_replaces_uploaded_frontmatter_and_tracks_activation
     assert "rag_index: true" in active
     assert 'valid_until: "2026-10-29"' in active
     assert f'source_url: "/wissen/api/portal/sources/{case.version_id}"' in active
+
+
+def test_metadata_write_retries_a_transient_windows_file_lock(tmp_path: Path, monkeypatch):
+    governance, lifecycle, kb_id = setup(tmp_path)
+    case = submit(lifecycle, kb_id)
+    rag = tmp_path / "files" / case.document_id / case.version_id / "rag.md"
+    rag.parent.mkdir(parents=True)
+    rag.write_text("# Inhalt\n\nSicher.", encoding="utf-8")
+    real_replace = Path.replace
+    attempts = []
+
+    def transient_lock(source, target):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise PermissionError(5, "Zugriff verweigert")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", transient_lock)
+    RAGMetadataWriter(governance.store, tmp_path / "files").write(case.version_id)
+    assert len(attempts) == 2
+    assert f'document_id: "{case.document_id}"' in rag.read_text(encoding="utf-8")

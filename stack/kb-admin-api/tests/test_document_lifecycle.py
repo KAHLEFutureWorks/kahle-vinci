@@ -87,8 +87,6 @@ def test_standard_manager_flow_activates_with_60_workday_expiry():
             markdown_sha256=SHA_C,
             analysis=lifecycle_module.Analysis(),
         )
-        assert case.status == "pending_employee_decision"
-        case = lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="create")
         assert case.status == "pending_manager_approval"
         case = lifecycle.decide(
             case_id=case.case_id,
@@ -96,16 +94,82 @@ def test_standard_manager_flow_activates_with_60_workday_expiry():
             decision="approve",
             reason="Fachlich geprüft",
         )
-        assert case.status == "pending_admin_approval"
-        case = lifecycle.decide(
-            case_id=case.case_id, actor_user_id="admin", decision="approve", reason="Portalfreigabe",
-        )
         assert case.status == "ready_to_activate"
         case = lifecycle.activate(case_id=case.case_id)
         version = lifecycle.version_record(case.version_id)
         assert case.status == "active"
         assert version["valid_from"] == "2026-08-06"
         assert version["valid_until"] == "2026-10-29"
+
+
+def test_clean_area_document_is_ready_for_automatic_activation_when_enabled():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, _, kb_id = setup(Path(directory))
+        lifecycle = lifecycle_module.DocumentLifecycle(
+            governance.store,
+            governance,
+            today=lambda: date(2026, 8, 6),
+            now=lambda: "2026-08-06T10:00:00+00:00",
+            identifier=lambda: str(__import__("uuid").uuid4()),
+            holidays=set(),
+            auto_activation_enabled=lambda: True,
+        )
+        case = submit(lifecycle, kb_id)
+        analyzed = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(),
+        )
+        assert analyzed.status == "ready_to_activate"
+        assert analyzed.requested_action == "create"
+        assert analyzed.requires_admin is False
+
+
+def test_clean_general_document_goes_directly_to_manager_without_employee_action():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, _, _ = setup(Path(directory))
+        general = governance.request_knowledgebase_change(
+            "portal", "create", payload={"slug":"kahleallgemein","label":"KAHLE-Allgemein"},
+        )
+        governance.grant_access(
+            "admin", "employee", general.knowledgebase_id, can_read=True, can_upload=True,
+        )
+        lifecycle = lifecycle_module.DocumentLifecycle(
+            governance.store, governance, auto_activation_enabled=lambda: True,
+        )
+        case = submit(lifecycle, general.knowledgebase_id)
+        analyzed = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(),
+        )
+        assert analyzed.status == "pending_manager_approval"
+        assert analyzed.requested_action == "create"
+        approved = lifecycle.decide(
+            case_id=case.case_id, actor_user_id="manager", decision="approve",
+            reason="Für KAHLE-Allgemein fachlich geprüft",
+        )
+        assert approved.status == "ready_to_activate"
+
+
+def test_portal_admin_can_resolve_critical_own_upload_once_with_written_reason():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, lifecycle, kb_id = setup(Path(directory))
+        governance.grant_access("portal", "portal", kb_id, can_read=True, can_upload=True)
+        case = lifecycle.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal",
+            target_knowledgebase_id=kb_id, title="Kritische Richtlinie",
+            original_filename="richtlinie.md", original_file_id="file-portal",
+            original_sha256="d"*64, valid_workdays=60, confidentiality="restricted",
+        )
+        analyzed = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256="e"*64, markdown_sha256="f"*64,
+            analysis=lifecycle_module.Analysis(restricted_terms=("TPI",)),
+        )
+        assert analyzed.status == "pending_manager_approval"
+        approved = lifecycle.decide(
+            case_id=case.case_id, actor_user_id="portal", decision="approve",
+            reason="Als Portal-Admin geprüft; TPI ist hier fachlich erforderlich.",
+        )
+        assert approved.status == "ready_to_activate"
 
 
 def test_cross_kb_or_contradiction_requires_admin_and_cannot_be_manager_approved():
@@ -123,17 +187,12 @@ def test_cross_kb_or_contradiction_requires_admin_and_cannot_be_manager_approved
         )
         assert case.requires_admin is True
         case = lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="create")
+        assert case.status == "pending_manager_approval"
+        case = lifecycle.decide(
+            case_id=case.case_id, actor_user_id="manager", decision="approve",
+            reason="Fachlich vorgeprüft",
+        )
         assert case.status == "pending_admin_approval"
-        try:
-            lifecycle.decide(
-                case_id=case.case_id,
-                actor_user_id="manager",
-                decision="approve",
-                reason="Soll passen",
-            )
-            raise AssertionError("manager must not resolve cross-kb conflicts")
-        except lifecycle_module.LifecycleError as exc:
-            assert str(exc) == "admin_required"
         approved = lifecycle.decide(
             case_id=case.case_id,
             actor_user_id="admin",
@@ -162,7 +221,12 @@ def test_exact_duplicate_is_blocked_and_only_publish_or_discard_is_allowed():
         escalated = lifecycle.choose_action(
             case_id=case.case_id, actor_user_id="employee", action="publish_existing"
         )
-        assert escalated.status == "pending_admin_approval"
+        assert escalated.status == "pending_manager_approval"
+        approved = lifecycle.decide(
+            case_id=case.case_id, actor_user_id="manager", decision="approve",
+            reason="Dublette und Zielbereich geprüft",
+        )
+        assert approved.status == "pending_admin_approval"
 
 
 def test_new_version_atomically_supersedes_previous_active_version():
@@ -175,14 +239,12 @@ def test_new_version_atomically_supersedes_previous_active_version():
             markdown_sha256=SHA_C,
             analysis=lifecycle_module.Analysis(),
         )
-        lifecycle.choose_action(case_id=first.case_id, actor_user_id="employee", action="create")
         lifecycle.decide(
             case_id=first.case_id,
             actor_user_id="manager",
             decision="approve",
             reason="Erstfassung",
         )
-        lifecycle.decide(case_id=first.case_id, actor_user_id="admin", decision="approve", reason="Portalfreigabe")
         active_first = lifecycle.activate(case_id=first.case_id)
 
         second = submit(lifecycle, kb_id, sha="d" * 64, document_id=first.document_id)
@@ -199,9 +261,6 @@ def test_new_version_atomically_supersedes_previous_active_version():
             decision="approve",
             reason="Neue gültige Version",
         )
-        lifecycle.decide(
-            case_id=second.case_id, actor_user_id="admin", decision="approve", reason="Portalfreigabe"
-        )
         active_second = lifecycle.activate(case_id=second.case_id)
         assert lifecycle.version_record(active_first.version_id)["status"] == "superseded"
         assert lifecycle.version_record(active_second.version_id)["status"] == "active"
@@ -216,7 +275,7 @@ def test_failed_index_activation_restores_previous_active_version():
             analysis=lifecycle_module.Analysis(cross_kb_matches=("admin-review",)),
         )
         lifecycle.choose_action(case_id=first.case_id, actor_user_id="employee", action="create")
-        lifecycle.decide(case_id=first.case_id, actor_user_id="admin", decision="approve", reason="Freigabe")
+        lifecycle.decide(case_id=first.case_id, actor_user_id="manager", decision="approve", reason="Fachprüfung")
         first = lifecycle.activate(case_id=first.case_id)
 
         second = submit(lifecycle, kb_id, sha="d" * 64, document_id=first.document_id)
@@ -225,7 +284,7 @@ def test_failed_index_activation_restores_previous_active_version():
             analysis=lifecycle_module.Analysis(cross_kb_matches=("admin-review",)),
         )
         lifecycle.choose_action(case_id=second.case_id, actor_user_id="employee", action="replace")
-        lifecycle.decide(case_id=second.case_id, actor_user_id="admin", decision="approve", reason="Freigabe")
+        lifecycle.decide(case_id=second.case_id, actor_user_id="manager", decision="approve", reason="Fachprüfung")
         previous = lifecycle.active_version(first.document_id)
         lifecycle.activate(case_id=second.case_id)
         rolled_back = lifecycle.rollback_activation(
@@ -252,9 +311,7 @@ def test_cross_kb_exact_duplicate_publishes_existing_canonical_document_only():
         first = submit(lifecycle, first_kb)
         lifecycle.record_analysis(case_id=first.case_id, normalized_sha256=SHA_B,
                                   markdown_sha256=SHA_C, analysis=lifecycle_module.Analysis())
-        lifecycle.choose_action(case_id=first.case_id, actor_user_id="employee", action="create")
         lifecycle.decide(case_id=first.case_id, actor_user_id="manager", decision="approve", reason="Fachlich gepr?ft")
-        lifecycle.decide(case_id=first.case_id, actor_user_id="admin", decision="approve", reason="Freigegeben")
         first = lifecycle.activate(case_id=first.case_id)
 
         second_kb = governance.request_knowledgebase_change(
@@ -272,6 +329,8 @@ def test_cross_kb_exact_duplicate_publishes_existing_canonical_document_only():
                                                cross_kb_matches=(first.document_id,)),
         )
         lifecycle.choose_action(case_id=duplicate.case_id, actor_user_id="employee", action="publish_existing")
+        lifecycle.decide(case_id=duplicate.case_id, actor_user_id="manager", decision="approve",
+                         reason="Zusätzliche Veröffentlichung fachlich geprüft")
         ready = lifecycle.decide(case_id=duplicate.case_id, actor_user_id="admin", decision="approve",
                                  reason="Zus?tzliche Ver?ffentlichung fachlich gepr?ft")
         assert ready.status == "ready_to_activate"
@@ -305,9 +364,7 @@ def test_real_upload_is_bound_to_selected_version_candidate_before_replacement()
         first = submit(lifecycle, kb_id)
         lifecycle.record_analysis(case_id=first.case_id, normalized_sha256=SHA_B,
                                   markdown_sha256=SHA_C, analysis=lifecycle_module.Analysis())
-        lifecycle.choose_action(case_id=first.case_id, actor_user_id="employee", action="create")
         lifecycle.decide(case_id=first.case_id, actor_user_id="manager", decision="approve", reason="Fachlich gepr?ft")
-        lifecycle.decide(case_id=first.case_id, actor_user_id="admin", decision="approve", reason="Freigegeben")
         first = lifecycle.activate(case_id=first.case_id)
 
         draft = submit(lifecycle, kb_id, sha="d" * 64)
@@ -332,7 +389,7 @@ def test_real_upload_is_bound_to_selected_version_candidate_before_replacement()
         assert pending.status == "pending_manager_approval"
 
 
-def test_any_prompt_injection_signal_bypasses_employee_and_goes_directly_to_admin():
+def test_any_prompt_injection_signal_requires_manager_then_admin():
     with tempfile.TemporaryDirectory() as directory:
         _, lifecycle, kb_id = setup(Path(directory))
         case = submit(lifecycle, kb_id)
@@ -340,9 +397,16 @@ def test_any_prompt_injection_signal_bypasses_employee_and_goes_directly_to_admi
             case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
             analysis=lifecycle_module.Analysis(prompt_injection_risk="medium"),
         )
-        assert flagged.status == "pending_admin_approval"
+        assert flagged.status == "pending_manager_approval"
         assert flagged.requires_admin is True
         assert lifecycle.tasks_for("employee") == []
+        assert lifecycle.tasks_for("admin") == []
+        assert lifecycle.tasks_for("manager")[0].case_id == flagged.case_id
+        approved = lifecycle.decide(
+            case_id=flagged.case_id, actor_user_id="manager", decision="approve",
+            reason="Fachlich vorgeprüft",
+        )
+        assert approved.status == "pending_admin_approval"
         assert lifecycle.tasks_for("admin")[0].case_id == flagged.case_id
 
 
@@ -409,5 +473,6 @@ def test_admins_also_see_their_own_open_uploads():
             case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
             analysis=lifecycle_module.Analysis(),
         )
-        assert checked.status == "pending_employee_decision"
-        assert case.case_id in {task.case_id for task in lifecycle.tasks_for("admin")}
+        assert checked.status == "pending_manager_approval"
+        assert case.case_id not in {task.case_id for task in lifecycle.tasks_for("admin")}
+        assert case.case_id in {task.case_id for task in lifecycle.tasks_for("portal")}

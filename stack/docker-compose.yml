@@ -221,6 +221,7 @@ services:
       KB_ADMIN_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
       KB_ADMIN_MAX_UPLOAD_BYTES: "52428800"
       KB_PORTAL_DB_PATH: /portal-data/wissensportal.sqlite3
+      KB_PORTAL_AUTO_ACTIVATION_ENABLED: "${KB_PORTAL_AUTO_ACTIVATION_ENABLED:-false}"
       KB_PORTAL_STEP_UP_SECRET: ${KB_PORTAL_STEP_UP_SECRET:-}
       KB_PORTAL_ENTRA_TENANT_ID: ${MICROSOFT_CLIENT_TENANT_ID:-}
       KB_PORTAL_ENTRA_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
@@ -263,6 +264,7 @@ services:
       context: ./kb-admin-api
       dockerfile: Dockerfile
     container_name: kb-maintenance
+    user: "1000:1000"
     restart: unless-stopped
     command: ["python", "-m", "app.maintenance_worker"]
     environment:
@@ -275,6 +277,7 @@ services:
       KB_MAIL_CLIENT_ID: ${KB_MAIL_CLIENT_ID:-}
       KB_MAIL_CLIENT_SECRET: ${KB_MAIL_CLIENT_SECRET:-}
       KB_MAIL_SENDER: ${KB_MAIL_SENDER:-}
+      KB_MAIL_CAPTURE_PATH: ${KB_MAIL_CAPTURE_PATH:-/portal-data/mail-capture.jsonl}
     volumes:
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-portal-data:/portal-data"
     depends_on:

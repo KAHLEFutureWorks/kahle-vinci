@@ -8,7 +8,7 @@
 
 ## 1. Zusammenfassung
 
-KAHLE-Vinci erhält ein gemeinsames Wissensportal, über das Mitarbeitende Dokumente einfach und sicher in freigegebene Wissensbereiche einbringen können. Das Portal übernimmt den vollständigen Lebenszyklus eines Dokuments: Upload, Sicherheitsprüfung, Konvertierung in RAG-optimiertes Markdown, globale Dubletten- und Konfliktprüfung, menschliche Freigabe, Veröffentlichung, Quellenverlinkung, Gültigkeitsüberwachung, Versionierung, Archivierung und Löschung.
+KAHLE-Vinci erhält ein gemeinsames Wissensportal, über das Mitarbeitende Dokumente einfach und sicher in freigegebene Wissensbereiche einbringen können. Das Portal übernimmt den vollständigen Lebenszyklus eines Dokuments: Upload, Sicherheitsprüfung, Konvertierung in RAG-optimiertes Markdown, globale Dubletten- und Konfliktprüfung, risikobasierte Freigabe, Veröffentlichung, Quellenverlinkung, Gültigkeitsüberwachung, Versionierung, Archivierung und Löschung.
 
 Der eigentliche Hebel liegt nicht nur in einer komfortablen Upload-Oberfläche. Entscheidend ist, dass Vinci ausschließlich freigegebene, aktuelle und für den jeweiligen Nutzer berechtigte Quellen verwendet. Dokumente dürfen nicht unkontrolliert doppelt entstehen. Alte Versionen dürfen nicht parallel aktiv bleiben. Widersprüche müssen sichtbar werden, bevor sie zu falschen Antworten führen.
 
@@ -69,7 +69,7 @@ Das Wissensportal soll die Pflege des KAHLE-Vinci-Wissens so einfach machen, das
 - einfacher Upload mit Drag-and-drop
 - klare, rollenabhängige UI ohne technische Fachbegriffe
 - globale Prüfung jedes Uploads über den gesamten Wissensbestand
-- menschliche Freigabe für jede Aktivierung oder Verlängerung
+- risikobasierte Aktivierung: automatische Veröffentlichung sauberer Bereichsdokumente, Führungskraftprüfung für allgemeine oder fachlich auffällige Fälle und zusätzliche Adminprüfung nur für kritische Fälle
 - automatische und rückrollbare Versionierung
 - automatische Deaktivierung abgelaufener Dokumente
 - verpflichtende Quellenangaben in jeder internen Wissensantwort
@@ -139,6 +139,8 @@ Eine Führungskraft darf keine erkannten Knowledgebase-übergreifenden Treffer o
 
 ### 6.3 Admin
 
+Jeder Admin muss einem aktiven Portal-Admin als Führungskraft zugeordnet sein. Eigene Uploads eines Admins folgen damit demselben fachlichen Freigabeweg wie andere Uploads und werden nicht als eigene Adminaufgabe an ihn selbst zurückgespielt.
+
 Ein Admin darf:
 
 - Benutzer aus der synchronisierten OpenWebUI-Benutzerliste für das Portal aktivieren
@@ -179,7 +181,7 @@ Ein Portal-Admin besitzt alle Rechte. Er darf insbesondere:
 - sicherheitsrelevante Systemeinstellungen verwalten
 - Admin-Sonderfälle und Overrides durchführen
 
-Es gilt kein Vier-Augen-Prinzip für Portal-Admins. Die einzige technische Sicherung lautet: Es muss jederzeit mindestens ein aktiver Portal-Admin vorhanden sein.
+Portal-Admins benötigen keine Führungskraft. Sie dürfen auch eigene oder an sie eskalierte Vorgänge ohne zweite Freigabe abschließend entscheiden. Eine reine Freigabe benötigt keine Begründung. Ablehnungen, Weiterleitungen, das Überstimmen einer früheren Ablehnung und sonstige Overrides benötigen weiterhin eine selbst geschriebene Begründung; vorbelegte Standardbegründungen erfüllen diese Pflicht nicht. Es gilt kein Vier-Augen-Prinzip für Portal-Admins. Die einzige weitere technische Sicherung lautet: Es muss jederzeit mindestens ein aktiver Portal-Admin vorhanden sein.
 
 ## 7. Identität und Anmeldung
 
@@ -243,14 +245,15 @@ Wird ein Owner deaktiviert oder verlässt das Unternehmen:
 ### 8.3 Führungskräfte und Vertretungen
 
 - Führungskräfte werden im MVP manuell durch Admin oder Portal-Admin zugeordnet.
-- Für jede Führungskraft muss mindestens eine Vertretung hinterlegt sein.
-- Eine zeitlich begrenzte Abwesenheit kann erfasst werden.
+- Eine Vertretung wird zusammen mit der zeitlich begrenzten Abwesenheit der Führungskraft in einem gemeinsamen Vorgang erfasst; separate, dauerhaft sichtbare Eingabebereiche sind nicht erforderlich.
+- Beim Entfernen der Abwesenheit wird auch die daran gekoppelte Vertretung beendet.
 - Während der Abwesenheit gehen neue Fälle direkt an die Vertretung.
 - Ohne Abwesenheit erfolgt nach zwei Arbeitstagen eine Erinnerung.
 - Nach vier Arbeitstagen erhält die Vertretung den Fall zusätzlich.
 - Nach sechs Arbeitstagen wird an einen Admin eskaliert.
 - Zeitkritische Ablauffälle werden entsprechend früher eskaliert.
 - Offene Fälle werden niemals automatisch genehmigt.
+- Die Benutzer- und Rechteverwaltung zeigt eine kompakte Benutzerliste und die Daten des ausgewählten Benutzers direkt daneben. Zuordnung, Owner-Berechtigung und Knowledgebase-Rechte werden erst über einen sichtbaren Speichern-Button gemeinsam übernommen; der Speicherstatus ist eindeutig erkennbar.
 
 ## 9. Dokumentmodell
 
@@ -356,7 +359,7 @@ Jedes Dokument erhält einen Quellentyp und eine Autoritätsstufe. Ausgangsmodel
 5. Prozess- oder Arbeitsanweisung
 6. Informations- oder Schulungsunterlage
 
-Die Hierarchie ist eine Entscheidungshilfe, keine automatische Konfliktentscheidung. Erkannte Widersprüche werden immer direkt an einen Admin eskaliert. Dieser hinterlegt bei der Entscheidung strukturierte Beziehungen wie:
+Die Hierarchie ist eine Entscheidungshilfe, keine automatische Konfliktentscheidung. Erkannte Widersprüche durchlaufen immer Stufe 3: zuerst die Führungskraft und bei Zustimmung zusätzlich einen Admin. Der Admin hinterlegt bei der Entscheidung strukturierte Beziehungen wie:
 
 - `supersedes`
 - `overrides`
@@ -455,10 +458,11 @@ Der Browser muss für die Verarbeitung nicht geöffnet bleiben.
 9. Das System vergleicht global über alle Knowledgebases.
 10. Der Nutzer sieht Ergebnis, mögliche Treffer und eine empfohlene Aktion.
 11. Der Nutzer wählt seine gewünschte Aktion.
-12. Die Führungskraft erhält den vollständigen Vorgang.
-13. Die Führungskraft bestätigt, lehnt ab, ändert die Aktion oder eskaliert.
-14. Nach Freigabe wird die Version atomar veröffentlicht und indexiert.
-15. Der Nutzer wird über das Ergebnis informiert.
+12. Das System ordnet den Vorgang automatisch einer der drei Freigabestufen aus Abschnitt 13.3 zu.
+13. Ein sauberer Upload für genau eine Bereichs-Knowledgebase wird ohne menschliche Freigabe atomar veröffentlicht und indexiert.
+14. Ein allgemeiner oder fachlich auffälliger Vorgang wird der Führungskraft vorgelegt. Sie bestätigt, lehnt ab, ändert die Aktion oder eskaliert.
+15. Ein kritischer Vorgang wird zuerst von der Führungskraft und anschließend zusätzlich von einem Admin oder Portal-Admin geprüft.
+16. Der Nutzer wird über Aktivierung, Ablehnung oder weiteren Prüfbedarf informiert.
 
 ### 13.2 Mögliche Nutzeraktionen
 
@@ -473,19 +477,56 @@ Je nach Prüfergebnis:
 
 „Beide hochladen“ ist keine allgemeine Standardaktion. Parallele Dokumente sind nur erlaubt, wenn ihr Geltungsbereich eindeutig getrennt ist, zum Beispiel nach Standort, Marke, Abteilung, Zielgruppe, Prozess oder Zeitraum.
 
-### 13.3 Direkte Admin-Eskalation
+### 13.3 Risikobasierte Freigabestufen
 
-Folgende Fälle gehen ohne abschließende Führungskraftentscheidung direkt an einen Admin:
+Das System wählt anhand des Ziel-Wissensbereichs und der Prüfergebnisse automatisch eine von drei Stufen. Die Einstufung, die auslösenden Befunde und jede Entscheidung werden protokolliert.
 
-- relevante Übereinstimmung mit einer anderen Knowledgebase
-- möglicher fachlicher Widerspruch
-- zusätzliche Veröffentlichung eines bestehenden Dokuments in einer weiteren Knowledgebase
-- unklare Autoritäts- oder Vorrangbeziehung
-- kritischer Prompt-Injection- oder Sensitivitätstreffer
+#### Stufe 1: automatische Aktivierung
+
+Die automatische Aktivierung besitzt einen zentralen, auditierten Schalter. In der lokalen Testumgebung ist sie standardmäßig aktiviert. In Produktion bleibt sie bis zur fachlichen Abnahme standardmäßig deaktiviert. Nur ein Portal-Admin darf den Schalter mit schriftlicher Begründung ändern; Admins sehen den aktuellen Zustand nur lesend.
+
+Ein Dokument darf direkt atomar veröffentlicht und indexiert werden, wenn alle folgenden Bedingungen erfüllt sind:
+
+- Ziel ist genau eine fachlich oder organisatorisch abgegrenzte Bereichs-Knowledgebase und nicht `kahleallgemein` („KAHLE-Allgemein“).
+- Es gibt keine Dublette, keinen Versionskandidaten, keine unklare Dokumentenpriorität und keinen fachlichen Widerspruch.
+- Es gibt keinen Sicherheits-, Sperrwort-, Sensitivitäts- oder Prompt-Injection-Befund.
+- Konvertierung und Metadatenprüfung sind vollständig und sicher bestanden.
+- Owner, Gültigkeit, Zielbereich und Zugriffsrechte sind gültig.
+
+#### Stufe 2: Freigabe durch die Führungskraft
+
+Eine abschließende Freigabe durch die Führungskraft des Owners ist erforderlich, wenn mindestens einer dieser Fälle vorliegt:
+
+- Das Dokument soll in `kahleallgemein` („KAHLE-Allgemein“) veröffentlicht werden, auch wenn keine Auffälligkeit erkannt wurde.
+- Es wurde eine Dublette oder hohe inhaltliche Übereinstimmung erkannt.
+- Es wurde eine ältere oder neuere Version desselben Dokuments erkannt.
+- Die Autorität, Dokumentenpriorität oder Ersetzungsentscheidung ist unklar, ohne dass bereits ein fachlicher Widerspruch vorliegt.
+
+Eine exakte Dublette wird nicht erneut als separates Dokument veröffentlicht. Die Führungskraft kann sie verwerfen, einer bestehenden Quelle zuordnen oder eine nachvollziehbare Versionsaktion bestätigen.
+
+#### Stufe 3: Freigabe durch Führungskraft und Admin
+
+Zuerst entscheidet die Führungskraft des Owners. Bei Zustimmung folgt zusätzlich die Freigabe durch Admin oder Portal-Admin. Diese Stufe gilt insbesondere für:
+
+- mögliche fachliche Widersprüche
+- kritische Sicherheits-, Sensitivitäts-, Sperrwort- oder Prompt-Injection-Befunde, soweit die Datei technisch sicher untersucht werden konnte
+- Veröffentlichung eines kanonischen Dokuments in mehreren Wissensbereichen
 - nicht ausreichend sichere Konvertierungsqualität
-- technischer Sonderfall
+- sonstige kritische oder vom Regelwerk nicht eindeutig entscheidbare Fälle
 
-Der Admin sieht Original, RAG-Markdown, Vergleichsdokumente, Fundstellen, Systembegründung und mögliche Aktionen.
+Führungskraft und Admin sehen Original, RAG-Markdown, Vergleichsdokumente, Fundstellen, Systembegründung und mögliche Aktionen. Lehnt die Führungskraft ab, endet der Vorgang ohne Adminfreigabe. Eine Eskalation legt ihn direkt dem Admin vor, ersetzt aber nicht die dokumentierte fachliche Bewertung.
+
+Eine Freigabe benötigt keine zusätzliche Begründung. Ablehnung und Weiterleitung benötigen eine kurze schriftliche Begründung. Nach dem Absenden sperrt die Oberfläche den gesamten Aufgabenbereich gegen Mehrfachklicks und parallele Freigaben. Ein zentraler Ladehinweis nennt das gerade verarbeitete Dokument und bleibt bis zum erfolgreichen Abschluss oder einer verständlichen Fehlermeldung sichtbar.
+
+Freigabeentscheidungen werden zusätzlich serverseitig persistent und global serialisiert. Treffen Entscheidungen verschiedener Nutzer gleichzeitig oder kurz nacheinander ein, wird genau ein Vorgang verarbeitet; alle weiteren erhalten eine Warteschlangenposition und werden in Eingangsreihenfolge ausgeführt. Ein Fall kann nicht mehrfach aktiv eingereiht werden. Aktivierung, Metadatenmaterialisierung und atomarer Hybridindexwechsel gehören gemeinsam zu diesem serialisierten Abschnitt. Zeitlich begrenzte Worker-Leases verhindern, dass ein abgestürzter Verarbeitungsschritt die Warteschlange dauerhaft blockiert.
+
+Die UI bestätigt eine dauerhaft gespeicherte Entscheidung unmittelbar und zeigt den Vorgang anschließend unter „Veröffentlichung läuft“. Sie blockiert den Nutzer nicht bis zum Ende der Indexierung. Der Abschluss oder Fehler wird als Mitteilung zugestellt.
+
+Normale Aktivierungen, Ersetzungen, Rechte-/Metadatenänderungen und Deaktivierungen aktualisieren den Hybridindex dokumentweise. Dabei werden nur die Chunks des betroffenen Dokuments neu eingebettet. Neue Punkte bleiben zunächst unveröffentlicht; alte Punkte werden fehlersicher ausgeblendet und die neue Version anschließend sichtbar geschaltet. Ein kompletter Indexneuaufbau ist auf initiale Migration, Restore sowie Änderungen an Indexschema, Embeddingmodell oder Chunking beschränkt.
+
+#### Nicht übersteuerbare technische Blockade
+
+Malware, ausführbare Schadbestandteile, nicht sicher entschlüsselbare Dateien oder technisch nicht untersuchbare Inhalte bleiben in Quarantäne. Sie können weder durch Führungskraft noch Admin veröffentlicht werden. Nach Bereinigung ist ein neuer Upload erforderlich.
 
 ## 14. Sicherheits- und Inhaltsprüfungen
 
@@ -501,10 +542,17 @@ Vor jeder fachlichen Verarbeitung laufen mindestens:
 8. Hash- und Dublettenprüfung
 9. Versions- und Ähnlichkeitsprüfung
 10. Widerspruchsanalyse
+11. administrativ gepflegte Sperrwortprüfung
 
 Dokumentinhalt gilt immer als `untrusted content` und niemals als Systemanweisung. Verdächtige Anweisungen, versteckte Texte oder Tool-Manipulationen führen zu Quarantäne und Adminprüfung.
 
 Harte Dateisicherheits- und Malwareprüfungen dürfen auch durch einen Portal-Admin nicht übersprungen werden.
+
+### 14.1 Administrierbare Sperrwörter
+
+Admins und Portal-Admins können Begriffe oder feste Wortgruppen hinterlegen, die in Vinci nicht ungeprüft als Wissen veröffentlicht werden dürfen. Die Prüfung läuft serverseitig auf dem vollständig aufbereiteten Markdown und erneut bei jeder Korrekturversion. Sie berücksichtigt Groß- und Kleinschreibung nicht; kurze Begriffe werden als vollständige Wörter behandelt.
+
+Ein Treffer löscht oder veröffentlicht das Dokument nicht. Er stoppt den normalen Ablauf und löst Stufe 3 aus: Zuerst prüft die Führungskraft, bei Zustimmung anschließend ein Admin oder Portal-Admin. Alle Beteiligten sehen die gefundenen Begriffe sowie Original und RAG-Markdown. Änderungen der Sperrwortliste werden auditiert. Die initialen Regeln sind `TPI` und `Reparaturleitfaden`.
 
 ## 15. Dubletten-, Versions- und Konfliktlogik
 
@@ -528,7 +576,7 @@ Das LLM liefert nur Entscheidungshilfe.
 - `sehr hohe Ähnlichkeit`: direkter Vergleich und Freigabefall
 - `mittlere Ähnlichkeit`: Treffer und relevante Passagen werden angezeigt
 - `geringe Ähnlichkeit`: nur im Prüfprotokoll
-- `Widerspruch erkannt`: immer direkte Admin-Eskalation
+- `Widerspruch erkannt`: immer Stufe 3 mit Führungskraft und anschließender Adminfreigabe
 
 Die konkreten Grenzwerte werden mit echten KAHLE-Dokumenten kalibriert und administrativ konfigurierbar gemacht. Änderungen dürfen keine Dokumente rückwirkend ungeprüft aktivieren.
 
@@ -540,7 +588,7 @@ Liegt das identische Dokument in einer anderen Knowledgebase, kann der Nutzer st
 
 > Vorhandenes Dokument zusätzlich in der gewünschten Knowledgebase veröffentlichen.
 
-Dieser Vorgang geht direkt an einen Admin. Die Originaldatei wird nicht dupliziert.
+Dieser Vorgang durchläuft Stufe 3 mit Führungskraft und anschließender Adminfreigabe. Die Originaldatei wird nicht dupliziert.
 
 ### 15.4 Ersatz einer Version
 
@@ -704,11 +752,13 @@ Vorteile:
 4. Dense Retrieval für semantische Ähnlichkeit ausführen.
 5. Deutsche BM25-/Sparse Search für exakte Begriffe, Kennungen, Zahlen und Namen ausführen.
 6. Ergebnisse per Reciprocal Rank Fusion zusammenführen.
-7. Kandidaten dokumentzentriert gruppieren.
-8. Etwa 30 bis 50 Kandidaten mit einem spezialisierten Reranker bewerten.
-9. Etwa 5 bis 8 präzise Chunks auswählen.
-10. Benötigte Parent- und Nachbarchunks laden.
-11. Quellen, Gültigkeit, Autorität und Konflikthinweise strukturiert an das Antwortmodell übergeben.
+7. Nennt die Frage ein konkretes Dokument eindeutig über Dateiname, Kennung oder mindestens zwei charakteristische Titelbegriffe, werden vorrangig unterschiedliche Kapitel dieses Dokuments abgerufen. Dies gilt auch, wenn der Tool-Query nur aus dem eindeutigen Dokumenttitel besteht. Verwandte Dokumente dürfen die angefragte Quelle nicht verdrängen.
+8. Kandidaten nach ihrem Parent-Abschnitt deduplizieren. Technisches YAML-Frontmatter wird nie als Wissensinhalt indexiert oder an das Antwortmodell übergeben.
+9. Etwa 30 bis 50 Kandidaten mit einem spezialisierten Reranker bewerten.
+10. Bei allgemeinen Fragen werden zunächst höchstens zwei Abschnitte je Dokument ausgewählt. Freie Ergebnisplätze werden anschließend nach Relevanz aufgefüllt. So bleiben Dokument- und Kapitelvielfalt erhalten, ohne kleine Wissensbestände künstlich zu beschneiden. Bei normativen Fragen erhalten höherrangige Quellen innerhalb eines engen Relevanzkorridors Vorrang. Sind mindestens drei passende Quellen der Stufen 1 bis 5 vorhanden, werden reine Informations- und Schulungsunterlagen der Stufe 6 nicht zusätzlich aufgenommen. Nahezu identische Abschnitte werden dokumentübergreifend dedupliziert; als Konflikt markierte Quellen bleiben immer sichtbar.
+11. Etwa 5 bis 8 präzise Quellenblöcke auswählen. Bei einer eindeutig auf ein Dokument bezogenen Gesamtfrage werden alle nummerierten Hauptkapitel dieses Dokuments in Dokumentreihenfolge geladen. Sämtliche Parent-Abschnitte und Unterkapitel eines Hauptkapitels werden zu einem zitierbaren Quellenblock zusammengeführt, sofern das vollständige Dokument in das Kontextbudget passt; andernfalls greift die normale relevanzbasierte Auswahl.
+12. Benötigte Parent- und Nachbarchunks laden.
+13. Quellen, Gültigkeit, Autorität und Konflikthinweise strukturiert an das Antwortmodell übergeben.
 
 Das Antwortmodell soll nicht die schwierige Retrieval-Auswahl übernehmen. Es formuliert auf Basis eines bereits präzise begrenzten Kontextes.
 
@@ -792,6 +842,13 @@ Das Portal ist die führende Aufgabenquelle. E-Mail ergänzt die Portalaufgabe.
 - normale Benachrichtigungen sind konfigurierbar
 - kritische Meldungen können nicht deaktiviert werden
 - identische technische Fehler werden zu einem Incident zusammengefasst
+- Nach automatischer Aktivierung erhält der Uploader sofort eine Portal- und E-Mail-Benachrichtigung, dass das Dokument für berechtigte Vinci-Nutzer abrufbar ist.
+- Nach jeder Entscheidung der Führungskraft erhält der Uploader den neuen Status, die verständliche Entscheidung und die Begründung. Bei einer Weiterleitung wird klar angezeigt, dass noch keine Veröffentlichung erfolgt ist.
+- Nach jeder abschließenden Adminentscheidung erhalten sowohl die zuständige Führungskraft als auch der Uploader den neuen Status, die verständliche Entscheidung und die Begründung.
+- Die Statusinformation unterscheidet eindeutig zwischen „veröffentlicht und abrufbar“, „abgelehnt“, „zur Korrektur zurückgegeben“, „weitere Prüfung erforderlich“ und „verworfen“.
+- E-Mails nennen Dokumenttitel, Status und sicheren Vorgangslink, enthalten aber keine vertraulichen Dokumentinhalte, Fundstellen oder Anhänge.
+- Wird ein Dokument aus dem aktiven Bestand in den Papierkorb verschoben, erhalten alle aktiven Nutzer, die zuvor über mindestens einen seiner Wissensbereiche Leserecht hatten, sofort eine Portal- und E-Mail-Mitteilung. Die Empfängerliste wird vor dem Rechteentzug ermittelt. Die Mitteilung nennt Titel, Status und Begründung, aber keine Dokumentinhalte.
+- Wird ein vollständiger Wissensbereich archiviert oder endgültig entfernt, erhalten alle aktiven Nutzer mit bisherigem Leserecht sowie Admins und Portal-Admins eine Portal- und E-Mail-Mitteilung. Die Mitteilung nennt den Wissensbereich, die Aktion und die Begründung.
 
 ## 23. Rückzug, Deaktivierung und Löschung
 
@@ -812,11 +869,13 @@ Das Portal ist die führende Aufgabenquelle. E-Mail ergänzt die Portalaufgabe.
 ### 23.3 Papierkorbmodell
 
 1. Genehmigte Entfernung löscht das Dokument sofort aus allen aktiven RAG-Indizes.
+   Gleichzeitig werden alle Nutzer mit bisherigem Lesezugriff über die fehlende Abrufbarkeit informiert.
 2. Das Dokument bleibt 30 Tage wiederherstellbar im Papierkorb.
-3. Nach 30 Tagen erhält ein Admin einen Löschauftrag im Portal und per E-Mail.
-4. Solange nicht gelöscht wurde, folgt alle 10 Tage eine Erinnerung.
-5. Drei Tage vor Tag 90 erhält der Admin eine letzte Warnung.
-6. Spätestens nach 90 Tagen erfolgt die automatische physische Löschung.
+3. Während dieser 30 Tage zeigt das Portal ausschließlich die Wiederherstellung an; eine physische Löschung ist auch für Portal-Admins gesperrt.
+4. Ab Tag 30 wird die endgültige Löschung für Admins und Portal-Admins freigeschaltet. Gleichzeitig erhalten die Admins einen Löschauftrag im Portal und per E-Mail.
+5. Solange nicht gelöscht wurde, folgt alle 10 Tage eine Erinnerung.
+6. Drei Tage vor Tag 90 erhält der Admin eine letzte Warnung.
+7. Spätestens nach 90 Tagen erfolgt die automatische physische Löschung.
 
 Eine Aussetzung benötigt Grund und erneutes Prüfdatum.
 
@@ -1042,26 +1101,27 @@ Die konkrete Implementierungsplanung folgt nach Freigabe dieses PRDs. Voraussich
 
 Mindestens folgende Ende-zu-Ende-Szenarien müssen bestehen:
 
-1. Mitarbeiter lädt neues DOCX hoch, erhält grünes Prüfergebnis, Führungskraft genehmigt, Vinci zitiert die Originalquelle.
-2. Mitarbeiter lädt identische Datei hoch, System blockiert und zeigt das bestehende Dokument.
-3. Identisches Dokument liegt in anderer Knowledgebase, Nutzer beantragt zusätzliche Veröffentlichung, Admin genehmigt.
-4. Neue Version ersetzt eine alte Version atomar und lässt sich zurückrollen.
-5. Ähnliche Dokumente derselben Knowledgebase werden verständlich verglichen.
-6. Knowledgebase-übergreifender Treffer geht direkt an Admin.
-7. Widersprüchliche Richtlinien werden nicht automatisch veröffentlicht.
-8. Prompt-Injection-Dokument bleibt in Quarantäne.
-9. Fehlerhafte Excel-Konvertierung wird zeilen- und spaltenbezogen angezeigt und korrigiert.
-10. Owner bestätigt Aktualität, Führungskraft verlängert ein einfach zugeordnetes Dokument.
-11. Mehrfach veröffentlichtes Dokument wird erst nach Führungskraft und Admin verlängert.
-12. Abgelaufenes Dokument verschwindet automatisch aus dem RAG.
-13. Nutzer ohne Leserecht erhält weder Antwortinhalt noch Originalquelle.
-14. Gemeldete falsche Vinci-Antwort erzeugt einen nachvollziehbaren Korrekturfall.
-15. Deaktivierter Owner erzeugt eine Neuzuordnungsaufgabe.
-16. Admin bereitet neue Knowledgebase vor, Portal-Admin genehmigt.
-17. Portal-Admin legt eine Knowledgebase direkt an.
-18. Gelöschtes Dokument wird innerhalb von 30 Tagen wiederhergestellt.
-19. Dokument wird nach 90 Tagen automatisch physisch gelöscht, Auditmetadaten bleiben erhalten.
-20. Vollständiger Restore und Neuaufbau des Suchindex funktionieren aus dem Backup.
+1. Mitarbeiter lädt ein sauberes neues DOCX in genau eine Bereichs-Knowledgebase hoch; das System aktiviert es automatisch und Vinci zitiert die Originalquelle.
+2. Mitarbeiter lädt ein sauberes Dokument für KAHLE-Allgemein hoch; die Führungskraft genehmigt und Vinci zitiert die Originalquelle.
+3. Mitarbeiter lädt eine identische Datei hoch; das System verhindert eine doppelte Veröffentlichung, zeigt das bestehende Dokument und legt die gewählte Aktion der Führungskraft vor.
+4. Identisches Dokument liegt in einer anderen Knowledgebase; der Nutzer beantragt die zusätzliche Veröffentlichung, Führungskraft und anschließend Admin genehmigen.
+5. Neue Version ersetzt eine alte Version nach Führungskraftfreigabe atomar und lässt sich zurückrollen.
+6. Ähnliche Dokumente derselben Knowledgebase werden verständlich verglichen und der Führungskraft vorgelegt.
+7. Knowledgebase-übergreifender Ähnlichkeitstreffer verlangt mindestens die Führungskraft; erst die zusätzliche Veröffentlichung oder ein Widerspruch verlangt danach den Admin.
+8. Widersprüchliche Richtlinien werden erst nach Führungskraft und Admin veröffentlicht.
+9. Kritischer Prompt-Injection-Befund in einer sicher untersuchten Datei durchläuft Führungskraft und Admin; Malware bleibt nicht übersteuerbar in Quarantäne.
+10. Fehlerhafte Excel-Konvertierung wird zeilen- und spaltenbezogen angezeigt und korrigiert.
+11. Owner bestätigt Aktualität, Führungskraft verlängert ein einfach zugeordnetes Dokument.
+12. Mehrfach veröffentlichtes Dokument wird erst nach Führungskraft und Admin verlängert.
+13. Abgelaufenes Dokument verschwindet automatisch aus dem RAG.
+14. Nutzer ohne Leserecht erhält weder Antwortinhalt noch Originalquelle.
+15. Gemeldete falsche Vinci-Antwort erzeugt einen nachvollziehbaren Korrekturfall.
+16. Deaktivierter Owner erzeugt eine Neuzuordnungsaufgabe.
+17. Admin bereitet neue Knowledgebase vor, Portal-Admin genehmigt.
+18. Portal-Admin legt eine Knowledgebase direkt an.
+19. Gelöschtes Dokument wird innerhalb von 30 Tagen wiederhergestellt.
+20. Dokument wird nach 90 Tagen automatisch physisch gelöscht, Auditmetadaten bleiben erhalten.
+21. Vollständiger Restore und Neuaufbau des Suchindex funktionieren aus dem Backup.
 
 ## 33. Offene Umsetzungsdetails nach PRD-Freigabe
 

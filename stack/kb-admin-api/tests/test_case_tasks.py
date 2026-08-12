@@ -18,18 +18,36 @@ def test_role_task_queues_and_manager_delegate_decision():
             case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
             analysis=lifecycle_module.Analysis(),
         )
-        assert [task.case_id for task in lifecycle.tasks_for("employee")] == [case.case_id]
-        lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="create")
+        assert lifecycle.tasks_for("employee") == []
         assert [task.case_id for task in lifecycle.tasks_for("manager")] == [case.case_id]
         assert [task.case_id for task in lifecycle.tasks_for("delegate")] == [case.case_id]
         decided = lifecycle.decide(
             case_id=case.case_id, actor_user_id="delegate", decision="approve",
             reason="Vertretungsweise fachlich geprüft",
         )
-        assert decided.status == "pending_admin_approval"
+        assert decided.status == "ready_to_activate"
 
 
-def test_admin_queue_only_receives_escalated_case():
+def test_absence_saves_selected_delegate_in_one_atomic_workflow():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, _, _ = setup(Path(directory))
+        governance.sync_identity(user_id="delegate", email="delegate@kahle.de", display_name="Vertretung")
+        governance.set_absence(
+            "admin", "manager", "2026-08-10", "2026-08-20", "Urlaub", "delegate",
+        )
+        absence = governance.list_absences("admin")[0]
+        assert absence["delegate_user_id"] == "delegate"
+        delegation = governance.list_delegations("admin")[0]
+        assert delegation == {
+            "manager_user_id":"manager", "delegate_user_id":"delegate",
+            "valid_from":"2026-08-10", "valid_until":"2026-08-20",
+        }
+        governance.set_absence("admin", "manager", None, None, "Entfernt")
+        assert governance.list_absences("admin") == []
+        assert governance.list_delegations("admin") == []
+
+
+def test_cross_knowledgebase_similarity_is_reviewed_by_manager_not_admin():
     with tempfile.TemporaryDirectory() as directory:
         _, lifecycle, kb_id = setup(Path(directory))
         case = submit(lifecycle, kb_id)
@@ -38,4 +56,5 @@ def test_admin_queue_only_receives_escalated_case():
             analysis=lifecycle_module.Analysis(cross_kb_matches=("foreign",)),
         )
         lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="create")
-        assert [task.case_id for task in lifecycle.tasks_for("admin")] == [case.case_id]
+        assert lifecycle.tasks_for("admin") == []
+        assert [task.case_id for task in lifecycle.tasks_for("manager")] == [case.case_id]

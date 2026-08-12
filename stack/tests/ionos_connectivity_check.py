@@ -105,19 +105,30 @@ def check_embeddings(base_url: str, api_key: str, model: str, timeout: int) -> C
     return CheckResult(f"embeddings:{model}", True, f"HTTP 200, dimensions: {len(vector)}")
 
 
+def resolve_api_key(explicit_env: str = "") -> tuple[str, str]:
+    if explicit_env:
+        return os.environ.get(explicit_env, ""), explicit_env
+    for name in ("IONOS_API_TOKEN", "IONOS_API_KEY"):
+        value = os.environ.get(name, "")
+        if value:
+            return value, name
+    return "", "IONOS_API_TOKEN or IONOS_API_KEY"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check IONOS OpenAI-compatible model hub connectivity")
     parser.add_argument("--base-url", default="https://openai.inference.de-txl.ionos.com/v1")
-    parser.add_argument("--api-key-env", default="IONOS_API_KEY")
+    parser.add_argument("--api-key-env", default="",
+                        help="optional exact variable; otherwise IONOS_API_TOKEN takes precedence over IONOS_API_KEY")
     parser.add_argument("--chat-model", default="mistralai/Mistral-Small-24B-Instruct")
     parser.add_argument("--reasoning-model", default="openai/gpt-oss-120b")
     parser.add_argument("--embedding-model", default="BAAI/bge-m3")
     parser.add_argument("--timeout", type=int, default=60)
     args = parser.parse_args()
 
-    api_key = os.environ.get(args.api_key_env, "")
+    api_key, api_key_source = resolve_api_key(args.api_key_env)
     if not api_key:
-        print(f"ERROR: API key environment variable is not set: {args.api_key_env}", file=sys.stderr)
+        print(f"ERROR: API key environment variable is not set: {api_key_source}", file=sys.stderr)
         return 2
 
     base_url = args.base_url.rstrip("/")

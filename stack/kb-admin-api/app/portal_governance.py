@@ -152,6 +152,13 @@ class SQLiteGovernanceStore:
                     details_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS portal_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    updated_by TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_access_read
                     ON knowledgebase_access(user_id, can_read);
                 CREATE INDEX IF NOT EXISTS idx_access_upload
@@ -160,6 +167,9 @@ class SQLiteGovernanceStore:
                     ON knowledgebase_change_requests(status, created_at);
                 """
             )
+            absence_columns = {row["name"] for row in db.execute("PRAGMA table_info(manager_absences)")}
+            if "delegate_user_id" not in absence_columns:
+                db.execute("ALTER TABLE manager_absences ADD COLUMN delegate_user_id TEXT REFERENCES portal_users(user_id)")
 
 
 class PortalGovernance:
@@ -248,6 +258,33 @@ class PortalGovernance:
             ).fetchall()
         return [self._identity(row) for row in rows]
 
+    def setting_bool(self, setting_key: str, *, default: bool = False) -> bool:
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT setting_value FROM portal_settings WHERE setting_key=?", (setting_key,),
+            ).fetchone()
+        return default if not row else row["setting_value"] == "true"
+
+    def set_setting_bool(
+        self, actor_user_id: str, setting_key: str, enabled: bool, reason: str,
+    ) -> bool:
+        actor = self.identity(actor_user_id)
+        if actor.role != "portal_admin":
+            raise GovernanceError("portal_admin_required")
+        if len(reason.strip()) < 3:
+            raise GovernanceError("setting_reason_required")
+        with self.store.connect() as db:
+            db.execute(
+                "INSERT INTO portal_settings(setting_key,setting_value,updated_by,updated_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, "
+                "updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+                (setting_key, "true" if enabled else "false", actor_user_id, self.now()),
+            )
+            self._audit(db, actor_user_id, "portal_setting_changed", "portal_setting", setting_key, {
+                "enabled": enabled, "reason": reason.strip(),
+            })
+        return enabled
+
     def set_role(self, actor_user_id: str, target_user_id: str, role: Role) -> Identity:
         if role not in ROLES:
             raise GovernanceError("invalid_role")
@@ -259,10 +296,22 @@ class PortalGovernance:
             raise GovernanceError("admin_required")
         if target.role == "portal_admin" and role != "portal_admin":
             self._ensure_another_portal_admin(target_user_id)
+        manager_user_id = target.manager_user_id
+        if role == "admin":
+            if actor.role != "portal_admin" or actor_user_id == target_user_id:
+                candidates = [item for item in self.list_identities(actor_user_id)
+                              if item.role == "portal_admin" and item.active and item.user_id != target_user_id]
+                if not candidates:
+                    raise GovernanceError("admin_portal_manager_required")
+                manager_user_id = candidates[0].user_id
+            else:
+                manager_user_id = actor_user_id
+        elif role == "portal_admin":
+            manager_user_id = None
         with self.store.connect() as db:
             db.execute(
-                "UPDATE portal_users SET role = ?, updated_at = ? WHERE user_id = ?",
-                (role, self.now(), target_user_id),
+                "UPDATE portal_users SET role = ?, manager_user_id = ?, updated_at = ? WHERE user_id = ?",
+                (role, manager_user_id, self.now(), target_user_id),
             )
             self._audit(
                 db,
@@ -299,12 +348,18 @@ class PortalGovernance:
     ) -> Identity:
         self._require_role(actor_user_id, ADMIN_ROLES)
         employee = self.identity(employee_user_id)
+        if employee.role == "portal_admin" and manager_user_id is not None:
+            raise GovernanceError("portal_admin_manager_not_allowed")
+        if employee.role == "admin" and not manager_user_id:
+            raise GovernanceError("admin_portal_manager_required")
         if manager_user_id:
             manager = self.identity(manager_user_id)
             if not manager.active or manager.role not in {"manager", "admin", "portal_admin"}:
                 raise GovernanceError("invalid_manager")
             if employee_user_id == manager_user_id:
                 raise GovernanceError("self_manager_not_allowed")
+            if employee.role == "admin" and manager.role != "portal_admin":
+                raise GovernanceError("admin_portal_manager_required")
         with self.store.connect() as db:
             db.execute(
                 "UPDATE portal_users SET manager_user_id = ?, updated_at = ? WHERE user_id = ?",
@@ -389,6 +444,7 @@ class PortalGovernance:
     def set_absence(
         self, actor_user_id: str, manager_user_id: str,
         absent_from: str | None, absent_until: str | None, reason: str,
+        delegate_user_id: str | None = None,
     ) -> None:
         self._require_role(actor_user_id, ADMIN_ROLES)
         manager = self.identity(manager_user_id)
@@ -396,27 +452,56 @@ class PortalGovernance:
             raise GovernanceError("invalid_manager")
         with self.store.connect() as db:
             if absent_from is None and absent_until is None:
+                absence = db.execute(
+                    "SELECT delegate_user_id FROM manager_absences WHERE manager_user_id=?",
+                    (manager_user_id,),
+                ).fetchone()
                 db.execute("DELETE FROM manager_absences WHERE manager_user_id=?", (manager_user_id,))
-                event, details = "manager_absence_removed", {}
+                if absence and absence["delegate_user_id"]:
+                    db.execute(
+                        "DELETE FROM manager_delegates WHERE manager_user_id=? AND delegate_user_id=?",
+                        (manager_user_id, absence["delegate_user_id"]),
+                    )
+                    self._audit(
+                        db, actor_user_id, "delegate_removed", "user", manager_user_id,
+                        {"delegate_user_id": absence["delegate_user_id"]},
+                    )
+                event, details = "manager_absence_removed", {
+                    "delegate_user_id": absence["delegate_user_id"] if absence else None,
+                }
             else:
                 start = self._iso_date(absent_from, "absent_from")
                 end = self._iso_date(absent_until, "absent_until")
                 if start > end or len(reason.strip()) < 3:
                     raise GovernanceError("invalid_absence")
-                delegates = db.execute(
-                    "SELECT COUNT(*) count FROM manager_delegates WHERE manager_user_id=?",
-                    (manager_user_id,),
-                ).fetchone()["count"]
-                if not delegates:
-                    raise GovernanceError("manager_delegate_required")
+                if delegate_user_id:
+                    delegate = self.identity(delegate_user_id)
+                    if not delegate.active or delegate_user_id == manager_user_id:
+                        raise GovernanceError("invalid_delegate")
+                    db.execute("DELETE FROM manager_delegates WHERE manager_user_id=?", (manager_user_id,))
+                    db.execute(
+                        "INSERT INTO manager_delegates(manager_user_id,delegate_user_id,valid_from,valid_until) VALUES (?,?,?,?)",
+                        (manager_user_id, delegate_user_id, start, end),
+                    )
+                    self._audit(db, actor_user_id, "delegate_assigned", "user", manager_user_id,
+                                {"delegate_user_id":delegate_user_id,"valid_from":start,"valid_until":end})
+                else:
+                    existing = db.execute(
+                        "SELECT delegate_user_id FROM manager_delegates WHERE manager_user_id=? LIMIT 1",
+                        (manager_user_id,),
+                    ).fetchone()
+                    if not existing:
+                        raise GovernanceError("manager_delegate_required")
+                    delegate_user_id = existing["delegate_user_id"]
                 db.execute(
-                    "INSERT INTO manager_absences VALUES (?,?,?,?,?,?) "
+                    "INSERT INTO manager_absences(manager_user_id,absent_from,absent_until,reason,updated_by,updated_at,delegate_user_id) VALUES (?,?,?,?,?,?,?) "
                     "ON CONFLICT(manager_user_id) DO UPDATE SET absent_from=excluded.absent_from, "
                     "absent_until=excluded.absent_until, reason=excluded.reason, "
-                    "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
-                    (manager_user_id, start, end, reason.strip(), actor_user_id, self.now()),
+                    "updated_by=excluded.updated_by, updated_at=excluded.updated_at, delegate_user_id=excluded.delegate_user_id",
+                    (manager_user_id, start, end, reason.strip(), actor_user_id, self.now(), delegate_user_id),
                 )
-                event, details = "manager_absence_set", {"absent_from": start, "absent_until": end, "reason": reason.strip()}
+                event, details = "manager_absence_set", {"absent_from": start, "absent_until": end,
+                                                          "reason": reason.strip(), "delegate_user_id": delegate_user_id}
             self._audit(db, actor_user_id, event, "user", manager_user_id, details)
 
     def list_absences(self, actor_user_id: str) -> list[dict[str, Any]]:

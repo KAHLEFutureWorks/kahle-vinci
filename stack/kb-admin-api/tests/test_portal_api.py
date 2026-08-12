@@ -169,12 +169,65 @@ def test_migration_metadata_endpoint_uses_initialized_legacy_migration_service()
             "confidentiality": "internal",
             "authority_type": "information_or_training",
             "authority_level": 6,
+            "knowledgebase_id": "kahleallgemein",
             "scope": {"knowledgebase_ids": ["kahleallgemein"]},
         })
         assert response.status_code == 200
         assert response.json() == {"status": "metadata_resolved"}
         assert captured["actor_user_id"] == "portal"
         assert captured["path"] == "kahleallgemein/alt.md"
+        assert captured["knowledgebase_id"] == "kahleallgemein"
+
+
+def test_migration_review_endpoint_serves_only_service_resolved_file():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        module = load_app(root)
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: identity("portal", "admin")
+        review = root / "review.md"
+        review.write_text("# Geprüfte Fassung", encoding="utf-8")
+        captured = {}
+
+        class MigrationSpy:
+            def review_file(self, knowledge_root, path, kind):
+                captured.update(root=knowledge_root, path=path, kind=kind)
+                return review
+
+        module.LEGACY_MIGRATION = MigrationSpy()
+        response = TestClient(module.app).get(
+            "/portal/admin/migration/file",
+            params={"path": "service/ablauf.md", "kind": "markdown"},
+        )
+
+        assert response.status_code == 200
+        assert response.text == "# Geprüfte Fassung"
+        assert response.headers["content-disposition"].startswith("inline;")
+        assert captured["path"] == "service/ablauf.md"
+        assert captured["kind"] == "markdown"
+
+
+def test_migration_disposition_endpoints_exclude_and_restore_with_reason():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: identity("portal", "admin")
+        calls = []
+
+        class MigrationSpy:
+            def exclude(self, path, actor_user_id, reason):
+                calls.append(("exclude", path, actor_user_id, reason))
+
+            def restore_excluded(self, path, actor_user_id, reason):
+                calls.append(("restore", path, actor_user_id, reason))
+
+        module.LEGACY_MIGRATION = MigrationSpy()
+        client = TestClient(module.app)
+        payload = {"path": "service/alt.md", "reason": "Derzeit nicht benötigt"}
+        assert client.post("/portal/admin/migration/exclude", json=payload).json() == {"status": "excluded"}
+        assert client.post("/portal/admin/migration/restore", json=payload).json() == {"status": "restored"}
+        assert calls == [
+            ("exclude", "service/alt.md", "portal", "Derzeit nicht benötigt"),
+            ("restore", "service/alt.md", "portal", "Derzeit nicht benötigt"),
+        ]
 
 
 def _step_up_env(**overrides):
@@ -269,6 +322,98 @@ def test_knowledgebase_overview_is_admin_only_and_ignores_read_rights():
         assert forbidden.json()["detail"] == "admin_required"
 
 
+def test_document_list_returns_one_primary_group_and_additional_publications():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="employee", email="employee@kahle.de", display_name="Mitarbeiter",
+        )
+        primary = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug":"service","label":"Service"},
+        )
+        additional = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug":"verkauf","label":"Verkauf"},
+        )
+        for base in (primary, additional):
+            module.PORTAL_GOVERNANCE.grant_access(
+                "portal", "employee", base.knowledgebase_id, can_read=True, can_upload=True,
+            )
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="employee", owner_user_id="employee",
+            target_knowledgebase_id=primary.knowledgebase_id, title="Bereichsübergreifende Anleitung",
+            original_filename="anleitung.md", original_file_id="file-1",
+            original_sha256="a"*64, valid_workdays=60, confidentiality="internal",
+        )
+        module.DOCUMENT_LIFECYCLE.auto_activation_enabled = lambda: True
+        case = module.DOCUMENT_LIFECYCLE.record_analysis(
+            case_id=case.case_id, normalized_sha256="b"*64, markdown_sha256="c"*64,
+            analysis=module.Analysis(),
+        )
+        module.DOCUMENT_LIFECYCLE.activate(case_id=case.case_id)
+        linked = client.put(
+            f"/portal/admin/documents/{case.document_id}/publications",
+            json={"knowledgebase_id":additional.knowledgebase_id,"active":True,
+                  "reason":"Auch für Verkauf relevant"},
+        )
+        assert linked.status_code == 200, linked.text
+
+        current["user"] = identity("employee")
+        payload = client.get("/portal/documents").json()["documents"]
+        assert len(payload) == 1
+        assert payload[0]["original_url"] == f"/wissen/api/portal/sources/{case.version_id}"
+        assert payload[0]["primary_knowledgebase"] == {
+            "knowledgebase_id": primary.knowledgebase_id, "label": "Service",
+        }
+        assert payload[0]["additional_knowledgebases"] == [
+            {"knowledgebase_id": additional.knowledgebase_id, "label": "Verkauf"},
+        ]
+
+
+def test_admin_can_manage_restricted_document_terms_over_http():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        initial = client.get("/portal/admin/restricted-terms")
+        assert initial.status_code == 200
+        assert {item["term"] for item in initial.json()["terms"]} == {"TPI", "Reparaturleitfaden"}
+        created = client.post("/portal/admin/restricted-terms", json={"term":"Interne Geheimliste"})
+        assert created.status_code == 201
+        rule_id = created.json()["term"]["rule_id"]
+        assert client.delete(f"/portal/admin/restricted-terms/{rule_id}").json() == {"removed": True}
+
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        assert client.get("/portal/admin/restricted-terms").status_code == 403
+
+
+def test_portal_admin_controls_automatic_activation_switch_over_http():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); module = load_app(root)
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app); assert client.get("/portal/session").status_code == 200
+        initial = client.get("/portal/admin/settings/auto-activation")
+        assert initial.status_code == 200
+        assert initial.json() == {"enabled": False}
+        changed = client.put(
+            "/portal/admin/settings/auto-activation", json={"enabled": True, "reason":"Lokale Abnahme"},
+        )
+        assert changed.status_code == 200
+        assert changed.json() == {"enabled": True}
+        current["user"] = identity("admin", "admin")
+        assert client.put(
+            "/portal/admin/settings/auto-activation", json={"enabled": False, "reason":"Nicht erlaubt"},
+        ).status_code == 403
+
+
 def test_feedback_screenshot_is_checked_and_only_admins_may_fetch_it():
     """
     Der Anhang durchlaeuft dieselbe Kette wie ein Dokument. Abrufen darf ihn
@@ -358,6 +503,41 @@ def test_overview_hides_deleted_knowledgebases_but_keeps_archived_ones():
         assert "Geloescht" not in shown
 
 
+def test_deleted_knowledgebase_notifies_all_users_who_had_read_access():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module.DEV_AUTH_BYPASS = True
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="reader", email="reader@kahle.de", display_name="Leserin",
+        )
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "alt", "label": "Altes Wissen"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "reader", kb.knowledgebase_id, can_read=True, can_upload=False,
+        )
+        module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "archive", knowledgebase_id=kb.knowledgebase_id,
+        )
+
+        deleted = client.post("/portal/admin/knowledgebase-changes", json={
+            "kind": "delete", "knowledgebase_id": kb.knowledgebase_id,
+            "payload": {"reason": "Altbestand wird entfernt"},
+        })
+        assert deleted.status_code == 201, deleted.text
+
+        current["user"] = identity("reader")
+        assert client.get("/portal/session").status_code == 200
+        notifications = client.get("/portal/notifications").json()["notifications"]
+        assert notifications[0]["document_title"] == "Altes Wissen"
+        assert notifications[0]["status"] == "knowledgebase_delete"
+        assert "nicht mehr abrufbar" in notifications[0]["message"]
+
+
 def test_admins_can_reassign_a_document_to_another_knowledgebase():
     """
     PRD 9.3: Ein Dokument kann in mehreren Wissensbereichen veroeffentlicht
@@ -367,6 +547,8 @@ def test_admins_can_reassign_a_document_to_another_knowledgebase():
     with tempfile.TemporaryDirectory() as directory:
         module = load_app(Path(directory))
         module._trigger_hybrid_reindex = lambda: {"ok": True}
+        module._trigger_hybrid_document_sync = lambda _document_id: {"ok": True}
+        module._trigger_hybrid_version_sync = lambda _version_id: {"ok": True}
         current = {"user": identity("portal", "admin")}
         module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
         client = TestClient(module.app)
@@ -405,6 +587,14 @@ def test_admins_can_reassign_a_document_to_another_knowledgebase():
         assert removed.status_code == 200
         still_active = {p["knowledgebase_id"] for p in removed.json()["publications"] if p["status"] == "active"}
         assert second.knowledgebase_id not in still_active
+
+        overview = client.get("/portal/admin/knowledgebase-overview").json()["knowledgebases"]
+        second_overview = next(
+            item for item in overview if item["knowledgebase_id"] == second.knowledgebase_id
+        )
+        assert not any(
+            item["document_id"] == case.document_id for item in second_overview["documents"]
+        ), "inaktive Veröffentlichungen dürfen nicht mehr in der Knowledgebase erscheinen"
 
         current["user"] = identity("employee")
         assert client.get("/portal/session").status_code == 200

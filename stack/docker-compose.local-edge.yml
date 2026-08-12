@@ -26,6 +26,7 @@ services:
   kb-admin-api:
     environment:
       KB_PORTAL_LOCAL_STEP_UP: "true"
+      KB_PORTAL_AUTO_ACTIVATION_ENABLED: "true"
       KB_PORTAL_STEP_UP_SECRET: "${KB_PORTAL_STEP_UP_SECRET:-lokale-abnahme-step-up-signatur-nur-fuer-tests}"
 
   caddy-local:

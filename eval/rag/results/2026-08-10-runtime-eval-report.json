@@ -1,0 +1,221 @@
+{
+  "questions": 21,
+  "document_hit_rate": 0.047619047619047616,
+  "source_link_rate": 0.19047619047619047,
+  "term_hit_rate": 0.23809523809523808,
+  "negative_questions": 1,
+  "unsupported_answer_rate": 0.0,
+  "conversation_tests": 1,
+  "details": [
+    {
+      "question": "Welche Leistungen bietet KAHLE seinen Kundinnen und Kunden an?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 17375
+    },
+    {
+      "question": "Welche Standorte oder Kontaktwege werden fuer KAHLE genannt?",
+      "document_hit": false,
+      "source_link_ok": true,
+      "term_hit": true,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 32766
+    },
+    {
+      "question": "Wie beschreibt KAHLE seinen Anspruch an Beratung und Kundenservice?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 12531
+    },
+    {
+      "question": "Welche Informationen gibt es zu Terminvereinbarung oder Werkstattservice?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 21891
+    },
+    {
+      "question": "Welche allgemeinen Informationen sind fuer Neukunden besonders relevant?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": true,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 15031
+    },
+    {
+      "question": "Welche interne Information gibt es zur frei erfundenen Kennung ZX-999-NICHT-VORHANDEN?",
+      "document_hit": true,
+      "source_link_ok": true,
+      "term_hit": true,
+      "expect_no_answer": true,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 8734
+    },
+    {
+      "question": "Welche internen Kontextinformationen sollen Antworten zu KAHLE beruecksichtigen?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 18829
+    },
+    {
+      "question": "Wie soll mit unklaren oder mehrdeutigen Nutzerfragen umgegangen werden?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 20109
+    },
+    {
+      "question": "Welche Quellen oder Wissensbereiche haben Vorrang bei Antworten?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 33078
+    },
+    {
+      "question": "Welche Tonalitaet wird fuer Antworten im KAHLE-Kontext erwartet?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 19609
+    },
+    {
+      "question": "Wie sollen Antworten abgegrenzt werden, wenn Informationen im Kontext fehlen?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 11782
+    },
+    {
+      "question": "An welchen KAHLE-Standorten werden welche Marken genannt?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 15484
+    },
+    {
+      "question": "Was steht in der Quelle KB_KAHLE_Hannover zur Niederlassung?",
+      "document_hit": false,
+      "source_link_ok": true,
+      "term_hit": true,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 18781
+    },
+    {
+      "question": "Welche Regeln gelten fuer Datenschutz und den Umgang mit personenbezogenen Daten?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "datenschutz-folgefrage",
+      "elapsed_ms": 5547
+    },
+    {
+      "question": "Und wann muss dabei an einen Menschen eskaliert werden?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "datenschutz-folgefrage",
+      "elapsed_ms": 18078
+    },
+    {
+      "question": "Welche Inhalte duerfen nicht erfunden werden, wenn keine Quelle vorliegt?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 13297
+    },
+    {
+      "question": "Wie sollen vertrauliche oder sensible Informationen behandelt werden?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 37969
+    },
+    {
+      "question": "Welche Vorgaben gibt es fuer sichere und regelkonforme Antworten?",
+      "document_hit": false,
+      "source_link_ok": true,
+      "term_hit": true,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 41531
+    },
+    {
+      "question": "Wann soll eine Anfrage abgelehnt oder an einen Menschen eskaliert werden?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 21297
+    },
+    {
+      "question": "Nenne die einschlaegige Datenschutzregel und verlinke die Originalquelle.",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 14516
+    },
+    {
+      "question": "Welche Aussage gilt, wenn zwei freigegebene Richtlinien einander widersprechen?",
+      "document_hit": false,
+      "source_link_ok": false,
+      "term_hit": false,
+      "expect_no_answer": false,
+      "unsupported_answer": false,
+      "conversation": "",
+      "elapsed_ms": 18640
+    }
+  ]
+}

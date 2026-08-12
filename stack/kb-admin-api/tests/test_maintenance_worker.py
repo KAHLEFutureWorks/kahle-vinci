@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import app.maintenance_worker as worker
 from app.maintenance_worker import BERLIN, expiry_digest_due, run_once
 
 
@@ -21,6 +22,10 @@ class Service:
     def process_trash(self, files_root):
         self.calls.append("trash")
         return {"deleted": []}
+
+    def process_migration_deadlines(self):
+        self.calls.append("migration")
+        return []
 
     def enforce_retention(self):
         self.calls.append("retention")
@@ -43,4 +48,15 @@ def test_expiry_schedule_uses_berlin_time_when_worker_receives_utc():
 def test_regular_maintenance_continues_before_digest_time():
     service = Service()
     run_once(service, None, generate_expiry_digest=False)
-    assert service.calls == ["approvals", "expire", "trash", "retention"]
+    assert service.calls == ["approvals", "expire", "trash", "migration", "retention"]
+
+
+def test_maintenance_updates_only_changed_documents(monkeypatch):
+    service = Service()
+    service.expire_due_versions = lambda: ["expired-1", "same"]
+    service.process_trash = lambda _root: {"deleted": ["deleted-1", "same"]}
+    service.process_migration_deadlines = lambda: ["legacy/path.md"]
+    synced = []
+    monkeypatch.setattr(worker, "sync_document", synced.append)
+    run_once(service, None, generate_expiry_digest=False)
+    assert synced == ["expired-1", "same", "deleted-1"]

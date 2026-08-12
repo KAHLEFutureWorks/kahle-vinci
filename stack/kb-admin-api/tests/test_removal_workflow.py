@@ -21,6 +21,52 @@ def test_employee_removal_request_requires_admin_and_restore_reactivates_valid_v
         assert lifecycle.active_version(active.document_id) == active.version_id
 
 
+def test_document_removal_notifies_every_user_who_could_read_it():
+    from fastapi.testclient import TestClient
+    from test_portal_api import identity, load_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module._trigger_hybrid_document_sync = lambda _document_id: {"ok": True}
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="reader", email="reader@kahle.de", display_name="Leserin",
+        )
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "reader", kb.knowledgebase_id, can_read=True, can_upload=False,
+        )
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal",
+            target_knowledgebase_id=kb.knowledgebase_id, title="Serviceleitfaden",
+            original_filename="service.md", original_file_id="service",
+            original_sha256="8" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute("UPDATE document_versions SET status='active' WHERE version_id=?", (case.version_id,))
+            db.execute("UPDATE canonical_documents SET active_version_id=? WHERE document_id=?",
+                       (case.version_id, case.document_id))
+            db.execute("UPDATE document_publications SET status='active' WHERE document_id=?",
+                       (case.document_id,))
+
+        removed = client.post("/portal/removal-requests", json={
+            "document_id": case.document_id, "kind": "delete", "reason": "Nicht mehr aktuell",
+        })
+        assert removed.status_code == 201, removed.text
+
+        current["user"] = identity("reader")
+        assert client.get("/portal/session").status_code == 200
+        notifications = client.get("/portal/notifications").json()["notifications"]
+        assert notifications[0]["document_title"] == "Serviceleitfaden"
+        assert notifications[0]["status"] == "removed"
+        assert "nicht mehr abrufbar" in notifications[0]["message"]
+
+
 def test_legal_hold_suspends_automatic_physical_deletion(tmp_path: Path):
     governance, lifecycle, kb_id = setup(tmp_path)
     active = activate(lifecycle, kb_id)
@@ -79,10 +125,10 @@ def test_trashed_documents_disappear_from_both_listings():
         assert any(item.get("title") == "Wegwerfdokument" for item in trash), trash
 
 
-def test_only_portal_admins_delete_immediately_and_legal_hold_still_blocks():
+def test_admins_can_delete_only_after_recovery_period_and_legal_hold_still_blocks():
     """
-    Der regulaere Weg loescht erst nach 90 Tagen. Ein Portal-Admin darf das
-    abkuerzen; ein Legal Hold bleibt aber auch fuer ihn bindend.
+    In den ersten 30 Tagen bleibt ein Dokument zwingend wiederherstellbar.
+    Danach duerfen Admins und Portal-Admins loeschen; ein Legal Hold bleibt bindend.
     """
     import tempfile
     from pathlib import Path
@@ -118,18 +164,28 @@ def test_only_portal_admins_delete_immediately_and_legal_hold_still_blocks():
         held = trashed("Dokument2")
         module.MAINTENANCE.set_legal_hold(held, "portal", True, "Laufendes Verfahren", "2026-12-01")
 
-        # Ein normaler Admin darf nicht sofort loeschen.
+        # Vor Ablauf der Frist darf niemand physisch loeschen.
         current["user"] = identity("admin2", "user")
         assert client.get("/portal/session").status_code == 200
         forbidden = client.post(f"/portal/admin/trash/{normal}/delete", json={"reason": "Weg"})
-        assert forbidden.status_code == 403
-        assert forbidden.json()["detail"] == "portal_admin_required"
+        assert forbidden.status_code == 409
+        assert forbidden.json()["detail"] == "trash_recovery_period_active"
+
+        trash = client.get("/portal/admin/removals").json()["trash"]
+        normal_item = next(item for item in trash if item["document_id"] == normal)
+        assert normal_item["can_delete"] is False
+        assert normal_item["delete_eligible_on"]
+
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute("UPDATE document_trash SET trashed_at='2026-06-01' WHERE document_id IN (?, ?)", (normal, held))
 
         current["user"] = identity("portal", "admin")
         blocked = client.post(f"/portal/admin/trash/{held}/delete", json={"reason": "Weg damit"})
         assert blocked.status_code == 409
         assert blocked.json()["detail"] == "legal_hold_blocks_deletion"
 
+        # Auch ein normaler Admin darf nach Ablauf der Frist loeschen.
+        current["user"] = identity("admin2", "user")
         deleted = client.post(f"/portal/admin/trash/{normal}/delete", json={"reason": "Endgültig weg"})
         assert deleted.status_code == 200, deleted.text
         remaining = [item["document_id"] for item in client.get("/portal/admin/removals").json()["trash"]]
@@ -173,8 +229,9 @@ def test_withdrawn_cases_leave_no_orphan_draft_in_the_document_list():
         titles = lambda: [item["title"] for item in client.get("/portal/documents").json()["documents"]]
         assert "Verworfen" in titles()
 
-        module.DOCUMENT_LIFECYCLE.choose_action(
-            case_id=case.case_id, actor_user_id="portal", action="discard",
+        module.DOCUMENT_LIFECYCLE.decide(
+            case_id=case.case_id, actor_user_id="portal", decision="reject",
+            reason="Testentwurf wird verworfen",
         )
         assert "Verworfen" not in titles()
 
@@ -251,6 +308,8 @@ def test_corpus_entries_do_not_survive_their_version():
         assert module.GLOBAL_CORPUS.documents()
 
         module.MAINTENANCE.move_to_trash(case.document_id, "portal", "Weg damit")
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute("UPDATE document_trash SET trashed_at='2026-01-01' WHERE document_id=?", (case.document_id,))
         module.MAINTENANCE.delete_now(case.document_id, "portal", "Endgültig weg")
 
         assert module.GLOBAL_CORPUS.documents() == [], (
