@@ -64,6 +64,13 @@ def test_pending_environment_is_private_and_does_not_start_services():
     assert "systemctl" not in PREPARE_SCRIPT
 
 
+def test_production_start_prepares_portal_storage_for_the_container_identity():
+    assert 'portal_uid="$(env_value KB_ADMIN_UID)"' in START_SCRIPT
+    assert 'portal_gid="$(env_value KB_ADMIN_GID)"' in START_SCRIPT
+    assert 'install -d -o "${portal_uid}" -g "${portal_gid}" -m 750' in START_SCRIPT
+    assert '"${root_dir}/kb-portal-data/files"' in START_SCRIPT
+
+
 def test_pending_environment_has_fixed_public_identity_and_preserves_existing_entra_values():
     required = (
         "upsert_env PUBLIC_HOSTNAME vinci.kahle.de",

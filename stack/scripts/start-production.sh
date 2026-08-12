@@ -163,6 +163,14 @@ mkdir -p \
   "${root_dir}/searxng" \
   "${root_dir}/stack/retention-reports"
 
+portal_uid="$(env_value KB_ADMIN_UID)"
+portal_gid="$(env_value KB_ADMIN_GID)"
+portal_uid="${portal_uid:-1000}"
+portal_gid="${portal_gid:-1000}"
+install -d -o "${portal_uid}" -g "${portal_gid}" -m 750 \
+  "${root_dir}/kb-portal-data" \
+  "${root_dir}/kb-portal-data/files"
+
 compose=(
   sudo docker compose
   --env-file "${ENV_FILE}"
