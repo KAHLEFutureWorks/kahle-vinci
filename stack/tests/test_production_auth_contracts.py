@@ -64,17 +64,17 @@ def test_pending_environment_is_private_and_does_not_start_services():
     assert "systemctl" not in PREPARE_SCRIPT
 
 
-def test_pending_environment_has_fixed_public_identity_and_empty_entra_values():
+def test_pending_environment_has_fixed_public_identity_and_preserves_existing_entra_values():
     required = (
         "upsert_env PUBLIC_HOSTNAME vinci.kahle.de",
         "upsert_env WEBUI_URL https://vinci.kahle.de",
         "upsert_env OAUTH_ALLOWED_DOMAINS kahle.de",
         "upsert_env MICROSOFT_REDIRECT_URI https://vinci.kahle.de/oauth/microsoft/callback",
         'upsert_env MICROSOFT_OAUTH_SCOPE "openid email profile offline_access"',
-        'upsert_env OPENID_PROVIDER_URL ""',
-        'upsert_env MICROSOFT_CLIENT_ID ""',
-        'upsert_env MICROSOFT_CLIENT_SECRET ""',
-        'upsert_env MICROSOFT_CLIENT_TENANT_ID ""',
+        'ensure_env OPENID_PROVIDER_URL ""',
+        'ensure_env MICROSOFT_CLIENT_ID ""',
+        'ensure_env MICROSOFT_CLIENT_SECRET ""',
+        'ensure_env MICROSOFT_CLIENT_TENANT_ID ""',
         "upsert_env ENABLE_LOGIN_FORM False",
         "upsert_env ENABLE_PASSWORD_AUTH False",
     )
@@ -82,10 +82,10 @@ def test_pending_environment_has_fixed_public_identity_and_empty_entra_values():
         assert value in PREPARE_SCRIPT
 
 
-def test_oauth_encryption_keys_are_generated_independently():
-    assert 'upsert_env OAUTH_SESSION_TOKEN_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
-    assert 'upsert_env OAUTH_CLIENT_INFO_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
-    assert 'upsert_env KB_PORTAL_STEP_UP_SECRET "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
+def test_oauth_encryption_keys_are_generated_only_when_missing():
+    assert 'ensure_env OAUTH_SESSION_TOKEN_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
+    assert 'ensure_env OAUTH_CLIENT_INFO_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
+    assert 'ensure_env KB_PORTAL_STEP_UP_SECRET "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
 
 
 def test_production_start_validates_exact_entra_and_sso_configuration():
@@ -211,7 +211,7 @@ def test_production_uses_existing_host_backup_unless_portal_backup_is_explicitly
     assert "KAHLE_BACKUP_SECONDARY_ROOT" not in required_block
     assert "KB_BACKUP_ENCRYPTION_KEY: ${KB_BACKUP_ENCRYPTION_KEY:?" not in PROD_COMPOSE
     assert "KAHLE_BACKUP_SECONDARY_ROOT=/mnt/kahle-vinci-backups" in production_template
-    assert "upsert_env KB_BACKUP_ENCRYPTION_KEY \"\"" in PREPARE_SCRIPT
+    assert "ensure_env KB_BACKUP_ENCRYPTION_KEY \"\"" in PREPARE_SCRIPT
     assert "upsert_env KAHLE_BACKUP_SECONDARY_ROOT /mnt/kahle-vinci-backups" in PREPARE_SCRIPT
 
 

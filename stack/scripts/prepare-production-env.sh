@@ -57,39 +57,52 @@ upsert_env() {
   rm -f "${temporary}"
 }
 
+env_value() {
+  local name="$1"
+  sed -n "s/^${name}=//p" "${TARGET_ENV}" | tail -n 1
+}
+
+ensure_env() {
+  local name="$1"
+  local fallback="$2"
+  if [[ -z "$(env_value "${name}")" ]]; then
+    upsert_env "${name}" "${fallback}"
+  fi
+}
+
 upsert_env KAHLE_ROOT /opt/kahle-vinci
 upsert_env PUBLIC_HOSTNAME vinci.kahle.de
 upsert_env WEBUI_URL https://vinci.kahle.de
 upsert_env ACME_EMAIL oltmanns@kahle.de
 
 upsert_env OAUTH_ALLOWED_DOMAINS kahle.de
-upsert_env OPENID_PROVIDER_URL ""
-upsert_env MICROSOFT_CLIENT_ID ""
-upsert_env MICROSOFT_CLIENT_SECRET ""
-upsert_env MICROSOFT_CLIENT_TENANT_ID ""
+ensure_env OPENID_PROVIDER_URL ""
+ensure_env MICROSOFT_CLIENT_ID ""
+ensure_env MICROSOFT_CLIENT_SECRET ""
+ensure_env MICROSOFT_CLIENT_TENANT_ID ""
 upsert_env MICROSOFT_REDIRECT_URI https://vinci.kahle.de/oauth/microsoft/callback
 upsert_env MICROSOFT_OAUTH_SCOPE "openid email profile offline_access"
 upsert_env DEFAULT_USER_ROLE pending
 upsert_env PORTAL_ALLOWED_EMAIL_DOMAINS kahle.de
 
-upsert_env KB_PORTAL_STEP_UP_SECRET "$(openssl rand -hex 48)"
+ensure_env KB_PORTAL_STEP_UP_SECRET "$(openssl rand -hex 48)"
 upsert_env KB_PORTAL_ENTRA_REDIRECT_URI https://vinci.kahle.de/wissen/api/portal/auth/step-up/callback
 
-upsert_env KB_MAIL_TENANT_ID ""
-upsert_env KB_MAIL_CLIENT_ID ""
-upsert_env KB_MAIL_CLIENT_SECRET ""
-upsert_env KB_MAIL_SENDER ""
+ensure_env KB_MAIL_TENANT_ID ""
+ensure_env KB_MAIL_CLIENT_ID ""
+ensure_env KB_MAIL_CLIENT_SECRET ""
+ensure_env KB_MAIL_SENDER ""
 upsert_env KB_MAIL_CAPTURE_PATH /portal-data/mail-capture.jsonl
 
-upsert_env KB_BACKUP_ENCRYPTION_KEY ""
+ensure_env KB_BACKUP_ENCRYPTION_KEY ""
 upsert_env KAHLE_BACKUP_SECONDARY_ROOT /mnt/kahle-vinci-backups
 upsert_env ENABLE_PORTAL_BACKUP_WORKER False
 
 upsert_env ENABLE_LOGIN_FORM False
 upsert_env ENABLE_PASSWORD_AUTH False
 
-upsert_env OAUTH_SESSION_TOKEN_ENCRYPTION_KEY "$(openssl rand -hex 48)"
-upsert_env OAUTH_CLIENT_INFO_ENCRYPTION_KEY "$(openssl rand -hex 48)"
+ensure_env OAUTH_SESSION_TOKEN_ENCRYPTION_KEY "$(openssl rand -hex 48)"
+ensure_env OAUTH_CLIENT_INFO_ENCRYPTION_KEY "$(openssl rand -hex 48)"
 
 chmod 600 "${TARGET_ENV}"
 chown root:root "${TARGET_ENV}"
