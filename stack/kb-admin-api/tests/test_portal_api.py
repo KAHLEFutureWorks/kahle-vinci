@@ -66,16 +66,49 @@ def test_portal_http_contract_bootstraps_identity_and_enforces_roles():
         assert client.get("/portal/admin/users").status_code == 403
 
         current["user"] = identity("portal", "admin")
-        module.DEV_AUTH_BYPASS = True  # local-only test adapter for an already verified step-up
         response = client.patch(
             "/portal/admin/users/employee/role", json={"role": "manager"}
         )
         assert response.status_code == 200
         assert response.json()["user"]["role"] == "manager"
 
+        module.DEV_AUTH_BYPASS = True
         users = client.get("/portal/admin/users")
         assert users.status_code == 200
         assert {item["user_id"] for item in users.json()["users"]} == {"portal", "employee"}
+
+
+def test_only_privileged_role_demotion_requires_fresh_microsoft_authentication():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="target-admin",
+            email="target-admin@kahle.de",
+            display_name="Target Admin",
+        )
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="employee",
+            email="employee@kahle.de",
+            display_name="Employee",
+        )
+        module.PORTAL_GOVERNANCE.set_role("portal", "target-admin", "admin")
+
+        blocked = client.patch(
+            "/portal/admin/users/target-admin/role", json={"role": "manager"}
+        )
+        assert blocked.status_code == 503
+        assert blocked.json()["detail"] == "microsoft_step_up_not_configured"
+
+        ordinary = client.patch(
+            "/portal/admin/users/employee/role", json={"role": "manager"}
+        )
+        assert ordinary.status_code == 200
+        assert ordinary.json()["user"]["role"] == "manager"
 
 
 def test_portal_admin_knowledgebase_mutation_requires_fresh_microsoft_authentication():

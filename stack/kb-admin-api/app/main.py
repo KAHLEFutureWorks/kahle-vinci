@@ -2873,7 +2873,13 @@ def portal_admin_set_role(
     request: Request,
     identity: dict[str, Any] = Depends(require_portal_identity),
 ) -> dict[str, Any]:
-    require_fresh_step_up(request, identity)
+    target = _portal_call(lambda: PORTAL_GOVERNANCE.identity(target_user_id))
+    role_rank = {"employee": 0, "manager": 1, "admin": 2, "portal_admin": 3}
+    if (
+        target.role in {"admin", "portal_admin"}
+        and role_rank[payload.role] < role_rank[target.role]
+    ):
+        require_fresh_step_up(request, identity)
     user = _portal_call(
         lambda: PORTAL_GOVERNANCE.set_role(identity["user_id"], target_user_id, payload.role)
     )

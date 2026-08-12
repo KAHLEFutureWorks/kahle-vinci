@@ -18,6 +18,14 @@ import {
 
 const API = "/wissen/api";
 type Role = "employee" | "manager" | "admin" | "portal_admin";
+
+const roleLabel = (role: Role) =>
+  ({
+    employee: "Mitarbeiter",
+    manager: "Führungskraft",
+    admin: "Admin",
+    portal_admin: "Portal-Admin",
+  })[role];
 type Session = {
   user_id: string;
   email: string;
@@ -1941,7 +1949,8 @@ function UserAdmin({
     [ownerPermission, setOwnerPermission] = useState(false);
   const [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
-    [dirty, setDirty] = useState(false);
+    [dirty, setDirty] = useState(false),
+    [pendingRole, setPendingRole] = useState<Role | null>(null);
   const [absences, setAbsences] = useState<Absence[]>([]),
     [absenceManager, setAbsenceManager] = useState(""),
     [delegate, setDelegate] = useState(""),
@@ -2004,14 +2013,46 @@ function UserAdmin({
     };
   }, [selected, current]);
 
-  async function beginRoleChange(role: Role) {
+  function beginRoleChange(role: Role) {
     if (!current || role === current.role) return;
+    setPendingRole(role);
+    setMessage("");
+  }
+  async function confirmRoleChange() {
+    if (!current || !pendingRole) return;
+    const roleRank: Record<Role, number> = {
+      employee: 0,
+      manager: 1,
+      admin: 2,
+      portal_admin: 3,
+    };
+    const needsMicrosoftConfirmation =
+      ["admin", "portal_admin"].includes(current.role) &&
+      roleRank[pendingRole] < roleRank[current.role];
+    if (!needsMicrosoftConfirmation) {
+      setBusy(true);
+      try {
+        await api(`/portal/admin/users/${current.user_id}/role`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: pendingRole }),
+        });
+        setPendingRole(null);
+        setMessage(`Die Rolle von ${current.display_name} wurde geändert.`);
+        await done();
+      } catch (cause) {
+        setMessage(friendlyError(cause, "Rollenänderung fehlgeschlagen"));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const start = await api<{ authorization_url: string }>(
       "/portal/auth/step-up/start?return_to=/wissen/",
     );
     sessionStorage.setItem(
       "pending-role-change",
-      JSON.stringify({ userId: current.user_id, role }),
+      JSON.stringify({ userId: current.user_id, role: pendingRole }),
     );
     window.location.assign(start.authorization_url);
   }
@@ -2153,7 +2194,10 @@ function UserAdmin({
               type="button"
               key={user.user_id}
               className={selected === user.user_id ? "selected" : ""}
-              onClick={() => setSelected(user.user_id)}
+              onClick={() => {
+                setSelected(user.user_id);
+                setPendingRole(null);
+              }}
             >
               <span className="wp-avatar">
                 {user.display_name.slice(0, 2).toUpperCase()}
@@ -2197,14 +2241,12 @@ function UserAdmin({
                 <label>
                   Rolle
                   <select
-                    value={current.role}
+                    value={pendingRole ?? current.role}
                     disabled={
                       session.role !== "portal_admin" &&
                       ["admin", "portal_admin"].includes(current.role)
                     }
-                    onChange={(e) =>
-                      void beginRoleChange(e.target.value as Role)
-                    }
+                    onChange={(e) => beginRoleChange(e.target.value as Role)}
                   >
                     <option value="employee">Mitarbeiter</option>
                     <option value="manager">Führungskraft</option>
@@ -2214,8 +2256,9 @@ function UserAdmin({
                     )}
                   </select>
                   <small>
-                    Rollenänderungen benötigen eine erneute
-                    Microsoft-Bestätigung.
+                    Normale Rollenänderungen bestätigst du direkt hier. Nur die
+                    Herabstufung eines Admins oder Portal-Admins benötigt eine
+                    erneute Microsoft-Bestätigung.
                   </small>
                 </label>
                 <label>
@@ -2238,6 +2281,34 @@ function UserAdmin({
                   </select>
                 </label>
               </div>
+              {pendingRole && (
+                <div className="wp-role-confirmation" role="alert">
+                  <div>
+                    <strong>Rolle wirklich ändern?</strong>
+                    <p>
+                      {current.display_name} wird von {roleLabel(current.role)} zu{" "}
+                      {roleLabel(pendingRole)} geändert.
+                    </p>
+                  </div>
+                  <div className="wp-role-confirmation-actions">
+                    <button
+                      type="button"
+                      onClick={() => setPendingRole(null)}
+                      disabled={busy}
+                    >
+                      Abbrechen
+                    </button>
+                    <button
+                      type="button"
+                      className="wp-primary"
+                      onClick={() => void confirmRoleChange()}
+                      disabled={busy}
+                    >
+                      {busy ? "Wird geändert …" : "Rollenänderung bestätigen"}
+                    </button>
+                  </div>
+                </div>
+              )}
               <label className="wp-check-row">
                 <input
                   type="checkbox"
