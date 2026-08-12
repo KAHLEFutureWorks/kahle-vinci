@@ -48,7 +48,7 @@
 		reverse_proxy kb-admin-dashboard:3000
 	}
 
-	handle /wissen/* {
+	handle_path /wissen/* {
 		header {
 			Content-Security-Policy "frame-ancestors 'none'"
 			X-Frame-Options "DENY"

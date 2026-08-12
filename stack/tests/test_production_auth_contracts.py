@@ -165,7 +165,7 @@ def test_vector_dashboard_static_and_page_routes_require_admin_session():
     assert CADDYFILE.count("forward_auth kb-admin-api:8092") == 2
     assert CADDYFILE.count("uri /portal/session") == 2
     static_position = CADDYFILE.index("handle @vector_static")
-    page_position = CADDYFILE.index("handle /wissen/*")
+    page_position = CADDYFILE.index("handle_path /wissen/*")
     assert CADDYFILE.index("forward_auth kb-admin-api:8092", static_position) < page_position
     assert CADDYFILE.index("forward_auth kb-admin-api:8092", page_position) > page_position
 
@@ -179,7 +179,7 @@ def test_sharepoint_embedding_is_narrow_and_sensitive_routes_remain_blocked():
         "handle /files/*",
         "handle_path /wissen/api/*",
         "handle @vector_static",
-        "handle /wissen/*",
+        "handle_path /wissen/*",
     ):
         route_position = CADDYFILE.index(route)
         next_handle = CADDYFILE.find("\n\thandle", route_position + len(route))
