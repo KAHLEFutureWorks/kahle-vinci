@@ -33,8 +33,6 @@ required=(
   OAUTH_SESSION_TOKEN_ENCRYPTION_KEY OAUTH_CLIENT_INFO_ENCRYPTION_KEY
   KB_ADMIN_UNLOCK_CODE_HASH KB_ADMIN_UNLOCK_SESSION_SECRET
   KB_PORTAL_STEP_UP_SECRET KB_PORTAL_ENTRA_REDIRECT_URI PORTAL_ALLOWED_EMAIL_DOMAINS
-  KB_MAIL_TENANT_ID KB_MAIL_CLIENT_ID KB_MAIL_CLIENT_SECRET KB_MAIL_SENDER
-  KB_BACKUP_ENCRYPTION_KEY KAHLE_BACKUP_SECONDARY_ROOT
 )
 
 for name in "${required[@]}"; do
@@ -55,13 +53,8 @@ if grep -Eq '(<[^>]+>|example\.com|changeme)' "${ENV_FILE}"; then
 fi
 
 root_dir="$(sed -n 's/^KAHLE_ROOT=//p' "${ENV_FILE}" | tail -n 1)"
-backup_secondary_root="$(env_value KAHLE_BACKUP_SECONDARY_ROOT)"
 if [[ -z "${root_dir}" || "${root_dir}" != /* ]]; then
   echo "ERROR: KAHLE_ROOT must be an absolute Linux path." >&2
-  exit 1
-fi
-if [[ -z "${backup_secondary_root}" || "${backup_secondary_root}" != /* ]]; then
-  echo "ERROR: KAHLE_BACKUP_SECONDARY_ROOT must be an absolute Linux path." >&2
   exit 1
 fi
 
@@ -76,6 +69,7 @@ session_key="$(env_value OAUTH_SESSION_TOKEN_ENCRYPTION_KEY)"
 client_info_key="$(env_value OAUTH_CLIENT_INFO_ENCRYPTION_KEY)"
 mail_tenant_id="$(env_value KB_MAIL_TENANT_ID)"
 mail_client_id="$(env_value KB_MAIL_CLIENT_ID)"
+mail_client_secret="$(env_value KB_MAIL_CLIENT_SECRET)"
 mail_sender="$(env_value KB_MAIL_SENDER)"
 portal_step_up_secret="$(env_value KB_PORTAL_STEP_UP_SECRET)"
 portal_redirect_uri="$(env_value KB_PORTAL_ENTRA_REDIRECT_URI)"
@@ -111,14 +105,24 @@ if [[ ! "${client_id}" =~ ${uuid_pattern} ]]; then
   echo "ERROR: MICROSOFT_CLIENT_ID is not a valid UUID." >&2
   exit 1
 fi
-if [[ ! "${mail_tenant_id}" =~ ${uuid_pattern} || ! "${mail_client_id}" =~ ${uuid_pattern} ]]; then
-  echo "ERROR: Microsoft Graph mail tenant and client IDs must be valid UUIDs." >&2
+mail_values=("${mail_tenant_id}" "${mail_client_id}" "${mail_client_secret}" "${mail_sender}")
+mail_count=0
+for value in "${mail_values[@]}"; do
+  [[ -n "${value}" ]] && ((mail_count += 1))
+done
+if (( mail_count != 0 && mail_count != 4 )); then
+  echo "ERROR: Graph mail configuration must either be complete or entirely empty." >&2
   exit 1
 fi
-
-if [[ ! "${mail_sender}" =~ ^[A-Za-z0-9._%+-]+@kahle\.de$ ]]; then
-  echo "ERROR: KB_MAIL_SENDER must be a kahle.de mailbox." >&2
-  exit 1
+if (( mail_count == 4 )); then
+  if [[ ! "${mail_tenant_id}" =~ ${uuid_pattern} || ! "${mail_client_id}" =~ ${uuid_pattern} ]]; then
+    echo "ERROR: Microsoft Graph mail tenant and client IDs must be valid UUIDs." >&2
+    exit 1
+  fi
+  if [[ ! "${mail_sender}" =~ ^[A-Za-z0-9._%+-]+@kahle\.de$ ]]; then
+    echo "ERROR: KB_MAIL_SENDER must be a kahle.de mailbox." >&2
+    exit 1
+  fi
 fi
 
 expected_provider_url="https://login.microsoftonline.com/${tenant_id}/v2.0/.well-known/openid-configuration"
@@ -161,11 +165,23 @@ mkdir -p \
 
 compose=(
   sudo docker compose
-  --profile operations
   --env-file "${ENV_FILE}"
   -f "${STACK_DIR}/docker-compose.yml"
   -f "${STACK_DIR}/docker-compose.prod.yml"
 )
+
+if [[ "$(env_value ENABLE_PORTAL_BACKUP_WORKER)" == "True" ]]; then
+  backup_secondary_root="$(env_value KAHLE_BACKUP_SECONDARY_ROOT)"
+  if [[ -z "$(env_value KB_BACKUP_ENCRYPTION_KEY)" ]]; then
+    echo "ERROR: KB_BACKUP_ENCRYPTION_KEY is required when ENABLE_PORTAL_BACKUP_WORKER=True." >&2
+    exit 1
+  fi
+  if [[ -z "${backup_secondary_root}" || "${backup_secondary_root}" != /* ]]; then
+    echo "ERROR: KAHLE_BACKUP_SECONDARY_ROOT must be an absolute Linux path when the portal backup worker is enabled." >&2
+    exit 1
+  fi
+  compose+=(--profile operations)
+fi
 
 "${compose[@]}" config --quiet
 

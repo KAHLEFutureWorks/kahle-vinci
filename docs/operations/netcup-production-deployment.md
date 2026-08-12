@@ -17,10 +17,10 @@ This runbook prepares and tests KAHLE-Vinci as an internal employee system on a 
 - Target domain `vinci.kahle.de` with DNS A/AAAA records pointing to the server.
 - Microsoft Entra tenant ID.
 - Microsoft app registration client ID and client secret with both required redirect URIs.
-- Microsoft Graph application credentials with `Mail.Send` and the mailbox `vinci@kahle.de`.
+- Optional for the first server test: Microsoft Graph application credentials with `Mail.Send` and a KAHLE sender mailbox. Without them, messages are retained in the protected local capture file and Graph delivery remains an open acceptance item.
 - Allowed login domain, usually `kahle.de`.
 - IONOS API key and existing KAHLE-Vinci runtime secrets.
-- An external absolute backup target and a newly generated backup encryption key.
+- An encrypted host backup with an external verified copy. The existing systemd backup and Windows SFTP pull satisfy this on `vinci-prod-01`; do not enable the additional portal backup worker there.
 
 The product decision for the first server test is a fresh knowledge setup. Existing Knowledgebases are not copied to the server. Every test document enters through the new portal workflow.
 
@@ -104,7 +104,7 @@ Validate every required value, placeholder, redirect URI and the complete Compos
 sudo stack/scripts/start-production.sh stack/.env.production --check-only
 ```
 
-Only after the check succeeds, start the server test stack. The script always enables the encrypted operations backup profile:
+Only after the check succeeds, start the server test stack. The additional portal backup worker is disabled by default because `vinci-prod-01` already backs up the complete project and Docker volumes every night. Enable it only on hosts without that existing protection:
 
 ```bash
 sudo stack/scripts/start-production.sh stack/.env.production
@@ -132,7 +132,7 @@ Before inviting further employees, record the following checks in `docs/WISSENSP
 
 - Microsoft login and fresh step-up for critical admin actions.
 - Employee, manager, Admin and Portal-Admin routing with separate real accounts.
-- Graph emails for upload, approval, rejection, escalation and publication.
+- Portal notifications for upload, approval, rejection, escalation and publication. Graph delivery remains a separately documented open test until the IT-managed app registration is available.
 - Read isolation between two Knowledgebases and protected original links.
 - Clean area upload, KAHLE-Allgemein approval, duplicate/version case and critical two-stage case.
 - Concurrent approvals and background publication queue.

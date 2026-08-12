@@ -188,25 +188,28 @@ def test_sharepoint_embedding_uses_cross_site_secure_oauth_cookies():
     assert 'WEBUI_SESSION_COOKIE_SECURE: "True"' in PROD_COMPOSE
     assert 'WEBUI_AUTH_COOKIE_SECURE: "True"' in PROD_COMPOSE
 
-def test_production_requires_microsoft_graph_mail_delivery_configuration():
+def test_production_allows_mail_capture_until_graph_is_configured():
     env_example = (STACK_DIR / ".env.example").read_text(encoding="utf-8")
     production_template = (STACK_DIR / "env.production.template").read_text(encoding="utf-8")
-    required = ("KB_MAIL_TENANT_ID", "KB_MAIL_CLIENT_ID", "KB_MAIL_CLIENT_SECRET", "KB_MAIL_SENDER")
-    for name in required:
-        assert f"{name}: ${{{name}:?" in PROD_COMPOSE
+    for name in ("KB_MAIL_TENANT_ID", "KB_MAIL_CLIENT_ID", "KB_MAIL_CLIENT_SECRET", "KB_MAIL_SENDER"):
         assert name in START_SCRIPT
-        assert name in PREPARE_SCRIPT
         assert name in env_example
         assert name in production_template
+    assert "KB_MAIL_CAPTURE_PATH" in env_example
+    assert "KB_MAIL_CAPTURE_PATH" in production_template
+    assert "Graph mail configuration must either be complete or entirely empty" in START_SCRIPT
+    assert "KB_MAIL_TENANT_ID: ${KB_MAIL_TENANT_ID:?" not in PROD_COMPOSE
     assert "Microsoft Graph mail tenant and client IDs must be valid UUIDs" in START_SCRIPT
     assert "KB_MAIL_SENDER must be a kahle.de mailbox" in START_SCRIPT
 
-def test_production_always_starts_encrypted_portal_backup_profile():
+def test_production_uses_existing_host_backup_unless_portal_backup_is_explicitly_enabled():
     production_template = (STACK_DIR / "env.production.template").read_text(encoding="utf-8")
-    assert "--profile operations" in START_SCRIPT
-    assert "KB_BACKUP_ENCRYPTION_KEY KAHLE_BACKUP_SECONDARY_ROOT" in START_SCRIPT
-    assert "KAHLE_BACKUP_SECONDARY_ROOT must be an absolute Linux path" in START_SCRIPT
-    assert "KB_BACKUP_ENCRYPTION_KEY: ${KB_BACKUP_ENCRYPTION_KEY:?" in PROD_COMPOSE
+    assert 'ENABLE_PORTAL_BACKUP_WORKER)' in START_SCRIPT
+    assert 'compose+=(--profile operations)' in START_SCRIPT
+    required_block = START_SCRIPT.split("required=(", 1)[1].split(")", 1)[0]
+    assert "KB_BACKUP_ENCRYPTION_KEY" not in required_block
+    assert "KAHLE_BACKUP_SECONDARY_ROOT" not in required_block
+    assert "KB_BACKUP_ENCRYPTION_KEY: ${KB_BACKUP_ENCRYPTION_KEY:?" not in PROD_COMPOSE
     assert "KAHLE_BACKUP_SECONDARY_ROOT=/mnt/kahle-vinci-backups" in production_template
     assert "upsert_env KB_BACKUP_ENCRYPTION_KEY \"\"" in PREPARE_SCRIPT
     assert "upsert_env KAHLE_BACKUP_SECONDARY_ROOT /mnt/kahle-vinci-backups" in PREPARE_SCRIPT
