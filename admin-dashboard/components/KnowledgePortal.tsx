@@ -1944,7 +1944,8 @@ function UserAdmin({
   done: () => Promise<void>;
 }) {
   const [selected, setSelected] = useState(users[0]?.user_id || ""),
-    [access, setAccess] = useState<UserAccess[]>([]);
+    [access, setAccess] = useState<UserAccess[]>([]),
+    [userQuery, setUserQuery] = useState("");
   const [managerId, setManagerId] = useState(""),
     [ownerPermission, setOwnerPermission] = useState(false);
   const [message, setMessage] = useState(""),
@@ -1962,6 +1963,15 @@ function UserAdmin({
       ["manager", "admin", "portal_admin"].includes(user.role) && user.active,
   );
   const current = users.find((user) => user.user_id === selected);
+  const visibleUsers = users.filter((user) => {
+    const query = userQuery.trim().toLocaleLowerCase("de");
+    return (
+      !query ||
+      user.display_name.toLocaleLowerCase("de").includes(query) ||
+      user.email.toLocaleLowerCase("de").includes(query) ||
+      roleLabel(user.role).toLocaleLowerCase("de").includes(query)
+    );
+  });
   const userName = (id?: string) =>
     users.find((user) => user.user_id === id)?.display_name || "Unbekannt";
 
@@ -2188,8 +2198,17 @@ function UserAdmin({
               <span>Benutzer</span>
               <strong>{users.length} Konten</strong>
             </div>
+            <label className="wp-user-search">
+              <span>Benutzer suchen</span>
+              <input
+                type="search"
+                value={userQuery}
+                placeholder="Name, E-Mail oder Rolle"
+                onChange={(event) => setUserQuery(event.target.value)}
+              />
+            </label>
           </div>
-          {users.map((user) => (
+          {visibleUsers.map((user) => (
             <button
               type="button"
               key={user.user_id}
@@ -2221,6 +2240,11 @@ function UserAdmin({
               <ChevronRight />
             </button>
           ))}
+          {visibleUsers.length === 0 && (
+            <p className="wp-user-directory-empty">
+              Kein passender Benutzer gefunden.
+            </p>
+          )}
         </aside>
         {current ? (
           <div className="wp-user-detail">
