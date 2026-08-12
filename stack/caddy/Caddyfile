@@ -48,16 +48,18 @@
 		reverse_proxy kb-admin-dashboard:3000
 	}
 
-	handle_path /wissen/* {
+	handle /wissen/* {
 		header {
 			Content-Security-Policy "frame-ancestors 'none'"
 			X-Frame-Options "DENY"
 		}
-		forward_auth kb-admin-api:8092 {
-			uri /portal/session
+		route {
+			forward_auth kb-admin-api:8092 {
+				uri /portal/session
+			}
+			rewrite * /wissen/
+			reverse_proxy kb-admin-dashboard:3000
 		}
-		rewrite * /
-		reverse_proxy kb-admin-dashboard:3000
 	}
 
 	handle {
