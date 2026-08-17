@@ -284,6 +284,50 @@ def test_due_date_morgen_is_resolved_from_latest_user_message(tmp_path):
     assert created["task"]["created_at_display"]
 
 
+def test_due_date_kommenden_montag_overrides_wrong_model_date(tmp_path):
+    module = load_module(tmp_path)
+    tools = module.Tools()
+    user = {"id": "user-1"}
+
+    webui_db = tmp_path / "webui.db"
+    con = sqlite3.connect(webui_db)
+    con.execute("create table chat_message (chat_id text, role text, content text, created_at integer, updated_at integer)")
+    con.execute(
+        "insert into chat_message values (?, 'user', ?, 10, 10)",
+        ("chat-monday", "Bitte fuege die Aufgabe fuer kommenden Montag ein."),
+    )
+    con.commit()
+    con.close()
+
+    old_webui = os.environ.get("OWUI_DB_PATH")
+    old_today = os.environ.get("KAHLE_TASKS_TODAY")
+    os.environ["OWUI_DB_PATH"] = str(webui_db)
+    os.environ["KAHLE_TASKS_TODAY"] = "2026-08-13"
+    try:
+        created = json.loads(
+            run(
+                tools.kv_task_create(
+                    title="Maarten Genesys, Globale und Abmeldungen geben",
+                    due_date="2026-08-11",
+                    __chat_id__="chat-monday",
+                    __user__=user,
+                )
+            )
+        )
+    finally:
+        if old_webui is None:
+            os.environ.pop("OWUI_DB_PATH", None)
+        else:
+            os.environ["OWUI_DB_PATH"] = old_webui
+        if old_today is None:
+            os.environ.pop("KAHLE_TASKS_TODAY", None)
+        else:
+            os.environ["KAHLE_TASKS_TODAY"] = old_today
+
+    assert created["ok"] is True
+    assert created["task"]["due_date"] == "2026-08-17"
+
+
 def test_tasks_are_user_scoped(tmp_path):
     module = load_module(tmp_path)
     tools = module.Tools()

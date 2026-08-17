@@ -90,6 +90,12 @@ class MaintenanceService:
                     reason TEXT NOT NULL, legal_hold INTEGER NOT NULL DEFAULT 0,
                     hold_reason TEXT, review_at TEXT, physically_deleted_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS document_trash_reads (
+                    user_id TEXT NOT NULL REFERENCES portal_users(user_id),
+                    document_id TEXT NOT NULL,
+                    read_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, document_id)
+                );
                 CREATE TABLE IF NOT EXISTS document_removal_requests (
                     request_id TEXT PRIMARY KEY, document_id TEXT NOT NULL, requested_by TEXT NOT NULL,
                     kind TEXT NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL, decided_by TEXT,
@@ -280,7 +286,7 @@ class MaintenanceService:
         if approve:
             self.move_to_trash(request["document_id"], actor_user_id, reason)
 
-    def list_removals(self) -> dict[str, list[dict[str, Any]]]:
+    def list_removals(self, actor_user_id: str | None = None) -> dict[str, Any]:
         # Dokumenttitel mitliefern: Mit einer blossen UUID kann ein Admin nicht
         # entscheiden, ob er etwas wiederherstellen oder endgueltig loeschen will.
         with self.store.connect() as db:
@@ -294,11 +300,35 @@ class MaintenanceService:
                    LEFT JOIN canonical_documents d ON d.document_id = t.document_id
                    WHERE t.physically_deleted_at IS NULL ORDER BY t.trashed_at"""
             ).fetchall()]
+            unread_count = 0
+            if actor_user_id:
+                unread_count = db.execute(
+                    """SELECT COUNT(*) AS count FROM document_trash t
+                       WHERE t.physically_deleted_at IS NULL AND NOT EXISTS (
+                         SELECT 1 FROM document_trash_reads r
+                         WHERE r.user_id=? AND r.document_id=t.document_id
+                       )""",
+                    (actor_user_id,),
+                ).fetchone()["count"]
         for item in trash:
             eligible_on = date.fromisoformat(item["trashed_at"]) + timedelta(days=self.TRASH_RECOVERY_DAYS)
             item["delete_eligible_on"] = eligible_on.isoformat()
             item["can_delete"] = self.today() >= eligible_on and not bool(item["legal_hold"])
-        return {"requests": requests, "trash": trash}
+        return {"requests": requests, "trash": trash, "unread_count": int(unread_count)}
+
+    def mark_trash_read(self, actor_user_id: str) -> None:
+        with self.store.connect() as db:
+            actor = db.execute(
+                "SELECT role FROM portal_users WHERE user_id=? AND active=1", (actor_user_id,),
+            ).fetchone()
+            if not actor or actor["role"] not in {"admin", "portal_admin"}:
+                raise MaintenanceError("admin_required")
+            db.execute(
+                """INSERT OR REPLACE INTO document_trash_reads(user_id,document_id,read_at)
+                   SELECT ?,document_id,? FROM document_trash
+                   WHERE physically_deleted_at IS NULL""",
+                (actor_user_id, self.now()),
+            )
 
     def restore_from_trash(self, document_id: str, actor_user_id: str, reason: str) -> None:
         if len(reason.strip()) < 3: raise MaintenanceError("restore_reason_required")

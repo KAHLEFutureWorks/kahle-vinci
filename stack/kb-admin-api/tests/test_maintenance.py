@@ -78,6 +78,19 @@ def test_trash_reminders_and_physical_deletion_at_day_90(tmp_path: Path):
         assert not db.execute("SELECT 1 FROM canonical_documents WHERE document_id = ?", (active.document_id,)).fetchone()
 
 
+def test_trash_unread_count_is_personal_and_cleared_when_opened(tmp_path: Path):
+    governance, lifecycle, kb_id = setup(tmp_path)
+    active = activate(lifecycle, kb_id)
+    service = MaintenanceService(governance.store, today=lambda: date(2026, 8, 6))
+    service.move_to_trash(active.document_id, "admin", "Veraltet")
+
+    assert service.list_removals("admin")["unread_count"] == 1
+    assert service.list_removals("portal")["unread_count"] == 1
+    service.mark_trash_read("admin")
+    assert service.list_removals("admin")["unread_count"] == 0
+    assert service.list_removals("portal")["unread_count"] == 1
+
+
 def pending_case(governance, lifecycle, kb_id):
     case = submit(lifecycle, kb_id)
     case = lifecycle.record_analysis(

@@ -158,6 +158,7 @@ def test_admin_prepares_knowledgebase_change_portal_admin_decides():
             "role_changed",
             "knowledgebase_change_requested",
             "knowledgebase_change_decided",
+            "knowledgebase_created",
         }
 
 

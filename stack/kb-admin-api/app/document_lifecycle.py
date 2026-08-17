@@ -162,6 +162,7 @@ class DocumentLifecycle:
                     version_id TEXT PRIMARY KEY,
                     document_id TEXT NOT NULL REFERENCES canonical_documents(document_id),
                     previous_version_id TEXT REFERENCES document_versions(version_id),
+                    title TEXT,
                     original_filename TEXT NOT NULL,
                     original_file_id TEXT NOT NULL,
                     original_sha256 TEXT NOT NULL,
@@ -249,6 +250,15 @@ class DocumentLifecycle:
                 );
                 """
             )
+            version_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(document_versions)")
+            }
+            if "title" not in version_columns:
+                db.execute("ALTER TABLE document_versions ADD COLUMN title TEXT")
+            db.execute(
+                "UPDATE document_versions SET title=(SELECT d.title FROM canonical_documents d "
+                "WHERE d.document_id=document_versions.document_id) WHERE title IS NULL"
+            )
 
     def submit(
         self,
@@ -262,11 +272,19 @@ class DocumentLifecycle:
         original_sha256: str,
         valid_workdays: int,
         confidentiality: Confidentiality,
+        target_knowledgebase_ids: tuple[str, ...] = (),
         document_id: str | None = None,
         version_id: str | None = None,
         case_id: str | None = None,
     ) -> Submission:
-        self.governance.require_access(uploaded_by_user_id, target_knowledgebase_id, "upload")
+        target_knowledgebase_ids = tuple(dict.fromkeys(
+            item.strip() for item in (target_knowledgebase_ids or (target_knowledgebase_id,)) if item.strip()
+        ))
+        if not target_knowledgebase_ids:
+            raise LifecycleError("knowledgebase_required")
+        target_knowledgebase_id = target_knowledgebase_ids[0]
+        for knowledgebase_id in target_knowledgebase_ids:
+            self.governance.require_access(uploaded_by_user_id, knowledgebase_id, "upload")
         owner = self.governance.identity(owner_user_id)
         if not owner.active:
             raise LifecycleError("owner_inactive")
@@ -302,19 +320,20 @@ class DocumentLifecycle:
                 """INSERT OR IGNORE INTO document_metadata
                    (document_id, authority_type, authority_level, scope_json)
                    VALUES (?, 'information_or_training', 6, ?)""",
-                (document_id, json.dumps({"knowledgebase_ids": [target_knowledgebase_id]}, sort_keys=True)),
+                (document_id, json.dumps({"knowledgebase_ids": list(target_knowledgebase_ids)}, sort_keys=True)),
             )
             db.execute(
                 """
                 INSERT INTO document_versions (
-                    version_id, document_id, previous_version_id, original_filename,
+                    version_id, document_id, previous_version_id, title, original_filename,
                     original_file_id, original_sha256, valid_workdays, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'quarantine', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'quarantine', ?)
                 """,
                 (
                     version_id,
                     document_id,
                     previous_version_id,
+                    title,
                     filename,
                     file_id,
                     sha256,
@@ -322,16 +341,17 @@ class DocumentLifecycle:
                     stamp,
                 ),
             )
-            db.execute(
-                """
-                INSERT INTO document_publications (
-                    document_id, knowledgebase_id, status, created_at, updated_at
-                ) VALUES (?, ?, 'pending', ?, ?)
-                ON CONFLICT(document_id, knowledgebase_id) DO UPDATE SET
-                    status = 'pending', updated_at = excluded.updated_at
-                """,
-                (document_id, target_knowledgebase_id, stamp, stamp),
-            )
+            for knowledgebase_id in target_knowledgebase_ids:
+                db.execute(
+                    """
+                    INSERT INTO document_publications (
+                        document_id, knowledgebase_id, status, created_at, updated_at
+                    ) VALUES (?, ?, 'pending', ?, ?)
+                    ON CONFLICT(document_id, knowledgebase_id) DO UPDATE SET
+                        status = 'pending', updated_at = excluded.updated_at
+                    """,
+                    (document_id, knowledgebase_id, stamp, stamp),
+                )
             db.execute(
                 """
                 INSERT INTO document_cases (
@@ -350,7 +370,10 @@ class DocumentLifecycle:
                     stamp,
                 ),
             )
-            self._event(db, case_id, uploaded_by_user_id, "submitted", {"owner_user_id": owner_user_id})
+            self._event(db, case_id, uploaded_by_user_id, "submitted", {
+                "owner_user_id": owner_user_id,
+                "knowledgebase_ids": list(target_knowledgebase_ids),
+            })
         return self.submission(case_id)
 
     def apply_automatic_confidentiality(
@@ -539,13 +562,28 @@ class DocumentLifecycle:
                 next_status = "pending_admin_approval"
             else:
                 next_status = "pending_manager_approval"
+        requires_admin = case.requires_admin
         with self.store.connect() as db:
+            if action == "replace":
+                row = db.execute(
+                    "SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,),
+                ).fetchone()
+                analysis = json.loads(row["analysis_json"] or "{}") if row else {}
+                # Inhaltliche Abweichungen sind bei einer neuen Version erwartbar und
+                # werden von der Führungskraft geprüft. Echte Sicherheitsbefunde
+                # behalten weiterhin zwingend die zusätzliche Adminfreigabe.
+                requires_admin = bool(
+                    str(analysis.get("prompt_injection_risk") or "none")
+                    in {"medium", "high", "critical"}
+                    or str(analysis.get("conversion_quality") or "good") == "low"
+                    or analysis.get("restricted_terms")
+                )
             db.execute(
                 """
                 UPDATE document_cases
                 SET requested_action = ?, status = ?, requires_admin = ?, updated_at = ? WHERE case_id = ?
                 """,
-                (action, next_status, int(case.requires_admin or action == "publish_existing"), self.now(), case_id),
+                (action, next_status, int(requires_admin or action == "publish_existing"), self.now(), case_id),
             )
             db.execute(
                 "UPDATE document_versions SET status = ? WHERE version_id = ?",
@@ -618,6 +656,118 @@ class DocumentLifecycle:
             })
         return self.submission(case_id)
 
+    def route_sanitized_security_review(
+        self, *, case_id: str, actor_user_id: str, finding: str
+    ) -> Submission:
+        """Send a sanitized false-positive candidate directly to an admin."""
+        case = self.submission(case_id)
+        if actor_user_id != case.uploaded_by_user_id:
+            raise LifecycleError("uploader_required")
+        if case.status in {"active", "rejected", "withdrawn"}:
+            raise LifecycleError("security_review_not_allowed")
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,),
+            ).fetchone()
+            analysis = json.loads(row["analysis_json"] or "{}") if row else {}
+            analysis["security_review_finding"] = finding
+            analysis["sanitized_for_review"] = True
+            db.execute(
+                "UPDATE document_cases SET status='pending_admin_approval', "
+                "requested_action='create', requires_admin=1, analysis_json=?, updated_at=? "
+                "WHERE case_id=?",
+                (json.dumps(analysis, sort_keys=True), self.now(), case_id),
+            )
+            db.execute(
+                "UPDATE document_versions SET status='pending_admin_approval' WHERE version_id=?",
+                (case.version_id,),
+            )
+            self._event(db, case_id, actor_user_id, "security_review_requested", {
+                "finding": finding, "sanitized_for_review": True,
+            })
+        return self.submission(case_id)
+
+    def change_target_knowledgebase(
+        self, *, case_id: str, actor_user_id: str, knowledgebase_id: str,
+    ) -> Submission:
+        return self.change_target_knowledgebases(
+            case_id=case_id,
+            actor_user_id=actor_user_id,
+            knowledgebase_ids=(knowledgebase_id,),
+        )
+
+    def change_target_knowledgebases(
+        self, *, case_id: str, actor_user_id: str, knowledgebase_ids: tuple[str, ...],
+    ) -> Submission:
+        case = self.submission(case_id)
+        actor = self.governance.identity(actor_user_id)
+        if case.status not in {"pending_manager_approval", "pending_admin_approval"}:
+            raise LifecycleError("target_change_not_allowed")
+        if case.status == "pending_manager_approval":
+            allowed = actor_user_id == case.manager_user_id or (
+                actor.role == "portal_admin"
+                or self.governance.may_approve_for_manager(actor_user_id, case.manager_user_id)
+            )
+        else:
+            allowed = actor.role in {"admin", "portal_admin"}
+        if not allowed:
+            raise LifecycleError("reviewer_required")
+        knowledgebase_ids = tuple(dict.fromkeys(item.strip() for item in knowledgebase_ids if item.strip()))
+        if not knowledgebase_ids:
+            raise LifecycleError("knowledgebase_required")
+        with self.store.connect() as db:
+            placeholders = ",".join("?" for _ in knowledgebase_ids)
+            active_ids = {
+                row["knowledgebase_id"] for row in db.execute(
+                    f"SELECT knowledgebase_id FROM knowledgebases WHERE knowledgebase_id IN ({placeholders}) AND status='active'",
+                    knowledgebase_ids,
+                ).fetchall()
+            }
+            if active_ids != set(knowledgebase_ids):
+                raise LifecycleError("active_knowledgebase_required")
+            previous_ids = tuple(
+                row["knowledgebase_id"] for row in db.execute(
+                    "SELECT knowledgebase_id FROM document_publications "
+                    "WHERE document_id=? AND status='pending' ORDER BY created_at,knowledgebase_id",
+                    (case.document_id,),
+                ).fetchall()
+            ) or (case.target_knowledgebase_id,)
+            if set(knowledgebase_ids) == set(previous_ids):
+                return case
+            db.execute(
+                "UPDATE document_cases SET target_knowledgebase_id=?,updated_at=? WHERE case_id=?",
+                (knowledgebase_ids[0], self.now(), case_id),
+            )
+            db.execute(
+                "DELETE FROM document_publications WHERE document_id=? AND status='pending'",
+                (case.document_id,),
+            )
+            for knowledgebase_id in knowledgebase_ids:
+                db.execute(
+                    "INSERT INTO document_publications(document_id,knowledgebase_id,status,created_at,updated_at) "
+                    "VALUES (?,?,'pending',?,?) ON CONFLICT(document_id,knowledgebase_id) "
+                    "DO UPDATE SET status='pending',updated_at=excluded.updated_at",
+                    (case.document_id, knowledgebase_id, self.now(), self.now()),
+                )
+            metadata = db.execute(
+                "SELECT scope_json FROM document_metadata WHERE document_id=?",
+                (case.document_id,),
+            ).fetchone()
+            try:
+                scope = json.loads(metadata["scope_json"] or "{}") if metadata else {}
+            except json.JSONDecodeError:
+                scope = {}
+            scope["knowledgebase_ids"] = list(knowledgebase_ids)
+            db.execute(
+                "UPDATE document_metadata SET scope_json=? WHERE document_id=?",
+                (json.dumps(scope, sort_keys=True), case.document_id),
+            )
+            self._event(db, case_id, actor_user_id, "target_knowledgebases_changed", {
+                "previous_knowledgebase_ids": list(previous_ids),
+                "knowledgebase_ids": list(knowledgebase_ids),
+            })
+        return self.submission(case_id)
+
     def publish_existing(self, *, case_id: str, actor_user_id: str = "indexer") -> tuple[Submission, str, str | None]:
         case = self.submission(case_id)
         if case.status != "ready_to_activate" or case.requested_action != "publish_existing":
@@ -635,30 +785,42 @@ class DocumentLifecycle:
             ).fetchone()
             if not target or target["status"] != "active":
                 raise LifecycleError("existing_duplicate_not_active")
-            previous = db.execute(
-                "SELECT status FROM document_publications WHERE document_id=? AND knowledgebase_id=?",
-                (target_document_id, case.target_knowledgebase_id),
-            ).fetchone()
-            previous_status = previous["status"] if previous else None
+            knowledgebase_ids = tuple(
+                row["knowledgebase_id"] for row in db.execute(
+                    "SELECT knowledgebase_id FROM document_publications WHERE document_id=? AND status='pending'",
+                    (case.document_id,),
+                ).fetchall()
+            ) or (case.target_knowledgebase_id,)
+            previous_statuses: dict[str, str | None] = {}
+            for knowledgebase_id in knowledgebase_ids:
+                previous = db.execute(
+                    "SELECT status FROM document_publications WHERE document_id=? AND knowledgebase_id=?",
+                    (target_document_id, knowledgebase_id),
+                ).fetchone()
+                previous_statuses[knowledgebase_id] = previous["status"] if previous else None
+                db.execute(
+                    """INSERT INTO document_publications(document_id,knowledgebase_id,status,created_at,updated_at)
+                       VALUES (?,?,'active',?,?) ON CONFLICT(document_id,knowledgebase_id)
+                       DO UPDATE SET status='active',updated_at=excluded.updated_at""",
+                    (target_document_id, knowledgebase_id, self.now(), self.now()),
+                )
             db.execute(
-                """INSERT INTO document_publications(document_id,knowledgebase_id,status,created_at,updated_at)
-                   VALUES (?,?,'active',?,?) ON CONFLICT(document_id,knowledgebase_id)
-                   DO UPDATE SET status='active',updated_at=excluded.updated_at""",
-                (target_document_id, case.target_knowledgebase_id, self.now(), self.now()),
-            )
-            db.execute(
-                "UPDATE document_publications SET status='inactive',updated_at=? WHERE document_id=? AND knowledgebase_id=?",
-                (self.now(), case.document_id, case.target_knowledgebase_id),
+                "UPDATE document_publications SET status='inactive',updated_at=? "
+                "WHERE document_id=? AND status='pending'",
+                (self.now(), case.document_id),
             )
             db.execute("UPDATE document_versions SET status='withdrawn_duplicate' WHERE version_id=?", (case.version_id,))
             db.execute("UPDATE document_cases SET status='active',updated_at=? WHERE case_id=?", (self.now(), case_id))
             self._event(db, case_id, actor_user_id, "existing_document_published", {
                 "target_document_id": target_document_id,
                 "target_version_id": target["active_version_id"],
-                "knowledgebase_id": case.target_knowledgebase_id,
-                "previous_publication_status": previous_status,
+                "knowledgebase_ids": list(knowledgebase_ids),
+                "previous_publication_statuses": previous_statuses,
             })
-        return self.submission(case_id), target["active_version_id"], previous_status
+        return (
+            self.submission(case_id), target["active_version_id"],
+            previous_statuses.get(case.target_knowledgebase_id),
+        )
 
     def rollback_existing_publication(self, *, case_id: str, previous_status: str | None,
                                       reason: str, actor_user_id: str = "indexer") -> Submission:
@@ -667,14 +829,33 @@ class DocumentLifecycle:
             row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,)).fetchone()
             analysis = json.loads(row["analysis_json"] or "{}")
             target_document_id = analysis.get("exact_duplicate_document_id") or analysis.get("normalized_duplicate_document_id")
-            if previous_status is None:
-                db.execute("DELETE FROM document_publications WHERE document_id=? AND knowledgebase_id=?",
-                           (target_document_id, case.target_knowledgebase_id))
-            else:
-                db.execute("UPDATE document_publications SET status=?,updated_at=? WHERE document_id=? AND knowledgebase_id=?",
-                           (previous_status, self.now(), target_document_id, case.target_knowledgebase_id))
-            db.execute("UPDATE document_publications SET status='pending',updated_at=? WHERE document_id=? AND knowledgebase_id=?",
-                       (self.now(), case.document_id, case.target_knowledgebase_id))
+            publication_event = db.execute(
+                "SELECT details_json FROM document_events WHERE case_id=? "
+                "AND event_type='existing_document_published' ORDER BY sequence DESC LIMIT 1",
+                (case_id,),
+            ).fetchone()
+            details = json.loads(publication_event["details_json"] or "{}") if publication_event else {}
+            previous_statuses = details.get("previous_publication_statuses") or {
+                case.target_knowledgebase_id: previous_status
+            }
+            knowledgebase_ids = tuple(previous_statuses) or (case.target_knowledgebase_id,)
+            for knowledgebase_id, status in previous_statuses.items():
+                if status is None:
+                    db.execute(
+                        "DELETE FROM document_publications WHERE document_id=? AND knowledgebase_id=?",
+                        (target_document_id, knowledgebase_id),
+                    )
+                else:
+                    db.execute(
+                        "UPDATE document_publications SET status=?,updated_at=? WHERE document_id=? AND knowledgebase_id=?",
+                        (status, self.now(), target_document_id, knowledgebase_id),
+                    )
+            placeholders = ",".join("?" for _ in knowledgebase_ids)
+            db.execute(
+                f"UPDATE document_publications SET status='pending',updated_at=? "
+                f"WHERE document_id=? AND knowledgebase_id IN ({placeholders})",
+                (self.now(), case.document_id, *knowledgebase_ids),
+            )
             db.execute("UPDATE document_versions SET status='ready_to_activate' WHERE version_id=?", (case.version_id,))
             db.execute("UPDATE document_cases SET status='ready_to_activate',updated_at=? WHERE case_id=?", (self.now(), case_id))
             self._event(db, case_id, actor_user_id, "existing_publication_rolled_back", {
@@ -709,14 +890,23 @@ class DocumentLifecycle:
                     (previous_version_id, case.document_id),
                 )
             db.execute(
-                "UPDATE canonical_documents SET active_version_id = ?, updated_at = ? WHERE document_id = ?",
-                (previous_version_id, self.now(), case.document_id),
+                "UPDATE canonical_documents SET active_version_id = ?, "
+                "title=COALESCE((SELECT title FROM document_versions WHERE version_id=?),title), "
+                "updated_at = ? WHERE document_id = ?",
+                (previous_version_id, previous_version_id, self.now(), case.document_id),
             )
             publication_status = "active" if previous_version_id else "pending"
+            activated_event = db.execute(
+                "SELECT details_json FROM document_events WHERE case_id=? AND event_type='activated' "
+                "ORDER BY sequence DESC LIMIT 1", (case_id,),
+            ).fetchone()
+            activated_details = json.loads(activated_event["details_json"] or "{}") if activated_event else {}
+            knowledgebase_ids = tuple(activated_details.get("knowledgebase_ids") or [case.target_knowledgebase_id])
+            placeholders = ",".join("?" for _ in knowledgebase_ids)
             db.execute(
-                "UPDATE document_publications SET status = ?, updated_at = ? "
-                "WHERE document_id = ? AND knowledgebase_id = ?",
-                (publication_status, self.now(), case.document_id, case.target_knowledgebase_id),
+                f"UPDATE document_publications SET status = ?, updated_at = ? "
+                f"WHERE document_id = ? AND knowledgebase_id IN ({placeholders})",
+                (publication_status, self.now(), case.document_id, *knowledgebase_ids),
             )
             db.execute(
                 "UPDATE document_cases SET status = 'ready_to_activate', updated_at = ? WHERE case_id = ?",
@@ -752,28 +942,38 @@ class DocumentLifecycle:
                 (valid_from.isoformat(), valid_until.isoformat(), self.now(), case.version_id),
             )
             db.execute(
-                "UPDATE canonical_documents SET active_version_id = ?, updated_at = ? WHERE document_id = ?",
-                (case.version_id, self.now(), case.document_id),
+                "UPDATE canonical_documents SET active_version_id = ?, title = ?, updated_at = ? "
+                "WHERE document_id = ?",
+                (case.version_id, case.title, self.now(), case.document_id),
             )
+            knowledgebase_ids = tuple(
+                row["knowledgebase_id"] for row in db.execute(
+                    "SELECT knowledgebase_id FROM document_publications WHERE document_id=? AND status='pending'",
+                    (case.document_id,),
+                ).fetchall()
+            ) or (case.target_knowledgebase_id,)
             db.execute(
                 """
                 UPDATE document_publications SET status = 'active', updated_at = ?
-                WHERE document_id = ? AND knowledgebase_id = ?
+                WHERE document_id = ? AND status = 'pending'
                 """,
-                (self.now(), case.document_id, case.target_knowledgebase_id),
+                (self.now(), case.document_id),
             )
             db.execute(
                 "UPDATE document_cases SET status = 'active', updated_at = ? WHERE case_id = ?",
                 (self.now(), case_id),
             )
-            self._event(db, case_id, actor_user_id, "activated", {"valid_until": valid_until.isoformat(), "superseded": previous})
+            self._event(db, case_id, actor_user_id, "activated", {
+                "valid_until": valid_until.isoformat(), "superseded": previous,
+                "knowledgebase_ids": list(knowledgebase_ids),
+            })
         return self.submission(case_id)
 
     def submission(self, case_id: str) -> Submission:
         with self.store.connect() as db:
             row = db.execute(
                 """
-                SELECT c.*, d.owner_user_id, d.title, d.confidentiality,
+                SELECT c.*, d.owner_user_id, COALESCE(v.title,d.title) AS title, d.confidentiality,
                        v.original_filename, v.original_sha256, v.valid_workdays
                 FROM document_cases c
                 JOIN canonical_documents d USING (document_id)
@@ -820,10 +1020,10 @@ class DocumentLifecycle:
                     # ein Admin, der selbst hochlaedt, seinen Vorgang nirgends
                     # wieder und das Dokument bleibt unbemerkt Entwurf.
                     """SELECT case_id FROM document_cases
-                       WHERE status IN ('pending_admin_approval','security_blocked','needs_correction','error')
+                       WHERE status IN ('pending_admin_approval','security_blocked','needs_correction','error','ready_to_activate')
                           OR (uploaded_by_user_id = ?
                               AND status IN ('pending_employee_decision','duplicate_blocked'))
-                       """ + manager_clause + " ORDER BY updated_at",
+                       """ + manager_clause + " ORDER BY created_at, case_id",
                     (actor_user_id, *manager_params),
                 ).fetchall()
             else:
@@ -831,8 +1031,8 @@ class DocumentLifecycle:
                     """SELECT case_id FROM document_cases
                        WHERE (uploaded_by_user_id = ? AND status IN ('pending_employee_decision','duplicate_blocked'))
                           OR (uploaded_by_user_id = ? AND status = 'needs_correction')
-                          OR (manager_user_id = ? AND status = 'pending_manager_approval')
-                       ORDER BY updated_at""",
+                          OR (manager_user_id = ? AND status IN ('pending_manager_approval','ready_to_activate'))
+                       ORDER BY created_at, case_id""",
                     (actor_user_id, actor_user_id, actor_user_id),
                 ).fetchall()
                 delegated = db.execute(
@@ -848,7 +1048,7 @@ class DocumentLifecycle:
                     candidates = db.execute(
                         f"SELECT case_id, manager_user_id, created_at FROM document_cases "
                         f"WHERE status = 'pending_manager_approval' AND manager_user_id IN ({placeholders}) "
-                        f"ORDER BY updated_at", manager_ids,
+                        f"ORDER BY created_at, case_id", manager_ids,
                     ).fetchall()
                     absent = {item["manager_user_id"] for item in db.execute(
                         f"SELECT manager_user_id FROM manager_absences WHERE manager_user_id IN ({placeholders}) "

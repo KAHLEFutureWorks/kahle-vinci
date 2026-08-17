@@ -18,5 +18,9 @@ def test_unified_audit_exports_governance_and_lifecycle_as_csv_and_pdf():
         assert any(entry.event_type == "submitted" for entry in entries)
         assert any(entry.event_type == "knowledgebase_access_changed" for entry in entries)
         csv_data = exporter.csv_bytes()
-        assert csv_data.startswith(b"\xef\xbb\xbf") and b"submitted" in csv_data
+        assert csv_data.startswith(b"\xef\xbb\xbf")
+        csv_text = csv_data.decode("utf-8-sig")
+        assert "Ausgeführt von;Aktion;Betroffenes Element;Beschreibung" in csv_text
+        assert "Dokument hochgeladen" in csv_text
+        assert "employee" not in csv_text.splitlines()[-1].split(";")[1]
         assert exporter.pdf_bytes().startswith(b"%PDF-")

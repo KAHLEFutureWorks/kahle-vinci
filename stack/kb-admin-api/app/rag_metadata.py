@@ -45,11 +45,13 @@ class RAGMetadataWriter:
                           v.version_id, v.previous_version_id, v.original_filename,
                           v.original_file_id, v.original_sha256, v.markdown_sha256,
                           v.valid_from, v.valid_until, v.status, v.created_at, v.activated_at,
-                          GROUP_CONCAT(p.knowledgebase_id) knowledgebase_ids
+                          GROUP_CONCAT(p.knowledgebase_id) knowledgebase_ids,
+                          GROUP_CONCAT(k.label) knowledgebase_names
                    FROM document_versions v JOIN canonical_documents d USING(document_id)
                    JOIN portal_users owner ON owner.user_id=d.owner_user_id
                    LEFT JOIN document_metadata meta ON meta.document_id=d.document_id
                    LEFT JOIN document_publications p ON p.document_id=d.document_id
+                   LEFT JOIN knowledgebases k ON k.knowledgebase_id=p.knowledgebase_id
                    WHERE v.version_id=? GROUP BY v.version_id""",
                 (version_id,),
             ).fetchone()
@@ -58,6 +60,7 @@ class RAGMetadataWriter:
         path = path or (self.files_root / row["document_id"] / row["version_id"] / "rag.md")
         body = strip_untrusted_frontmatter(path.read_text(encoding="utf-8-sig"))
         knowledgebases = sorted(set(filter(None, (row["knowledgebase_ids"] or "").split(","))))
+        knowledgebase_names = sorted(set(filter(None, (row["knowledgebase_names"] or "").split(","))))
         try:
             scope = json.loads(row["scope_json"] or "{}")
         except json.JSONDecodeError:
@@ -70,7 +73,9 @@ class RAGMetadataWriter:
             "status": row["status"], "confidentiality": row["confidentiality"],
             "authority_type": row["authority_type"], "authority_level": row["authority_level"],
             "scope": json.dumps(scope, ensure_ascii=False, sort_keys=True),
-            "knowledgebase_ids": knowledgebases, "valid_from": row["valid_from"],
+            "knowledgebase_ids": knowledgebases,
+            "knowledgebase_names": knowledgebase_names,
+            "valid_from": row["valid_from"],
             "valid_until": row["valid_until"], "rag_index": row["status"] == "active",
             "source_url": f"/wissen/api/portal/sources/{row['version_id']}",
             "previous_version_id": row["previous_version_id"],

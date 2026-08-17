@@ -13,11 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "KAHLE Vector – Knowledge Management",
-  description: "Interne Verwaltung der KAHLE-Vinci Knowledge Bases und Qdrant-Indexierung.",
+  title: "KAHLE-Vinci Wissensportal",
+  description: "Wissen in KAHLE-Vinci bereitstellen, prüfen und verwalten.",
   icons: {
-    icon: "/admin/vector/favicon.svg",
-    shortcut: "/admin/vector/favicon.svg",
+    icon: "/wissen/favicon.svg",
+    shortcut: "/wissen/favicon.svg",
   },
 };
 

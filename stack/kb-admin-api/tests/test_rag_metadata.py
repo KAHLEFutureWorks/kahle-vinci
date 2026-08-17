@@ -21,6 +21,7 @@ def test_trusted_frontmatter_replaces_uploaded_frontmatter_and_tracks_activation
     assert "rag_index: false" in pending
     assert f'document_id: "{case.document_id}"' in pending
     assert f'knowledgebase_ids: ["{kb_id}"]' in pending
+    assert 'knowledgebase_names: ["Service"]' in pending
     assert "authority_level: 6" in pending
 
     with governance.store.connect() as db:

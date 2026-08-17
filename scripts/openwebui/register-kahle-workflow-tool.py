@@ -171,7 +171,7 @@ KAHLE_TASK_SPECS = [
             "properties": {
                 "title": {"type": "string", "description": "Kurzer, eindeutiger Aufgabentitel."},
                 "description": {"type": "string", "default": "", "description": "Optionaler Kontext oder naechster Schritt."},
-                "due_date": {"type": "string", "default": "", "description": "Optionales Faelligkeitsdatum, bevorzugt YYYY-MM-DD."},
+                "due_date": {"type": "string", "default": "", "description": "Optionales Faelligkeitsdatum als YYYY-MM-DD. Relative Angaben aus der Nutzernachricht werden serverseitig mit Europe/Berlin aufgeloest."},
                 "priority": {"type": "string", "default": "normal", "enum": ["low", "normal", "high", "urgent"]},
             },
             "required": ["title"],

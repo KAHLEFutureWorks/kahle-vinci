@@ -1,8 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type ReactNode,
+} from "react";
+import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowLeft,
   CheckCircle2,
   ChevronRight,
   Clock3,
@@ -10,6 +22,8 @@ import {
   FileUp,
   LayoutDashboard,
   LoaderCircle,
+  MessageCircle,
+  Send,
   ShieldCheck,
   Users,
   XCircle,
@@ -68,9 +82,37 @@ type Task = {
   original_filename: string;
   status: string;
   target_knowledgebase_id: string;
+  target_knowledgebase_label?: string;
+  target_knowledgebase_ids?: string[];
+  target_knowledgebase_labels?: string[];
   requested_action?: string;
   requires_admin: boolean;
   restricted_terms?: string[];
+  contact_name?: string;
+  publication_error?: string;
+  security_review_finding?: string;
+  sanitized_for_review?: boolean;
+  duplicate_matches?: {
+    document_id: string;
+    title: string;
+    active_version_id: string;
+    relation: "exact_duplicate" | "version_candidate";
+    has_conflict: boolean;
+    original_url: string;
+  }[];
+  target_knowledgebase_history?: {
+    knowledgebase_ids: string[];
+    knowledgebase_labels: string[];
+    selected_by_user_id: string;
+    selected_by_name: string;
+    selected_by_role: string;
+    selected_at: string;
+  }[];
+};
+type InquiryParticipant = {
+  user_id: string;
+  display_name: string;
+  email: string;
 };
 type RestrictedTerm = {
   rule_id: string;
@@ -109,6 +151,10 @@ type AuditEntry = {
   event_type: string;
   subject_type: string;
   subject_id: string;
+  actor_name: string;
+  event_label: string;
+  subject_label: string;
+  details_label: string;
 };
 type KBOverviewDocument = {
   document_id: string;
@@ -182,6 +228,7 @@ type Review = {
   case: { case_id: string; title: string };
   markdown: string;
   original_url: string;
+  knowledgebases: { knowledgebase_id: string; label: string }[];
 };
 type Absence = {
   manager_user_id: string;
@@ -189,6 +236,13 @@ type Absence = {
   absent_from: string;
   absent_until: string;
   reason: string;
+  source?: "manual" | "outlook";
+};
+type Delegation = {
+  manager_user_id: string;
+  delegate_user_id: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
 };
 type FeedbackContext = {
   question: string;
@@ -197,6 +251,19 @@ type FeedbackContext = {
   passages: unknown[];
   runtime: Record<string, unknown>;
   request_id: string;
+  document_ids: string[];
+  knowledgebase_ids: string[];
+  documents: FeedbackDocumentOption[];
+  knowledgebases: Knowledgebase[];
+};
+type FeedbackDocumentOption = {
+  document_id: string;
+  title: string;
+  knowledgebase_ids: string[];
+};
+type FeedbackOptions = {
+  documents: FeedbackDocumentOption[];
+  knowledgebases: Knowledgebase[];
 };
 type QualityDashboard = {
   active_documents?: number;
@@ -240,6 +307,7 @@ type QualityIncident = {
   severity?: string;
   created_at: string;
   comment?: string;
+  diagnostic_json?: string;
 };
 type QualityFeedback = {
   feedback_id: string;
@@ -247,6 +315,14 @@ type QualityFeedback = {
   severity?: string;
   created_at: string;
   comment?: string;
+  documents?: { document_id: string; title: string }[];
+  knowledgebases?: { knowledgebase_id: string; label: string }[];
+  reported_by_name?: string;
+  reported_by_user_id?: string;
+  question?: string;
+  answer?: string;
+  screenshot_filename?: string;
+  attachments?: { attachment_id: string; original_filename: string; media_type: string; size_bytes: number }[];
 };
 type QualityCases = {
   incidents: QualityIncident[];
@@ -259,6 +335,15 @@ type QualityRow = {
   severity?: string;
   created_at: string;
   comment?: string;
+  documents?: { document_id: string; title: string }[];
+  knowledgebases?: { knowledgebase_id: string; label: string }[];
+  reported_by_name?: string;
+  reported_by_user_id?: string;
+  question?: string;
+  answer?: string;
+  screenshot_filename?: string;
+  attachments?: { attachment_id: string; original_filename: string; media_type: string; size_bytes: number }[];
+  diagnostic_json?: string;
 };
 type RemovalRequest = {
   request_id: string;
@@ -277,7 +362,7 @@ type TrashItem = {
   can_delete: boolean;
   delete_eligible_on: string;
 };
-type Removals = { requests: RemovalRequest[]; trash: TrashItem[] };
+type Removals = { requests: RemovalRequest[]; trash: TrashItem[]; unread_count?: number };
 type MigrationItem = {
   path: string;
   original_path: string;
@@ -309,6 +394,75 @@ type AdminAction = {
   returnTab?: string;
 };
 type NavigationTab = [string, string, LucideIcon];
+type ConfirmationRequest = {
+  title: string;
+  description: string;
+  confirmLabel?: string;
+  danger?: boolean;
+};
+
+const ConfirmationContext = createContext<
+  (request: ConfirmationRequest) => Promise<boolean>
+>(async () => false);
+
+function useConfirmation() {
+  return useContext(ConfirmationContext);
+}
+
+function ConfirmationProvider({ children }: { children: ReactNode }) {
+  const [request, setRequest] = useState<ConfirmationRequest | null>(null);
+  const [resolveRequest, setResolveRequest] = useState<
+    ((confirmed: boolean) => void) | null
+  >(null);
+  const confirm = useCallback(
+    (next: ConfirmationRequest) =>
+      new Promise<boolean>((resolve) => {
+        setRequest(next);
+        setResolveRequest(() => resolve);
+      }),
+    [],
+  );
+  const close = (confirmed: boolean) => {
+    resolveRequest?.(confirmed);
+    setRequest(null);
+    setResolveRequest(null);
+  };
+  return (
+    <ConfirmationContext.Provider value={confirm}>
+      {children}
+      {request && (
+        <div className="wp-confirm-backdrop" role="presentation">
+          <section
+            className="wp-confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="wp-confirm-title"
+            aria-describedby="wp-confirm-description"
+          >
+            <div className={`wp-confirm-icon ${request.danger ? "danger" : ""}`}>
+              <AlertTriangle size={24} />
+            </div>
+            <div>
+              <h2 id="wp-confirm-title">{request.title}</h2>
+              <p id="wp-confirm-description">{request.description}</p>
+            </div>
+            <div className="wp-confirm-actions">
+              <button type="button" onClick={() => close(false)}>Abbrechen</button>
+              <button
+                type="button"
+                className={request.danger ? "wp-danger" : "wp-primary"}
+                autoFocus
+                onClick={() => close(true)}
+              >
+                {request.confirmLabel || "Bestätigen"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </ConfirmationContext.Provider>
+  );
+}
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {
@@ -330,6 +484,8 @@ const statusText: Record<string, string> = {
   security_blocked: "Sicherheitsprüfung erforderlich",
   ready_to_activate: "Bereit zur Veröffentlichung",
   active: "Aktiv",
+  rejected: "Abgelehnt",
+  withdrawn: "Verworfen",
   metadata_required: "Angaben fehlen",
   ready_to_stage: "Bereit zur Übernahme",
   quarantine: "Prüfung durch Admin erforderlich",
@@ -339,6 +495,7 @@ const statusText: Record<string, string> = {
   removed: "Nicht mehr abrufbar",
   knowledgebase_archive: "Wissensbereich archiviert",
   knowledgebase_delete: "Wissensbereich gelöscht",
+  clarification_requested: "Rückfrage zum Dokument",
 };
 
 const RUNNING_UPLOAD_JOB = "running-upload-job";
@@ -466,8 +623,8 @@ const errorText: Record<string, string> = {
   portal_admin_required: "Diese Aktion darf nur ein Portal-Admin ausführen.",
   trash_recovery_period_active:
     "Das Dokument bleibt 30 Tage geschützt und kann bis dahin nur wiederhergestellt werden.",
-  fresh_microsoft_authentication_required:
-    "Bitte bestätige die Aktion mit einer erneuten Microsoft-Anmeldung.",
+  confirmation_required:
+    "Bitte bestätige diese Aktion im Bestätigungsfenster.",
   no_readable_knowledgebases:
     "Dir ist noch kein Wissensbereich zum Lesen zugeordnet.",
   unsupported_file_type:
@@ -503,6 +660,16 @@ const errorText: Record<string, string> = {
 
 function friendlyError(cause: unknown, fallback: string) {
   const raw = cause instanceof Error ? cause.message : "";
+  if (raw === "embedded_executable_content_not_allowed")
+    return "Die Datei enthält eingebettete ausführbare Inhalte oder aktive Anhänge und wurde aus Sicherheitsgründen blockiert. Bitte entferne diese Inhalte und lade eine bereinigte Datei erneut hoch.";
+  if (raw === "pdf_page_limit_exceeded")
+    return "Die PDF-Datei umfasst mehr als 1.000 Seiten. Bitte teile sie in mehrere fachlich sinnvolle Dokumente auf.";
+  if (raw === "office_page_limit_exceeded")
+    return "Die Office-Datei überschreitet die zulässige Aufbereitungsgröße. Bitte teile sie in mehrere fachlich sinnvolle Dokumente auf.";
+  if (/^required_check_unavailable:/.test(raw))
+    return "Die Datei wurde aufbereitet, aber die erforderliche Ähnlichkeitsanalyse war nicht erreichbar. Ein technischer Fall wurde automatisch angelegt. Bitte versuche es später erneut.";
+  if (raw === "embedding_service_unavailable")
+    return "Der Dienst für die automatische Ähnlichkeitsanalyse war nicht erreichbar.";
   if (errorText[raw]) return errorText[raw];
   if (/^request_(401|403)$/.test(raw))
     return "Dafür fehlt dir die Berechtigung.";
@@ -568,8 +735,28 @@ function Badge({ status }: { status: string }) {
 }
 
 export default function KnowledgePortal() {
+  useEffect(() => {
+    function closeOpenDropdowns(event: PointerEvent) {
+      if (!(event.target instanceof Node)) return;
+      document.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((details) => {
+        if (details.dataset.persistent !== "true" && !details.contains(event.target as Node))
+          details.open = false;
+      });
+    }
+    document.addEventListener("pointerdown", closeOpenDropdowns);
+    return () => document.removeEventListener("pointerdown", closeOpenDropdowns);
+  }, []);
+  return (
+    <ConfirmationProvider>
+      <KnowledgePortalContent />
+    </ConfirmationProvider>
+  );
+}
+
+function KnowledgePortalContent() {
   const [session, setSession] = useState<Session | null>(null),
-    [kbs, setKbs] = useState<KB[]>([]);
+    [kbs, setKbs] = useState<KB[]>([]),
+    [reviewKbs, setReviewKbs] = useState<KB[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]),
     [decisionJobs, setDecisionJobs] = useState<DecisionJob[]>([]),
     [users, setUsers] = useState<PortalUser[]>([]),
@@ -610,7 +797,7 @@ export default function KnowledgePortal() {
         notificationPayload,
       ] = await Promise.all([
         api<{ knowledgebases: KB[] }>("/portal/knowledgebases?access=upload"),
-        api<{ tasks: Task[] }>("/portal/tasks"),
+        api<{ tasks: Task[]; knowledgebases: KB[] }>("/portal/tasks"),
         api<{ jobs: DecisionJob[] }>("/portal/decision-jobs?active=true"),
         api<{ documents: PortalDocument[] }>("/portal/documents"),
         api<{ changes: DocumentChange[] }>("/portal/document-changes"),
@@ -619,6 +806,7 @@ export default function KnowledgePortal() {
       ]);
       setKbs(kbPayload.knowledgebases);
       setTasks(taskPayload.tasks);
+      setReviewKbs(taskPayload.knowledgebases);
       setDecisionJobs(decisionJobPayload.jobs);
       setDocuments(documentPayload.documents);
       setDocumentChanges(documentChangePayload.changes);
@@ -636,7 +824,7 @@ export default function KnowledgePortal() {
           autoActivationPayload,
         ] = await Promise.all([
           api<{ users: PortalUser[] }>("/portal/admin/users"),
-          api<{ entries: AuditEntry[] }>("/portal/admin/audit?limit=100"),
+          api<{ entries: AuditEntry[] }>("/portal/admin/audit?limit=1000"),
           api<{ changes: KBChange[] }>("/portal/admin/knowledgebase-changes"),
           api<QualityDashboard>("/portal/admin/dashboard"),
           api<QualityCases>("/portal/admin/quality-cases"),
@@ -668,55 +856,18 @@ export default function KnowledgePortal() {
     const timer = window.setTimeout(() => void refresh(), 1500);
     return () => window.clearTimeout(timer);
   }, [decisionJobs, refresh]);
-  useEffect(() => {
-    if (!session) return;
-    const pending = sessionStorage.getItem("pending-role-change");
-    if (!pending) return;
-    try {
-      const { userId, role } = JSON.parse(pending);
-      void api(`/portal/admin/users/${userId}/role`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
-      })
-        .then(() => {
-          sessionStorage.removeItem("pending-role-change");
-          return refresh();
-        })
-        .catch((cause) =>
-          setError(friendlyError(cause, "Rollenänderung fehlgeschlagen")),
-        );
-    } catch {
-      sessionStorage.removeItem("pending-role-change");
-    }
-  }, [session, refresh]);
-  useEffect(() => {
-    if (!session) return;
-    const pending = sessionStorage.getItem("pending-admin-action");
-    if (!pending) return;
-    try {
-      const action = JSON.parse(pending) as AdminAction;
-      void api(action.path, {
-        method: action.method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action.body),
-      })
-        .then(() => {
-          sessionStorage.removeItem("pending-admin-action");
-          setTab(action.returnTab || "knowledgebases");
-          return refresh();
-        })
-        .catch((cause) =>
-          setError(friendlyError(cause, "Adminaktion fehlgeschlagen")),
-        );
-    } catch {
-      sessionStorage.removeItem("pending-admin-action");
-    }
-  }, [session, refresh]);
   const isAdmin = session
     ? ["admin", "portal_admin"].includes(session.role)
     : false;
+  useEffect(() => {
+    if (!isAdmin) return;
+    const timer = window.setInterval(() => {
+      void api<QualityCases>("/portal/admin/quality-cases").then(setQualityCases).catch(() => undefined);
+    }, 20000);
+    return () => window.clearInterval(timer);
+  }, [isAdmin]);
   const unreadNotifications = notifications.filter((item) => !item.read_at);
+  const openQualityCases = qualityCases.feedback.length + qualityCases.incidents.length;
   async function markNotificationRead(notificationId: string) {
     const notification = notifications.find((item) => item.notification_id === notificationId);
     if (!notification || notification.read_at) return;
@@ -728,6 +879,17 @@ export default function KnowledgePortal() {
       await api(`/portal/notifications/${notificationId}/read`, { method: "POST" });
     } catch (cause) {
       setError(friendlyError(cause, "Mitteilungen konnten nicht als gelesen markiert werden"));
+      await refresh();
+    }
+  }
+  async function openTab(id: string) {
+    setTab(id);
+    if (id !== "trash" || !isAdmin || !removals.unread_count) return;
+    setRemovals((current) => ({ ...current, unread_count: 0 }));
+    try {
+      await api("/portal/admin/trash/read", { method: "POST" });
+    } catch (cause) {
+      setError(friendlyError(cause, "Papierkorbvorgänge konnten nicht als gelesen markiert werden"));
       await refresh();
     }
   }
@@ -776,11 +938,17 @@ export default function KnowledgePortal() {
           </strong>
           <small>Wissensportal</small>
         </div>
-        <div className="wp-user">
-          <span>{session.display_name}</span>
-          <small>
-            {session.email} · {session.role.replace("_", "-")}
-          </small>
+        <div className="wp-header-actions">
+          <a className="wp-back-link" href="/" aria-label="Zurück zu KAHLE-Vinci">
+            <ArrowLeft size={17} />
+            <span>Zurück zu KAHLE-Vinci</span>
+          </a>
+          <div className="wp-user">
+            <span>{session.display_name}</span>
+            <small>
+              {session.email} · {session.role.replace("_", "-")}
+            </small>
+          </div>
         </div>
       </header>
       <aside className="wp-nav">
@@ -789,12 +957,14 @@ export default function KnowledgePortal() {
           <button
             key={id}
             className={tab === id ? "active" : ""}
-            onClick={() => setTab(id)}
+            onClick={() => void openTab(id)}
           >
             <Icon size={19} />
             <span>{label}</span>
             {id === "tasks" && tasks.length > 0 && <b>{tasks.length}</b>}
             {id === "notifications" && unreadNotifications.length > 0 && <b>{unreadNotifications.length}</b>}
+            {id === "quality-cases" && openQualityCases > 0 && <b>{openQualityCases}</b>}
+            {id === "trash" && Boolean(removals.unread_count) && <b>{removals.unread_count}</b>}
             <ChevronRight size={15} />
           </button>
         ))}
@@ -823,7 +993,7 @@ export default function KnowledgePortal() {
           <Upload session={session} kbs={kbs} done={refresh} />
         )}
         {tab === "tasks" && (
-          <Tasks tasks={tasks} jobs={decisionJobs} session={session} done={refresh} />
+          <Tasks tasks={tasks} jobs={decisionJobs} kbs={reviewKbs} session={session} done={refresh} />
         )}
         {tab === "notifications" && (
           <Notifications items={notifications} onRead={markNotificationRead} />
@@ -843,7 +1013,7 @@ export default function KnowledgePortal() {
           <QualityDashboardView data={quality} />
         )}
         {tab === "quality-cases" && isAdmin && (
-          <QualityCasesView data={qualityCases} />
+          <QualityCasesView data={qualityCases} done={refresh} />
         )}
         {tab === "migration" && isAdmin && (
           <MigrationView users={users} kbs={kbs} session={session} />
@@ -907,7 +1077,12 @@ function Notifications({
                 <Badge status={item.status} />
                 <h2 className="wp-notification-title">{item.document_title}</h2>
                 <p>{item.message}</p>
-                {item.reason && <p><strong>Begründung:</strong> {item.reason}</p>}
+                {item.reason && (
+                  <p>
+                    <strong>{item.status === "clarification_requested" ? "Rückfrage:" : "Begründung:"}</strong>{" "}
+                    {item.reason}
+                  </p>
+                )}
                 <small>{new Date(item.created_at).toLocaleString("de-DE")}</small>
               </div>
             </button>
@@ -1078,19 +1253,35 @@ function Upload({
   done: () => Promise<void>;
 }) {
   const [file, setFile] = useState<File | null>(null),
-    [kb, setKb] = useState(kbs[0]?.knowledgebase_id || ""),
+    [selectedKnowledgebaseIds, setSelectedKnowledgebaseIds] = useState<string[]>([]),
     [title, setTitle] = useState("");
   const [days, setDays] = useState(60),
-    [confidentiality, setConfidentiality] = useState("internal"),
     [busy, setBusy] = useState(false);
   const [validityMode, setValidityMode] = useState("workdays"),
     [validUntil, setValidUntil] = useState("");
+  const dateIso = (offset: number) => {
+    const value = new Date();
+    value.setHours(12, 0, 0, 0);
+    value.setDate(value.getDate() + offset);
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  };
+  const minimumValidUntil = dateIso(1);
+  const maximumValidUntil = dateIso(60);
+  const validUntilError = validityMode === "date" && validUntil
+    ? validUntil < minimumValidUntil
+      ? "Bitte wähle ein zukünftiges Datum."
+      : validUntil > maximumValidUntil
+        ? "Maximal 60 Tage sind möglich."
+        : ""
+    : "";
   const [result, setResult] = useState<UploadResult | null>(null),
     [message, setMessage] = useState("");
+  const [securityReviewAvailable, setSecurityReviewAvailable] = useState(false);
   const [job, setJob] = useState<UploadJob | null>(null);
   const [ownerCandidates, setOwnerCandidates] = useState<PortalUser[]>([]),
     [canProposeOwner, setCanProposeOwner] = useState(false),
-    [ownerUserId, setOwnerUserId] = useState(session.user_id);
+    [ownerUserId, setOwnerUserId] = useState(session.user_id),
+    [ownerSearch, setOwnerSearch] = useState("");
   useEffect(() => {
     void api<{ can_propose_other: boolean; users: PortalUser[] }>(
       "/portal/owner-candidates",
@@ -1121,6 +1312,8 @@ function Upload({
         setResult(current.result);
         await done();
       } catch (cause) {
+        const raw = cause instanceof Error ? cause.message : "";
+        setSecurityReviewAvailable(raw === "embedded_executable_content_not_allowed");
         setMessage(friendlyError(cause, "Upload fehlgeschlagen"));
       } finally {
         sessionStorage.removeItem(RUNNING_UPLOAD_JOB);
@@ -1150,24 +1343,31 @@ function Upload({
     // Nur vorbelegen, solange nichts Eigenes eingetragen ist.
     if (next && !title.trim()) setTitle(titleFromFilename(next.name));
   }
-  async function submit() {
-    if (!file || !kb || !title.trim())
-      return setMessage("Bitte Datei, Titel und Wissensbereich auswählen.");
+  async function submit(securityReviewRequested = false) {
+    if (!file || selectedKnowledgebaseIds.length === 0 || !title.trim())
+      return setMessage("Bitte Datei, Titel und mindestens einen Wissensbereich auswählen.");
     if (validityMode === "date" && !validUntil)
       return setMessage("Bitte ein Datum für die Gültigkeit wählen.");
+    if (validUntilError) return setMessage(validUntilError);
     setBusy(true);
     setMessage("");
+    if (!securityReviewRequested) setSecurityReviewAvailable(false);
     try {
       const form = new FormData();
       form.append("file", file);
-      form.append("knowledgebase_id", kb);
+      form.append("knowledgebase_id", selectedKnowledgebaseIds[0]);
+      form.append("knowledgebase_ids_json", JSON.stringify(selectedKnowledgebaseIds));
       form.append("title", title.trim());
       // PRD 17.1: Arbeitstage oder ein geprüftes Datum, niemals beides. Die
       // Umrechnung bleibt serverseitig, damit Feiertage verbindlich zählen.
       if (validityMode === "date") form.append("valid_until", validUntil);
       else form.append("valid_workdays", String(days));
-      form.append("confidentiality", confidentiality);
+      // Sichtbarkeit folgt ausschließlich den Leserechten des gewählten
+      // Wissensbereichs. Die interne Grundstufe kann durch die automatische
+      // Inhaltsprüfung weiterhin sicherheitsseitig angehoben werden.
+      form.append("confidentiality", "internal");
       form.append("owner_user_id", ownerUserId);
+      if (securityReviewRequested) form.append("security_review_requested", "true");
       const response = await fetch(`${API}/portal/upload-jobs`, {
         method: "POST",
         credentials: "include",
@@ -1196,6 +1396,7 @@ function Upload({
       });
       setResult(null);
       setFile(null);
+      setSelectedKnowledgebaseIds([]);
       setTitle("");
       setMessage(
         "Weitergeleitet. Das Dokument wird erst nach der Freigabe in Vinci auffindbar; du wirst benachrichtigt.",
@@ -1206,6 +1407,16 @@ function Upload({
     } finally {
       setBusy(false);
     }
+  }
+  function startAnotherUpload() {
+    setResult(null);
+    setFile(null);
+    setSelectedKnowledgebaseIds([]);
+    setTitle("");
+    setValidUntil("");
+    setJob(null);
+    setMessage("");
+    setOwnerUserId(session.user_id);
   }
   const outcome = result
     ? result.status === "active"
@@ -1254,7 +1465,7 @@ function Upload({
         text="Du legst nur die Datei ab. Das Portal prüft Sicherheit, Aufbereitung und ähnliche Inhalte."
       />
       {!result ? (
-        <div className="wp-form">
+        <div className="wp-form" data-visibility-policy="knowledgebase-rights">
           <label
             className={`wp-drop ${file ? "selected" : ""}`}
             onDragOver={(e) => e.preventDefault()}
@@ -1293,20 +1504,42 @@ function Upload({
                 placeholder="Worum geht es?"
               />
             </label>
-            <label>
-              Ziel-Wissensbereich
-              <select value={kb} onChange={(e) => setKb(e.target.value)}>
-                <option value="">Bitte wählen</option>
-                {kbs.map((item) => (
-                  <option
-                    key={item.knowledgebase_id}
-                    value={item.knowledgebase_id}
-                  >
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="wp-kb-field">
+              <span>Ziel-Wissensbereiche</span>
+              <details className="wp-kb-multiselect">
+                <summary>
+                  <span>
+                    {selectedKnowledgebaseIds.length
+                      ? kbs
+                          .filter((item) => selectedKnowledgebaseIds.includes(item.knowledgebase_id))
+                          .map((item) => item.label)
+                          .join(", ")
+                      : "Bitte wählen"}
+                  </span>
+                  <ChevronRight size={16} />
+                </summary>
+                <fieldset className="wp-kb-options">
+                  <legend className="sr-only">Ziel-Wissensbereiche auswählen</legend>
+                  {kbs.map((item) => (
+                    <label key={item.knowledgebase_id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedKnowledgebaseIds.includes(item.knowledgebase_id)}
+                        onChange={(event) =>
+                          setSelectedKnowledgebaseIds((current) =>
+                            event.target.checked
+                              ? [...current, item.knowledgebase_id]
+                              : current.filter((id) => id !== item.knowledgebase_id),
+                          )
+                        }
+                      />
+                      {item.label}
+                    </label>
+                  ))}
+                </fieldset>
+              </details>
+              <small>Mehrere Bereiche können gleichzeitig ausgewählt werden.</small>
+            </div>
             <label>
               Gültigkeit
               <select
@@ -1335,27 +1568,13 @@ function Upload({
                 <input
                   type="date"
                   value={validUntil}
+                  min={minimumValidUntil}
+                  max={maximumValidUntil}
                   onChange={(e) => setValidUntil(e.target.value)}
                 />
+                {validUntilError && <small className="wp-field-error" role="alert">{validUntilError}</small>}
               </label>
             )}
-            <label>
-              Wer darf das Dokument sehen?
-              <select
-                value={confidentiality}
-                onChange={(e) => setConfidentiality(e.target.value)}
-              >
-                {confidentialityOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <small>
-                Die Auswahl steuert, welchen Benutzergruppen Vinci dieses Wissen
-                zeigen darf.
-              </small>
-            </label>
           </div>
           <div className="wp-owner">
             <ShieldCheck />
@@ -1363,21 +1582,33 @@ function Upload({
               <strong>Dokument-Owner</strong>
               {canProposeOwner ? (
                 <>
-                  <select
-                    value={ownerUserId}
-                    onChange={(e) => setOwnerUserId(e.target.value)}
-                  >
-                    <option value={session.user_id}>
-                      {session.display_name} ({session.email})
-                    </option>
-                    {ownerCandidates
-                      .filter((user) => user.user_id !== session.user_id)
-                      .map((user) => (
-                        <option key={user.user_id} value={user.user_id}>
-                          {user.display_name} ({user.email})
-                        </option>
+                  <details className="wp-kb-multiselect wp-owner-picker">
+                    <summary>
+                      <span>{ownerCandidates.find((user) => user.user_id === ownerUserId)?.display_name || session.display_name}</span>
+                      <ChevronRight size={16} />
+                    </summary>
+                    <fieldset className="wp-kb-options">
+                      <legend className="sr-only">Dokument-Owner auswählen</legend>
+                      <input
+                        className="wp-feedback-document-search"
+                        type="search"
+                        value={ownerSearch}
+                        onChange={(event) => setOwnerSearch(event.target.value)}
+                        placeholder="Name oder E-Mail suchen …"
+                        aria-label="Dokument-Owner suchen"
+                      />
+                      {ownerCandidates.filter((user) =>
+                        `${user.display_name} ${user.email}`.toLocaleLowerCase("de")
+                          .includes(ownerSearch.trim().toLocaleLowerCase("de")),
+                      ).map((user) => (
+                        <label key={user.user_id}>
+                          <input type="radio" name="document-owner" checked={ownerUserId === user.user_id}
+                            onChange={() => setOwnerUserId(user.user_id)} />
+                          <span>{user.display_name}<small>{user.email}</small></span>
+                        </label>
                       ))}
-                  </select>
+                    </fieldset>
+                  </details>
                   <span>
                     Ein anderer Owner muss die Übernahme ausdrücklich
                     bestätigen.
@@ -1404,10 +1635,30 @@ function Upload({
             </div>
           )}
           {message && <p className="wp-message">{message}</p>}
+          {securityReviewAvailable && (
+            <div className="wp-alert" role="note">
+              <ShieldCheck />
+              <div>
+                <strong>Ist das ein vertrauenswürdiges PDF?</strong>
+                <span>
+                  Du kannst eine passive, bereinigte Fassung zur Prüfung an einen Admin senden.
+                  Die eingebetteten aktiven Inhalte werden dabei nicht übernommen.
+                </span>
+                <button
+                  type="button"
+                  className="wp-secondary approve"
+                  disabled={busy}
+                  onClick={() => void submit(true)}
+                >
+                  Zur Sicherheitsprüfung einreichen
+                </button>
+              </div>
+            </div>
+          )}
           <button
             className="wp-primary"
-            disabled={busy || !file || !kb}
-            onClick={() => void submit()}
+            disabled={busy || !file || selectedKnowledgebaseIds.length === 0}
+            onClick={() => void submit(false)}
           >
             {busy && <LoaderCircle className="spin" />} Sicher prüfen
           </button>
@@ -1516,11 +1767,12 @@ function Upload({
                   <small>{match.match_percent} % Übereinstimmung</small>
                 ) : null}
               </span>
-              {match.version_candidate && !match.has_conflict && (
+              {match.version_candidate && (
                 <button
+                  className="wp-version-action"
                   onClick={() => void action("replace", match.document_id)}
                 >
-                  Dieses Dokument als neue Version ersetzen
+                  Als neue Version von „{match.title}“ vorschlagen
                 </button>
               )}
             </article>
@@ -1548,6 +1800,9 @@ function Upload({
                 </button>
               </div>
             )}
+          <button className="wp-primary" type="button" onClick={startAnotherUpload}>
+            <FileUp size={16} /> Weiteres Dokument hochladen
+          </button>
         </div>
       )}
     </section>
@@ -1557,36 +1812,59 @@ function Upload({
 function Tasks({
   tasks,
   jobs,
+  kbs,
   session,
   done,
 }: {
   tasks: Task[];
   jobs: DecisionJob[];
+  kbs: KB[];
   session: Session;
   done: () => Promise<void>;
 }) {
+  const confirm = useConfirmation();
   const [reason, setReason] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(""),
     [decisionFeedback, setDecisionFeedback] = useState<Record<string, string>>({});
   const [review, setReview] = useState<Review | null>(null),
-    [revision, setRevision] = useState(""),
-    [confirmed, setConfirmed] = useState(false);
+    [revision, setRevision] = useState("");
+  const [inquiryCase, setInquiryCase] = useState<Task | null>(null),
+    [inquiryParticipants, setInquiryParticipants] = useState<InquiryParticipant[]>([]),
+    [inquiryRecipient, setInquiryRecipient] = useState(""),
+    [inquiryQuestion, setInquiryQuestion] = useState(""),
+    [inquiryBusy, setInquiryBusy] = useState(false),
+    [inquiryMessage, setInquiryMessage] = useState("");
+  const [targetSelections, setTargetSelections] = useState<Record<string, string[]>>({}),
+    [targetBusy, setTargetBusy] = useState<Record<string, boolean>>({});
+  const targetSaveLocks = useRef(new Set<string>());
   const canDecide = session.role !== "employee",
     isAdmin = ["admin", "portal_admin"].includes(session.role);
   const ownDecision = (status: string) =>
     ["pending_employee_decision", "duplicate_blocked"].includes(status);
-  async function chooseAction(caseId: string, action: string) {
+  async function chooseAction(caseId: string, action: string, targetDocumentId?: string) {
     setBusy(caseId);
     try {
       await api(`/portal/cases/${caseId}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, target_document_id: targetDocumentId }),
       });
       await done();
     } finally {
       setBusy("");
     }
+  }
+  async function chooseNewDocument(task: Task) {
+    const hasSimilarDocument = Boolean(task.duplicate_matches?.length);
+    if (hasSimilarDocument) {
+      const approved = await confirm({
+        title: "Wirklich als eigenständiges Dokument anlegen?",
+        description: `Zu „${task.title}“ wurde bereits mindestens ein sehr ähnliches Dokument gefunden. Wähle diese Option nur, wenn beide Dokumente unabhängig voneinander gültig bleiben sollen.`,
+        confirmLabel: "Eigenständiges Dokument vorschlagen",
+      });
+      if (!approved) return;
+    }
+    await chooseAction(task.case_id, "create");
   }
   async function decide(caseId: string, decision: string) {
     if (busy) return;
@@ -1656,10 +1934,103 @@ function Tasks({
     const payload = await api<Review>(`/portal/cases/${caseId}/review`);
     setReview(payload);
     setRevision(isAdmin ? payload.markdown : "");
-    setConfirmed(false);
+  }
+  async function openInquiry(task: Task) {
+    setInquiryBusy(true);
+    setInquiryMessage("");
+    try {
+      const payload = await api<{ participants: InquiryParticipant[] }>(
+        `/portal/cases/${task.case_id}/inquiry-participants`,
+      );
+      setInquiryCase(task);
+      setInquiryParticipants(payload.participants);
+      setInquiryRecipient(payload.participants[0]?.user_id || "");
+      setInquiryQuestion("");
+    } catch (cause) {
+      setDecisionFeedback((current) => ({
+        ...current,
+        [task.case_id]: friendlyError(cause, "Die Ansprechpartner konnten nicht geladen werden."),
+      }));
+    } finally {
+      setInquiryBusy(false);
+    }
+  }
+  async function changeTargetKnowledgebases(caseId: string, knowledgebaseIds: string[]) {
+    if (targetSaveLocks.current.has(caseId)) return;
+    if (knowledgebaseIds.length === 0) {
+      setDecisionFeedback((current) => ({
+        ...current,
+        [caseId]: "Mindestens ein Ziel-Wissensbereich muss ausgewählt bleiben.",
+      }));
+      return;
+    }
+    targetSaveLocks.current.add(caseId);
+    setTargetSelections((current) => ({ ...current, [caseId]: knowledgebaseIds }));
+    setTargetBusy((current) => ({ ...current, [caseId]: true }));
+    setDecisionFeedback((current) => ({
+      ...current,
+        [caseId]: "Die Ziel-Wissensbereiche werden geändert …",
+    }));
+    try {
+      await api(`/portal/cases/${caseId}/target-knowledgebases`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ knowledgebase_ids: knowledgebaseIds }),
+      });
+      setDecisionFeedback((current) => ({
+        ...current,
+        [caseId]: "Die Ziel-Wissensbereiche wurden geändert.",
+      }));
+      await done();
+      setTargetSelections((current) => {
+        const next = { ...current };
+        delete next[caseId];
+        return next;
+      });
+    } catch (cause) {
+      setTargetSelections((current) => {
+        const next = { ...current };
+        delete next[caseId];
+        return next;
+      });
+      setDecisionFeedback((current) => ({
+        ...current,
+        [caseId]: friendlyError(cause, "Die Ziel-Wissensbereiche konnten nicht geändert werden."),
+      }));
+    } finally {
+      targetSaveLocks.current.delete(caseId);
+      setTargetBusy((current) => ({ ...current, [caseId]: false }));
+    }
+  }
+  async function sendInquiry() {
+    if (!inquiryCase || !inquiryRecipient || inquiryQuestion.trim().length < 3) return;
+    setInquiryBusy(true);
+    setInquiryMessage("");
+    try {
+      await api(`/portal/cases/${inquiryCase.case_id}/inquiries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient_user_id: inquiryRecipient,
+          question: inquiryQuestion.trim(),
+        }),
+      });
+      setInquiryMessage("Die Rückfrage wurde als Mitteilung und per E-Mail versendet.");
+      setInquiryQuestion("");
+    } catch (cause) {
+      setInquiryMessage(friendlyError(cause, "Die Rückfrage konnte nicht versendet werden."));
+    } finally {
+      setInquiryBusy(false);
+    }
   }
   async function revise() {
     if (!review) return;
+    const approved = await confirm({
+      title: "Korrektur verarbeiten?",
+      description: `Du möchtest für „${review.case.title}“ eine neue Entwurfsversion anlegen. Alle bisherigen Prüfergebnisse werden zurückgesetzt und die neue Fassung wird vollständig geprüft. Möchtest du fortfahren?`,
+      confirmLabel: "Korrektur verarbeiten",
+    });
+    if (!approved) return;
     setBusy(review.case.case_id);
     try {
       await api(`/portal/cases/${review.case.case_id}/revision`, {
@@ -1669,7 +2040,7 @@ function Tasks({
           instruction: isAdmin ? "" : revision,
           replacement_markdown: isAdmin ? revision : "",
           reason: reason[review.case.case_id] || "Freigegebene Korrektur",
-          confirmed,
+          confirmed: true,
         }),
       });
       setReview(null);
@@ -1701,6 +2072,14 @@ function Tasks({
           </a>
           <button onClick={() => setReview(null)}>Zurück</button>
         </div>
+        <div className="wp-review-kbs" aria-label="Verknüpfte Knowledge Bases">
+          <span>Knowledge Bases</span>
+          <strong>
+            {review.knowledgebases.length
+              ? review.knowledgebases.map((base) => base.label).join(", ")
+              : "Keine Knowledge Base verknüpft"}
+          </strong>
+        </div>
         <div className="wp-form">
           <label>
             {isAdmin ? "RAG-Markdown bearbeiten" : "Aufbereitete Fassung"}
@@ -1727,17 +2106,9 @@ function Tasks({
                   }
                 />
               </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={confirmed}
-                  onChange={(e) => setConfirmed(e.target.checked)}
-                />{" "}
-                Ich gebe diese Korrektur ausdrücklich zur Verarbeitung frei.
-              </label>
               <button
                 className="wp-primary"
-                disabled={!confirmed || busy === review.case.case_id}
+                disabled={busy === review.case.case_id}
                 onClick={() => void revise()}
               >
                 Neue Entwurfsversion anlegen und vollständig prüfen
@@ -1757,17 +2128,110 @@ function Tasks({
   const toReview = availableTasks.filter((task) => !ownDecision(task.status));
 
   function card(task: Task, own: boolean) {
+    const selectedTargetIds =
+      targetSelections[task.case_id] ||
+      task.target_knowledgebase_ids ||
+      [task.target_knowledgebase_id];
+    const selectedTargetLabels = kbs
+      .filter((base) => selectedTargetIds.includes(base.knowledgebase_id))
+      .map((base) => base.label);
+    const targetIsSaving = Boolean(targetBusy[task.case_id]);
     return (
       <article key={task.case_id}>
         <div className="wp-task-icon">
           <FileSearch />
         </div>
         <div className="wp-task-copy">
-          <Badge status={task.status} />
+          <div className="wp-task-context">
+            <Badge status={task.status} />
+            {task.contact_name && <span>Ansprechpartner: {task.contact_name}</span>}
+          </div>
           <h2>{task.title}</h2>
           <p>
-            {task.original_filename} · {task.target_knowledgebase_id}
+            {task.original_filename}
           </p>
+          <div className="wp-target-kb">
+            <span>Ziel-Wissensbereiche</span>
+            {!own && task.status.includes("approval") ? (
+              <details className="wp-kb-multiselect compact">
+                <summary>
+                  <span>
+                    {(selectedTargetLabels.length
+                      ? selectedTargetLabels
+                      : task.target_knowledgebase_labels || [task.target_knowledgebase_label || task.target_knowledgebase_id]
+                    ).join(", ")}
+                  </span>
+                  {targetIsSaving ? <LoaderCircle className="spin" size={16} /> : <ChevronRight size={16} />}
+                </summary>
+                <fieldset className="wp-kb-options">
+                  <legend className="sr-only">Ziel-Wissensbereiche für {task.title}</legend>
+                  {kbs.map((base) => (
+                    <label key={base.knowledgebase_id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedTargetIds.includes(base.knowledgebase_id)}
+                        disabled={targetIsSaving}
+                        onChange={(event) => {
+                          const current = selectedTargetIds;
+                          const next = event.target.checked
+                            ? [...current, base.knowledgebase_id]
+                            : current.filter((id) => id !== base.knowledgebase_id);
+                          void changeTargetKnowledgebases(task.case_id, [...new Set(next)]);
+                        }}
+                      />
+                      {base.label}
+                    </label>
+                  ))}
+                </fieldset>
+              </details>
+            ) : (
+              <strong>
+                {(task.target_knowledgebase_labels || [task.target_knowledgebase_label || task.target_knowledgebase_id]).join(", ")}
+              </strong>
+            )}
+          </div>
+          {task.target_knowledgebase_history?.length ? (
+            <div className="wp-target-history" aria-label="Verlauf des Ziel-Wissensbereichs">
+              {task.target_knowledgebase_history.map((entry, index) => (
+                <div key={`${entry.selected_at}-${entry.knowledgebase_ids.join("-")}-${index}`}>
+                  <span>
+                    {index === 0
+                      ? "Vom Nutzer ausgewählt"
+                      : `Von ${roleLabel((entry.selected_by_role || "manager") as Role)} ${entry.selected_by_name} geändert`}
+                  </span>
+                  <strong>{entry.knowledgebase_labels.join(", ")}</strong>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {!!task.duplicate_matches?.length && (
+            <div className="wp-duplicate-review" role="note">
+              <strong>
+                {task.requested_action === "replace"
+                  ? "Als neue Version ausgewählt"
+                  : "Ähnliches vorhandenes Dokument erkannt"}
+              </strong>
+              {task.duplicate_matches.map((match) => (
+                <div key={match.document_id}>
+                  <span>
+                    <b>{match.title}</b>
+                    {match.relation === "exact_duplicate"
+                      ? " · identischer Inhalt"
+                      : " · möglicher Versionsvorgänger"}
+                    {match.has_conflict ? " · inhaltliche Abweichungen erkannt" : ""}
+                  </span>
+                  <a className="wp-secondary" href={match.original_url} target="_blank" rel="noreferrer">
+                    Vorhandenes Dokument prüfen
+                  </a>
+                </div>
+              ))}
+              {task.requested_action === "replace" && (
+                <small>
+                  Bei Freigabe wird die bisher aktive Fassung durch diese Version ersetzt. Die alte Version bleibt im Versionsverlauf erhalten.
+                </small>
+              )}
+            </div>
+          )}
           <p className="wp-reason">
             {own
               ? isAdmin
@@ -1775,7 +2239,19 @@ function Tasks({
                 : "Wähle, wie es weitergehen soll. Danach geht der Vorgang zur Freigabe."
               : reviewReason[task.status] || "Wartet auf eine Entscheidung."}
           </p>
-          {task.requires_admin && (
+          {task.status === "ready_to_activate" && task.publication_error && (
+            <div className="wp-alert wp-publication-error" role="alert">
+              <AlertTriangle />
+              <div>
+                <strong>Technische Veröffentlichung fehlgeschlagen</strong>
+                <span>
+                  Die Freigabe ist gespeichert, aber Vinci konnte das Dokument noch nicht indexieren.
+                  Du kannst die Veröffentlichung erneut versuchen.
+                </span>
+              </div>
+            </div>
+          )}
+          {task.requires_admin && !(own && task.duplicate_matches?.some((match) => match.relation === "version_candidate")) && (
             <span className="wp-escalated">
               <AlertTriangle /> Adminentscheidung erforderlich
             </span>
@@ -1793,6 +2269,20 @@ function Tasks({
               </div>
             </div>
           )}
+          {task.sanitized_for_review && (
+            <div className="wp-alert" role="alert">
+              <ShieldCheck />
+              <div>
+                <strong>Bereinigte Fassung zur Sicherheitsprüfung</strong>
+                <span>
+                  Die ursprüngliche PDF-Datei enthielt aktive oder eingebettete Inhalte.
+                  Diese wurden entfernt. Prüfe die sichtbare, bereinigte Fassung und das
+                  erzeugte Markdown, bevor du sie freigibst.
+                </span>
+                <small>Die ursprünglichen aktiven Inhalte werden nicht veröffentlicht.</small>
+              </div>
+            </div>
+          )}
           <div className="wp-task-buttons">
             <button
               className="wp-secondary"
@@ -1800,6 +2290,26 @@ function Tasks({
             >
               Original und Markdown prüfen
             </button>
+            {!own && task.status.includes("approval") && (
+              <button
+                className="wp-secondary"
+                disabled={inquiryBusy}
+                onClick={() => void openInquiry(task)}
+              >
+                <MessageCircle size={16} /> Rückfrage stellen
+              </button>
+            )}
+            {!own && task.status === "ready_to_activate" && (
+              <button
+                className="wp-secondary approve"
+                disabled={Boolean(busy)}
+                onClick={() => void decide(task.case_id, "approve")}
+              >
+                {busy === task.case_id
+                  ? "Veröffentlichung läuft …"
+                  : "Veröffentlichung erneut versuchen"}
+              </button>
+            )}
             {own && (
               <>
                 {task.status === "duplicate_blocked" ? (
@@ -1813,13 +2323,27 @@ function Tasks({
                     Vorhandenes zusätzlich veröffentlichen
                   </button>
                 ) : (
-                  <button
-                    className="wp-secondary approve"
-                    disabled={busy === task.case_id}
-                    onClick={() => void chooseAction(task.case_id, "create")}
-                  >
-                    Als neues Dokument vorschlagen
-                  </button>
+                  <>
+                    {task.duplicate_matches
+                      ?.filter((match) => match.relation === "version_candidate")
+                      .map((match) => (
+                        <button
+                          key={match.document_id}
+                          className="wp-secondary approve"
+                          disabled={busy === task.case_id}
+                          onClick={() => void chooseAction(task.case_id, "replace", match.document_id)}
+                        >
+                          Als neue Version von „{match.title}“ vorschlagen
+                        </button>
+                      ))}
+                    <button
+                      className="wp-secondary"
+                      disabled={busy === task.case_id}
+                      onClick={() => void chooseNewDocument(task)}
+                    >
+                      Als eigenständiges Dokument vorschlagen
+                    </button>
+                  </>
                 )}
                 <button
                   className="wp-secondary"
@@ -1831,6 +2355,11 @@ function Tasks({
               </>
             )}
           </div>
+          {decisionFeedback[task.case_id] && (
+            <p className="wp-message" role="status" aria-live="polite">
+              {decisionFeedback[task.case_id]}
+            </p>
+          )}
         </div>
         {!own && canDecide && task.status.includes("approval") && (
           <div className="wp-task-actions">
@@ -1862,11 +2391,6 @@ function Tasks({
                 {busy === task.case_id ? "Freigabe läuft …" : "Freigeben"}
               </button>
             </div>
-            {decisionFeedback[task.case_id] && (
-              <p className="wp-message" role="status" aria-live="polite">
-                {decisionFeedback[task.case_id]}
-              </p>
-            )}
           </div>
         )}
       </article>
@@ -1875,6 +2399,65 @@ function Tasks({
 
   return (
     <section className="wp-page">
+      {inquiryCase && (
+        <div className="wp-confirm-backdrop" role="presentation">
+          <section
+            className="wp-confirm-dialog wp-inquiry-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="inquiry-title"
+          >
+            <div className="wp-confirm-icon"><MessageCircle /></div>
+            <h2 id="inquiry-title">Rückfrage stellen</h2>
+            <p>Dokument: <strong>{inquiryCase.title}</strong></p>
+            {inquiryParticipants.length ? (
+              <>
+                <label>
+                  Ansprechpartner
+                  <select
+                    value={inquiryRecipient}
+                    onChange={(event) => setInquiryRecipient(event.target.value)}
+                  >
+                    {inquiryParticipants.map((participant) => (
+                      <option key={participant.user_id} value={participant.user_id}>
+                        {participant.display_name} ({participant.email})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Deine Rückfrage
+                  <textarea
+                    autoFocus
+                    value={inquiryQuestion}
+                    onChange={(event) => setInquiryQuestion(event.target.value)}
+                    placeholder="Was möchtest du zu diesem Dokument klären?"
+                  />
+                </label>
+                {inquiryMessage && <p className="wp-message" role="status">{inquiryMessage}</p>}
+                <div className="wp-confirm-actions">
+                  <button type="button" onClick={() => setInquiryCase(null)}>Schließen</button>
+                  <button
+                    type="button"
+                    className="wp-primary"
+                    disabled={inquiryBusy || !inquiryRecipient || inquiryQuestion.trim().length < 3}
+                    onClick={() => void sendInquiry()}
+                  >
+                    <Send size={16} /> Rückfrage senden
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>Für diesen Vorgang ist kein weiterer aktiver Ansprechpartner hinterlegt.</p>
+                <div className="wp-confirm-actions">
+                  <button type="button" onClick={() => setInquiryCase(null)}>Schließen</button>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
       <Title
         eyebrow="Arbeitsvorrat"
         title={
@@ -1934,6 +2517,67 @@ function Tasks({
   );
 }
 
+function SearchableUserPicker({
+  label,
+  emptyLabel,
+  value,
+  users,
+  onChange,
+}: {
+  label: string;
+  emptyLabel: string;
+  value: string;
+  users: PortalUser[];
+  onChange: (userId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const selectedUser = users.find((user) => user.user_id === value);
+  const normalizedQuery = query.trim().toLocaleLowerCase("de");
+  const matches = users.filter((user) =>
+    !normalizedQuery || `${user.display_name} ${user.email}`.toLocaleLowerCase("de").includes(normalizedQuery),
+  );
+  function choose(userId: string, target: HTMLElement) {
+    onChange(userId);
+    setQuery("");
+    const details = target.closest("details");
+    if (details instanceof HTMLDetailsElement) details.open = false;
+  }
+  return (
+    <div className="wp-user-assignment-field">
+      <span>{label}</span>
+      <details className="wp-kb-multiselect wp-owner-picker wp-user-assignment-picker">
+        <summary>
+          <span>{selectedUser?.display_name || emptyLabel}</span>
+          <ChevronRight size={16} />
+        </summary>
+        <fieldset className="wp-kb-options">
+          <legend className="sr-only">{label} auswählen</legend>
+          <input
+            className="wp-feedback-document-search"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Name oder E-Mail suchen …"
+            aria-label={`${label} suchen`}
+          />
+          {!normalizedQuery && (
+            <button type="button" className={!value ? "selected" : ""} onClick={(event) => choose("", event.currentTarget)}>
+              {emptyLabel}
+            </button>
+          )}
+          {matches.map((user) => (
+            <button type="button" key={user.user_id} className={value === user.user_id ? "selected" : ""}
+              onClick={(event) => choose(user.user_id, event.currentTarget)}>
+              <span>{user.display_name}<small>{user.email}</small></span>
+            </button>
+          ))}
+          {matches.length === 0 && <small className="wp-user-assignment-empty">Kein passender Benutzer gefunden.</small>}
+        </fieldset>
+      </details>
+    </div>
+  );
+}
+
 function UserAdmin({
   users,
   session,
@@ -1943,10 +2587,13 @@ function UserAdmin({
   session: Session;
   done: () => Promise<void>;
 }) {
+  const confirm = useConfirmation();
   const [selected, setSelected] = useState(users[0]?.user_id || ""),
     [access, setAccess] = useState<UserAccess[]>([]),
     [userQuery, setUserQuery] = useState("");
   const [managerId, setManagerId] = useState(""),
+    [delegations, setDelegations] = useState<Delegation[]>([]),
+    [delegateId, setDelegateId] = useState(""),
     [ownerPermission, setOwnerPermission] = useState(false);
   const [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
@@ -2003,14 +2650,19 @@ function UserAdmin({
       api<{ allowed: boolean }>(
         `/portal/admin/users/${selected}/owner-proposal-permission`,
       ),
+      api<{ delegations: Delegation[] }>("/portal/admin/delegations"),
     ])
-      .then(([accessPayload, ownerPayload]) => {
+      .then(([accessPayload, ownerPayload, delegationPayload]) => {
         if (!active) return;
         setManagerId(current.manager_user_id || "");
         setDirty(false);
         setMessage("");
         setAccess(accessPayload.access);
         setOwnerPermission(ownerPayload.allowed);
+        setDelegations(delegationPayload.delegations);
+        setDelegateId(delegationPayload.delegations.find(
+          (item) => item.manager_user_id === selected && !item.valid_from && !item.valid_until,
+        )?.delegate_user_id || "");
       })
       .catch((cause) => {
         if (active)
@@ -2030,41 +2682,28 @@ function UserAdmin({
   }
   async function confirmRoleChange() {
     if (!current || !pendingRole) return;
-    const roleRank: Record<Role, number> = {
-      employee: 0,
-      manager: 1,
-      admin: 2,
-      portal_admin: 3,
-    };
-    const needsMicrosoftConfirmation =
-      ["admin", "portal_admin"].includes(current.role) &&
-      roleRank[pendingRole] < roleRank[current.role];
-    if (!needsMicrosoftConfirmation) {
-      setBusy(true);
-      try {
-        await api(`/portal/admin/users/${current.user_id}/role`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role: pendingRole }),
-        });
-        setPendingRole(null);
-        setMessage(`Die Rolle von ${current.display_name} wurde geändert.`);
-        await done();
-      } catch (cause) {
-        setMessage(friendlyError(cause, "Rollenänderung fehlgeschlagen"));
-      } finally {
-        setBusy(false);
-      }
-      return;
+    const approved = await confirm({
+      title: "Rolle ändern?",
+      description: `${current.display_name} wird von ${roleLabel(current.role)} zu ${roleLabel(pendingRole)} geändert. Möchtest du diese Rollenänderung wirklich durchführen?`,
+      confirmLabel: "Rolle ändern",
+      danger: ["admin", "portal_admin"].includes(current.role),
+    });
+    if (!approved) return;
+    setBusy(true);
+    try {
+      await api(`/portal/admin/users/${current.user_id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: pendingRole, confirmed: true }),
+      });
+      setPendingRole(null);
+      setMessage(`Die Rolle von ${current.display_name} wurde geändert.`);
+      await done();
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Rollenänderung fehlgeschlagen"));
+    } finally {
+      setBusy(false);
     }
-    const start = await api<{ authorization_url: string }>(
-      "/portal/auth/step-up/start?return_to=/wissen/",
-    );
-    sessionStorage.setItem(
-      "pending-role-change",
-      JSON.stringify({ userId: current.user_id, role: pendingRole }),
-    );
-    window.location.assign(start.authorization_url);
   }
   function changeAccess(
     item: UserAccess,
@@ -2090,6 +2729,16 @@ function UserAdmin({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ manager_user_id: managerId || null }),
       });
+      const existingDelegate = delegations.find(
+        (item) => item.manager_user_id === current.user_id && !item.valid_from && !item.valid_until,
+      );
+      if (existingDelegate && existingDelegate.delegate_user_id !== delegateId)
+        await api(`/portal/admin/delegations?manager_user_id=${encodeURIComponent(current.user_id)}&delegate_user_id=${encodeURIComponent(existingDelegate.delegate_user_id)}`, { method: "DELETE" });
+      if (delegateId && existingDelegate?.delegate_user_id !== delegateId)
+        await api("/portal/admin/delegations", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ manager_user_id: current.user_id, delegate_user_id: delegateId }),
+        });
       await api(
         `/portal/admin/users/${current.user_id}/owner-proposal-permission`,
         {
@@ -2279,59 +2928,34 @@ function UserAdmin({
                       <option value="portal_admin">Portal-Admin</option>
                     )}
                   </select>
-                  <small>
-                    Normale Rollenänderungen bestätigst du direkt hier. Nur die
-                    Herabstufung eines Admins oder Portal-Admins benötigt eine
-                    erneute Microsoft-Bestätigung.
-                  </small>
+                  <small>Jede Rollenänderung wird vor dem Speichern noch einmal bestätigt.</small>
                 </label>
-                <label>
-                  Zugeordnete Führungskraft
-                  <select
-                    value={managerId}
-                    onChange={(e) => {
-                      setManagerId(e.target.value);
-                      setDirty(true);
-                    }}
-                  >
-                    <option value="">Keine Führungskraft</option>
-                    {managers
-                      .filter((user) => user.user_id !== current.user_id)
-                      .map((user) => (
-                        <option key={user.user_id} value={user.user_id}>
-                          {user.display_name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
+                <SearchableUserPicker
+                  label="Zugeordnete Führungskraft"
+                  emptyLabel="Keine Führungskraft"
+                  value={managerId}
+                  users={managers.filter((user) => user.user_id !== current.user_id)}
+                  onChange={(userId) => { setManagerId(userId); setDirty(true); }}
+                />
+                {["manager", "admin", "portal_admin"].includes(pendingRole ?? current.role) && (
+                  <SearchableUserPicker
+                    label="Zugeordnete Vertretung"
+                    emptyLabel="Keine Vertretung"
+                    value={delegateId}
+                    users={users.filter((user) => user.active && user.user_id !== current.user_id)}
+                    onChange={(userId) => { setDelegateId(userId); setDirty(true); }}
+                  />
+                )}
               </div>
               {pendingRole && (
-                <div className="wp-role-confirmation" role="alert">
-                  <div>
-                    <strong>Rolle wirklich ändern?</strong>
-                    <p>
-                      {current.display_name} wird von {roleLabel(current.role)} zu{" "}
-                      {roleLabel(pendingRole)} geändert.
-                    </p>
-                  </div>
-                  <div className="wp-role-confirmation-actions">
-                    <button
-                      type="button"
-                      onClick={() => setPendingRole(null)}
-                      disabled={busy}
-                    >
-                      Abbrechen
-                    </button>
-                    <button
-                      type="button"
-                      className="wp-primary"
-                      onClick={() => void confirmRoleChange()}
-                      disabled={busy}
-                    >
-                      {busy ? "Wird geändert …" : "Rollenänderung bestätigen"}
-                    </button>
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  className="wp-primary"
+                  onClick={() => void confirmRoleChange()}
+                  disabled={busy}
+                >
+                  Rollenänderung prüfen
+                </button>
               )}
               <label className="wp-check-row">
                 <input
@@ -2494,17 +3118,20 @@ function UserAdmin({
                 <div>
                   <strong>{userName(item.manager_user_id)}</strong>
                   <span>
-                    {item.absent_from} bis {item.absent_until} · {item.reason}
+                    {item.absent_from} bis {item.absent_until === "9999-12-31" ? "auf Weiteres" : item.absent_until} · {item.reason}
                   </span>
                   <small>Vertretung: {userName(item.delegate_user_id)}</small>
+                  {item.source === "outlook" && <small>Automatisch mit Outlook synchronisiert</small>}
                 </div>
-                <button
-                  className="wp-outline-button"
-                  disabled={busy}
-                  onClick={() => void removeAbsence(item.manager_user_id)}
-                >
-                  Entfernen
-                </button>
+                {item.source !== "outlook" && (
+                  <button
+                    className="wp-outline-button"
+                    disabled={busy}
+                    onClick={() => void removeAbsence(item.manager_user_id)}
+                  >
+                    Entfernen
+                  </button>
+                )}
               </article>
             ))
           ) : (
@@ -2539,17 +3166,23 @@ function countList(
 
 function AuditView({
   entries,
-  users,
+  users: _users,
 }: {
   entries: AuditEntry[];
   users: PortalUser[];
 }) {
-  // Rohe UUIDs sagen niemandem etwas. Die Benutzerliste ist ohnehin geladen.
-  const nameOf = (userId: string) =>
-    users.find((user) => user.user_id === userId)?.display_name || userId;
-  // Betroffene Objekte ebenfalls benennen; eine UUID allein sagt nichts.
-  const labelOf = (subjectType: string, subjectId: string) =>
-    subjectType === "user" ? nameOf(subjectId) : subjectId;
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase("de");
+  const visibleEntries = entries.filter((entry) => {
+    if (!normalizedQuery) return true;
+    return [
+      entry.actor_name,
+      entry.event_label,
+      entry.subject_label,
+      entry.details_label,
+      entry.event_type,
+    ].some((value) => value.toLocaleLowerCase("de").includes(normalizedQuery));
+  });
   return (
     <section className="wp-page">
       <Title
@@ -2557,6 +3190,15 @@ function AuditView({
         title="Auditprotokoll"
         text="Kritische Aktionen aus Rollenverwaltung und Dokumentlebenszyklus in einer gemeinsamen Ansicht."
       />
+      <label className="wp-audit-search">
+        <span>Auditprotokoll durchsuchen</span>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Zum Beispiel Dokument, Wissensbereich, Nutzer oder Aktion"
+        />
+      </label>
       <div className="wp-actions">
         <a className="wp-primary" href={`${API}/portal/admin/audit/export.csv`}>
           CSV exportieren
@@ -2565,25 +3207,32 @@ function AuditView({
           PDF exportieren
         </a>
       </div>
+      <p className="wp-audit-result-count" role="status">
+        {visibleEntries.length} {visibleEntries.length === 1 ? "Eintrag" : "Einträge"} angezeigt
+      </p>
       <div className="wp-task-list">
-        {entries.map((entry, index) => (
+        {visibleEntries.map((entry, index) => (
           <article key={`${entry.occurred_at}-${index}`}>
             <div className="wp-task-icon">
               <ShieldCheck />
             </div>
             <div className="wp-task-copy">
               <Badge status={entry.event_type} />
-              <h2>
-                {subjectText[entry.subject_type] || entry.subject_type}:{" "}
-                {labelOf(entry.subject_type, entry.subject_id)}
-              </h2>
+              <h2>{entry.event_label}</h2>
+              <span><strong>Betroffen:</strong> {entry.subject_label}</span>
+              {entry.details_label !== "Keine weiteren Angaben" && (
+                <span><strong>Änderung:</strong> {entry.details_label}</span>
+              )}
               <p>
                 {new Date(entry.occurred_at).toLocaleString("de-DE")} ·{" "}
-                {nameOf(entry.actor_user_id)}
+                ausgeführt von {entry.actor_name}
               </p>
             </div>
           </article>
         ))}
+        {!visibleEntries.length && (
+          <p className="wp-empty-hint">Zu dieser Suche wurden keine Audit-Einträge gefunden.</p>
+        )}
       </div>
     </section>
   );
@@ -2591,19 +3240,57 @@ function AuditView({
 
 function FeedbackForm() {
   const [context, setContext] = useState<FeedbackContext | null>(null),
+    [options, setOptions] = useState<FeedbackOptions>({ documents: [], knowledgebases: [] }),
+    [documentIds, setDocumentIds] = useState<string[]>([]),
+    [knowledgebaseIds, setKnowledgebaseIds] = useState<string[]>([]),
+    [documentSearch, setDocumentSearch] = useState(""),
     [reason, setReason] = useState("incorrect"),
     [comment, setComment] = useState(""),
-    [message, setMessage] = useState("");
-  const [screenshot, setScreenshot] = useState<File | null>(null);
+    [message, setMessage] = useState(""),
+    [busy, setBusy] = useState(false),
+    [success, setSuccess] = useState(false);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const screenshotInput = useRef<HTMLInputElement>(null);
+  function pasteScreenshot(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+    const image = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"));
+    const file = image?.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    const extension = file.type === "image/png" ? "png" : "jpg";
+    if (attachments.length >= 5) {
+      setMessage("Du kannst höchstens fünf Dateien anhängen.");
+      return;
+    }
+    setAttachments((current) => [...current, new File(
+      [file], `screenshot-${Date.now()}.${extension}`, { type: file.type },
+    )].slice(0, 5));
+    setMessage("Screenshot aus der Zwischenablage übernommen.");
+  }
   useEffect(() => {
     const params = new URLSearchParams(window.location.search),
       chatId = params.get("chat_id"),
-      messageId = params.get("message_id");
+      messageId = params.get("message_id"),
+      linkedDocumentIds = (params.get("document_ids") || "").split(",").filter(Boolean),
+      linkedKnowledgebaseIds = (params.get("knowledgebase_ids") || "").split(",").filter(Boolean);
+    void api<FeedbackOptions>("/portal/feedback/options")
+      .then((loaded) => {
+        setOptions(loaded);
+        setDocumentIds(linkedDocumentIds.filter((id) => loaded.documents.some((item) => item.document_id === id)));
+        setKnowledgebaseIds(linkedKnowledgebaseIds.filter((id) => loaded.knowledgebases.some((item) => item.knowledgebase_id === id)));
+      })
+      .catch(() => undefined);
     if (!chatId || !messageId) return;
     void api<FeedbackContext>(
       `/portal/feedback/context?chat_id=${encodeURIComponent(chatId)}&message_id=${encodeURIComponent(messageId)}`,
     )
-      .then(setContext)
+      .then((loaded) => {
+        setContext(loaded);
+        setOptions({ documents: loaded.documents, knowledgebases: loaded.knowledgebases });
+        setDocumentIds((linkedDocumentIds.length ? linkedDocumentIds : loaded.document_ids || [])
+          .filter((id) => loaded.documents.some((item) => item.document_id === id)));
+        setKnowledgebaseIds((linkedKnowledgebaseIds.length ? linkedKnowledgebaseIds : loaded.knowledgebase_ids || [])
+          .filter((id) => loaded.knowledgebases.some((item) => item.knowledgebase_id === id)));
+      })
       .catch(() =>
         setMessage(
           "Der Chatkontext konnte nicht automatisch geladen werden. Bitte beschreibe den Fehler kurz.",
@@ -2611,42 +3298,53 @@ function FeedbackForm() {
       );
   }, []);
   async function submit() {
-    if (!context)
-      return setMessage(
-        "Bitte öffne diese Meldung direkt über den Link unter einer Vinci-Antwort.",
-      );
-    const result = await api<{ feedback_id: string }>("/portal/feedback/rag", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...context, reason, comment }),
-    });
+    setBusy(true);
+    setMessage("");
+    const reportContext = context || {
+      question: "", answer: "", sources: [], passages: [],
+      runtime: { source: "knowledge_portal" }, request_id: crypto.randomUUID(),
+    };
+    try {
+      const result = await api<{ feedback_id: string }>("/portal/feedback/rag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...reportContext, reason, comment,
+          document_ids: documentIds, knowledgebase_ids: knowledgebaseIds,
+        }),
+      });
     // Der Anhang folgt der Meldung, weil er ihre Kennung braucht. Schlaegt er
     // fehl, bleibt die Meldung bestehen und der Fehler wird benannt.
-    if (screenshot) {
-      const form = new FormData();
-      form.append("file", screenshot);
-      try {
-        const response = await fetch(
-          `${API}/portal/feedback/${result.feedback_id}/screenshot`,
-          { method: "POST", credentials: "include", body: form },
-        );
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.detail || `request_${response.status}`);
+      if (attachments.length) {
+        try {
+          for (const attachment of attachments) {
+            const form = new FormData();
+            form.append("file", attachment);
+            const response = await fetch(
+              `${API}/portal/feedback/${result.feedback_id}/screenshot`,
+              { method: "POST", credentials: "include", body: form },
+            );
+            if (!response.ok) {
+              const body = await response.json().catch(() => ({}));
+              throw new Error(body.detail || `request_${response.status}`);
+            }
+          }
+        } catch (cause) {
+          setAttachments([]);
+          setComment("");
+          return setMessage(
+            `Deine Meldung wurde gespeichert, mindestens eine Datei konnte aber nicht angehängt werden: ${friendlyError(cause, "unbekannter Grund")}`,
+          );
         }
-      } catch (cause) {
-        setScreenshot(null);
-        setComment("");
-        return setMessage(
-          `Die Meldung wurde unter ${result.feedback_id} angelegt, das Bild konnte aber nicht angehängt werden: ${friendlyError(cause, "unbekannter Grund")}`,
-        );
       }
+      setComment("");
+      setAttachments([]);
+      setSuccess(true);
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Die Meldung konnte nicht gesendet werden."));
+    } finally {
+      setBusy(false);
     }
-    setMessage(
-      `Danke. Die Meldung wurde unter ${result.feedback_id} angelegt.`,
-    );
-    setComment("");
-    setScreenshot(null);
   }
   return (
     <section className="wp-page narrow">
@@ -2678,9 +3376,72 @@ function FeedbackForm() {
           <textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
+            onPaste={pasteScreenshot}
             placeholder="Was genau sollten wir prüfen?"
           />
+          <small className="wp-hint">Du kannst einen kopierten Screenshot hier mit Strg+V einfügen.</small>
         </label>
+        <div className="wp-feedback-references">
+          <div className="wp-kb-field">
+            <span>Betroffene Wissensbereiche (optional)</span>
+            <details className="wp-kb-multiselect">
+              <summary>
+                <span>{knowledgebaseIds.length
+                  ? options.knowledgebases.filter((item) => knowledgebaseIds.includes(item.knowledgebase_id)).map((item) => item.label).join(", ")
+                  : "Keine ausgewählt"}</span>
+                <ChevronRight size={16} />
+              </summary>
+              <fieldset className="wp-kb-options">
+                <legend className="sr-only">Betroffene Wissensbereiche auswählen</legend>
+                {options.knowledgebases.map((item) => (
+                  <label key={item.knowledgebase_id}>
+                    <input type="checkbox" checked={knowledgebaseIds.includes(item.knowledgebase_id)}
+                      onChange={(event) => setKnowledgebaseIds((current) => event.target.checked
+                        ? [...current, item.knowledgebase_id]
+                        : current.filter((id) => id !== item.knowledgebase_id))} />
+                    {item.label}
+                  </label>
+                ))}
+              </fieldset>
+            </details>
+          </div>
+          <div className="wp-kb-field">
+            <span>Betroffene Dokumente (optional)</span>
+            <details className="wp-kb-multiselect">
+              <summary>
+                <span>{documentIds.length
+                  ? options.documents.filter((item) => documentIds.includes(item.document_id)).map((item) => item.title).join(", ")
+                  : "Keine ausgewählt"}</span>
+                <ChevronRight size={16} />
+              </summary>
+              <fieldset className="wp-kb-options">
+                <legend className="sr-only">Betroffene Dokumente auswählen</legend>
+                <input
+                  className="wp-feedback-document-search"
+                  type="search"
+                  value={documentSearch}
+                  onChange={(event) => setDocumentSearch(event.target.value)}
+                  placeholder="Dokument suchen …"
+                  aria-label="Dokument suchen"
+                />
+                {options.documents.filter((item) =>
+                  item.title.toLocaleLowerCase("de").includes(documentSearch.trim().toLocaleLowerCase("de")),
+                ).map((item) => (
+                  <label key={item.document_id}>
+                    <input type="checkbox" checked={documentIds.includes(item.document_id)}
+                      onChange={(event) => setDocumentIds((current) => event.target.checked
+                        ? [...current, item.document_id]
+                        : current.filter((id) => id !== item.document_id))} />
+                    {item.title}
+                  </label>
+                ))}
+                {options.documents.length > 0 && !options.documents.some((item) =>
+                  item.title.toLocaleLowerCase("de").includes(documentSearch.trim().toLocaleLowerCase("de")),
+                ) && <small className="wp-hint">Kein passendes Dokument gefunden.</small>}
+              </fieldset>
+            </details>
+          </div>
+        </div>
         {context && (
           <div className="wp-owner">
             <ShieldCheck />
@@ -2690,22 +3451,51 @@ function FeedbackForm() {
             </div>
           </div>
         )}
-        <label>
-          Screenshot (optional)
+        <div className="wp-feedback-upload">
+          <strong>Dateien hochladen (optional)</strong>
           <input
+            ref={screenshotInput}
+            className="sr-only"
             type="file"
-            accept="image/png,image/jpeg"
-            onChange={(e) => setScreenshot(e.target.files?.[0] || null)}
+            multiple
+            accept="image/png,image/jpeg,.pdf,.docx,.xlsx,.pptx,.txt,.md"
+            onChange={(event) => {
+              const selected = Array.from(event.target.files || []);
+              setAttachments((current) => [...current, ...selected].slice(0, 5));
+              if (attachments.length + selected.length > 5) setMessage("Es wurden nur die ersten fünf Dateien übernommen.");
+              event.target.value = "";
+            }}
           />
-          <small className="wp-hint">
-            PNG oder JPEG bis 5 MB. Nur Admins sehen das Bild.
-          </small>
-        </label>
-        <button className="wp-primary" onClick={() => void submit()}>
-          Meldung freigeben und senden
+          <button type="button" className="wp-secondary" onClick={() => screenshotInput.current?.click()}>
+            <FileUp size={16} /> Datei auswählen
+          </button>
+          <small className="wp-hint">Bis zu fünf Dateien mit jeweils maximal 5 MB. Nur Admins sehen die Anhänge.</small>
+          {!!attachments.length && (
+            <ul className="wp-feedback-attachment-list">
+              {attachments.map((attachment, index) => (
+                <li key={`${attachment.name}-${attachment.lastModified}-${index}`}>
+                  <span>{attachment.name}</span>
+                  <button type="button" onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Entfernen</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <button className="wp-primary" disabled={busy} onClick={() => void submit()}>
+          {busy ? <><LoaderCircle className="spin" size={16} /> Meldung wird gesendet …</> : "Meldung freigeben und senden"}
         </button>
         {message && <p className="wp-message">{message}</p>}
       </div>
+      {success && (
+        <div className="wp-confirm-backdrop" role="presentation">
+          <div className="wp-confirm-dialog wp-feedback-success" role="dialog" aria-modal="true" aria-labelledby="feedback-success-title">
+            <CheckCircle2 className="green" />
+            <h2 id="feedback-success-title">Vielen Dank für deine Meldung</h2>
+            <p>Ein Admin wurde informiert und kümmert sich darum.</p>
+            <button className="wp-primary" onClick={() => setSuccess(false)}>Schließen</button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -2721,6 +3511,7 @@ function KnowledgebaseAdmin({
   session: Session;
   done: () => Promise<void>;
 }) {
+  const confirm = useConfirmation();
   // Antragsteller mit Klarnamen; die reine Benutzer-ID sagt niemandem etwas.
   const userNames = Object.fromEntries(
     users.map((user) => [user.user_id, user.display_name]),
@@ -2732,8 +3523,8 @@ function KnowledgebaseAdmin({
     [reason, setReason] = useState("");
   const [overview, setOverview] = useState<KBOverview[]>([]),
     [open, setOpen] = useState("");
-  const [notice, setNotice] = useState(""),
-    [confirmedTarget, setConfirmedTarget] = useState("");
+  const [notice, setNotice] = useState("");
+  const [successNotice, setSuccessNotice] = useState("");
   useEffect(() => {
     void api<{ knowledgebases: KBOverview[] }>(
       "/portal/admin/knowledgebase-overview",
@@ -2741,13 +3532,6 @@ function KnowledgebaseAdmin({
       .then((payload) => setOverview(payload.knowledgebases))
       .catch(() => setOverview([]));
   }, [changes]);
-  async function stepUp(action: AdminAction) {
-    const start = await api<{ authorization_url: string }>(
-      "/portal/auth/step-up/start?return_to=/wissen/",
-    );
-    sessionStorage.setItem("pending-admin-action", JSON.stringify(action));
-    window.location.assign(start.authorization_url);
-  }
   // Archivieren und Entfernen machen alle zugeordneten Dokumente unauffindbar.
   // Ohne diesen Hinweis geschieht das lautlos.
   function affectedDocuments() {
@@ -2759,12 +3543,19 @@ function KnowledgebaseAdmin({
   }
   async function requestChange() {
     const affected = affectedDocuments();
-    if (affected > 0 && confirmedTarget !== target) {
-      setConfirmedTarget(target);
-      return setNotice(
-        `Diesem Wissensbereich sind ${affected} ${affected === 1 ? "Dokument" : "Dokumente"} zugeordnet. Sie bleiben erhalten, sind danach aber über Vinci nicht mehr auffindbar. Zum Fortfahren erneut bestätigen.`,
-      );
-    }
+    const targetLabel = kind === "create"
+      ? label
+      : overview.find((base) => base.knowledgebase_id === target)?.label || target;
+    const actionLabel = changeKindText[kind] || kind;
+    const approved = await confirm({
+      title: `Wissensbereich ${actionLabel.toLocaleLowerCase("de-DE")}?`,
+      description: affected > 0
+        ? `Du möchtest „${targetLabel}“ ${actionLabel.toLocaleLowerCase("de-DE")}. ${affected} ${affected === 1 ? "zugeordnetes Dokument" : "zugeordnete Dokumente"} ${affected === 1 ? "ist" : "sind"} danach über Vinci nicht mehr auffindbar. Möchtest du fortfahren?`
+        : `Du möchtest den Wissensbereich „${targetLabel}“ ${actionLabel.toLocaleLowerCase("de-DE")}. Möchtest du diese Aktion wirklich durchführen?`,
+      confirmLabel: actionLabel,
+      danger: ["archive", "delete"].includes(kind),
+    });
+    if (!approved) return;
     setNotice("");
     const payload: { label?: string; slug?: string; purpose?: string } = {};
     if (kind === "create")
@@ -2777,26 +3568,71 @@ function KnowledgebaseAdmin({
         kind,
         knowledgebase_id: kind === "create" ? null : target,
         payload,
+        confirmed: true,
       },
     };
-    if (session.role === "portal_admin") return stepUp(action);
-    await api(action.path, {
+    const response = await api<{ change: KBChange }>(action.path, {
       method: action.method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(action.body),
     });
+    const completedText: Record<string, string> = {
+      create: "Der Wissensbereich wurde erfolgreich angelegt.",
+      rename: "Der Wissensbereich wurde erfolgreich umbenannt.",
+      archive: "Der Wissensbereich wurde erfolgreich archiviert.",
+      delete: "Der Wissensbereich wurde erfolgreich entfernt.",
+    };
+    const completed = response.change.status === "approved";
+    setSuccessNotice(
+      completed
+        ? completedText[kind] || "Die Änderung wurde erfolgreich gespeichert."
+        : "Der Änderungsantrag wurde erfolgreich eingereicht und wartet auf die Freigabe durch einen Portal-Admin.",
+    );
+    if (completed) {
+      setLabel("");
+      setSlug("");
+      setTarget("");
+      setReason("");
+    }
     await done();
   }
   async function decide(request_id: string, approve: boolean) {
     if (!reason.trim()) return;
-    await stepUp({
-      path: `/portal/admin/knowledgebase-changes/${request_id}/decision`,
-      method: "POST",
-      body: { approve, reason },
+    const change = changes.find((item) => item.request_id === request_id);
+    const actionLabel = approve ? "Antrag freigeben" : "Antrag ablehnen";
+    const approved = await confirm({
+      title: `${actionLabel}?`,
+      description: `Du möchtest den Antrag „${change ? changeKindText[change.kind] || change.kind : request_id}“ ${approve ? "freigeben" : "ablehnen"}. Möchtest du diese Entscheidung wirklich speichern?`,
+      confirmLabel: approve ? "Freigeben" : "Ablehnen",
+      danger: !approve,
     });
+    if (!approved) return;
+    setNotice("");
+    await api(`/portal/admin/knowledgebase-changes/${request_id}/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approve, reason, confirmed: true }),
+    });
+    setSuccessNotice(
+      approve
+        ? "Der Änderungsantrag wurde freigegeben und die Änderung erfolgreich ausgeführt."
+        : "Der Änderungsantrag wurde abgelehnt.",
+    );
+    setReason("");
+    await done();
   }
   return (
     <section className="wp-page">
+      {successNotice && (
+        <div className="wp-confirm-backdrop" role="presentation">
+          <div className="wp-confirm-dialog wp-feedback-success" role="dialog" aria-modal="true" aria-labelledby="kb-success-title">
+            <CheckCircle2 className="green" />
+            <h2 id="kb-success-title">Änderung erfolgreich</h2>
+            <p>{successNotice}</p>
+            <button className="wp-primary" onClick={() => setSuccessNotice("")}>Schließen</button>
+          </div>
+        </div>
+      )}
       <Title
         eyebrow="Administration"
         title="Knowledge Bases verwalten"
@@ -2871,9 +3707,7 @@ function KnowledgebaseAdmin({
         </label>
         {notice && <p className="wp-message">{notice}</p>}
         <button className="wp-primary" onClick={() => void requestChange()}>
-          {notice && confirmedTarget === target
-            ? "Trotzdem einreichen"
-            : "Änderung einreichen"}
+          Änderung einreichen
         </button>
       </div>
       <h2>Wissensbereiche und ihre Dokumente</h2>
@@ -3013,6 +3847,7 @@ function MigrationView({
   kbs: KB[];
   session: Session;
 }) {
+  const confirm = useConfirmation();
   const [items, setItems] = useState<MigrationItem[]>([]),
     [tasks, setTasks] = useState<MigrationTask[]>([]),
     [selected, setSelected] = useState("");
@@ -3108,22 +3943,21 @@ function MigrationView({
     }
   }
   async function stage(path: string) {
+    const item = items.find((entry) => entry.path === path);
+    const approved = await confirm({
+      title: "Altbestand übernehmen?",
+      description: `Du möchtest „${item?.original_path || path}“ in den regulären Freigabeprozess übernehmen. Die Datei wird anschließend dem ausgewählten Owner zur Prüfung zugeordnet. Möchtest du fortfahren?`,
+      confirmLabel: "Übernehmen",
+    });
+    if (!approved) return;
     setBusy(true);
     try {
       const action: AdminAction = {
         path: "/portal/admin/migration/stage",
         method: "POST",
-        body: { path },
+        body: { path, confirmed: true },
         returnTab: "migration",
       };
-      if (session.role === "portal_admin") {
-        const start = await api<{ authorization_url: string }>(
-          "/portal/auth/step-up/start?return_to=/wissen/",
-        );
-        sessionStorage.setItem("pending-admin-action", JSON.stringify(action));
-        window.location.assign(start.authorization_url);
-        return;
-      }
       await api(action.path, {
         method: action.method,
         headers: { "Content-Type": "application/json" },
@@ -3739,21 +4573,73 @@ function RestrictedTermsView({
   );
 }
 
-function QualityCasesView({ data }: { data: QualityCases }) {
+const feedbackReasonText: Record<string, string> = {
+  incorrect: "Information ist falsch",
+  outdated: "Information ist veraltet",
+  conflicting_sources: "Quellen widersprechen sich",
+  irrelevant_source: "Quelle passt nicht zur Frage",
+  suspected_permission_issue: "Möglicher Berechtigungsfehler",
+  other: "Sonstiger Wissensfehler",
+};
+
+function technicalIncident(item: Pick<QualityRow, "summary" | "diagnostic_json">) {
+  let diagnostic: Record<string, unknown> = {};
+  try { diagnostic = JSON.parse(item.diagnostic_json || "{}"); } catch { diagnostic = {}; }
+  const code = String(diagnostic.error_code || diagnostic.error_type || "unbekannt");
+  const reasons: Record<string, string> = {
+    embedding_service_unavailable: "Der Dienst für die automatische Ähnlichkeitsanalyse war nicht erreichbar oder konnte das Dokument nicht verarbeiten.",
+    RetrievalError: "Die Wissenssuche konnte eine Anfrage technisch nicht abschließen.",
+  };
+  return { diagnostic, reason: reasons[code] || `Technischer Fehlercode: ${code}` };
+}
+
+function QualityCasesView({ data, done }: { data: QualityCases; done: () => Promise<void> }) {
+  const [selected, setSelected] = useState<QualityRow | null>(null),
+    [reply, setReply] = useState(""),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState("");
   const rows: QualityRow[] = [
     ...(data.incidents || []).map((item) => ({
       ...item,
-      type: "Systemincident",
+      type: "incident",
       id: item.incident_id,
-      summary: item.step,
+      summary: item.step === "retrieval" ? "Technischer Fehler bei der Wissenssuche" : `Technischer Fehler: ${item.step}`,
     })),
     ...(data.feedback || []).map((item) => ({
       ...item,
-      type: "Wissensfehler",
+      type: "feedback",
       id: item.feedback_id,
-      summary: item.reason,
+      summary: feedbackReasonText[item.reason] || "Wissensfehler",
     })),
   ];
+  async function sendReply() {
+    if (!selected || selected.type !== "feedback" || reply.trim().length < 3) return;
+    setBusy(true); setMessage("");
+    try {
+      await api(`/portal/admin/quality-cases/feedback/${selected.id}/message`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: reply.trim() }),
+      });
+      setReply("");
+      setMessage("Die Rückmeldung wurde als Mitteilung und per E-Mail versendet.");
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Die Rückmeldung konnte nicht versendet werden."));
+    } finally { setBusy(false); }
+  }
+  async function resolveCase() {
+    if (!selected || reply.trim().length < 3) return setMessage("Bitte dokumentiere kurz, wie der Fall gelöst wurde.");
+    setBusy(true); setMessage("");
+    try {
+      await api(`/portal/admin/quality-cases/${selected.type}/${selected.id}/resolve`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution: reply.trim() }),
+      });
+      setSelected(null); setReply("");
+      await done();
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Der Fall konnte nicht abgeschlossen werden."));
+    } finally { setBusy(false); }
+  }
   return (
     <section className="wp-page">
       <Title
@@ -3764,19 +4650,51 @@ function QualityCasesView({ data }: { data: QualityCases }) {
       <div className="wp-task-list">
         {rows.length ? (
           rows.map((item) => (
-            <article key={item.id}>
+            <article key={item.id} className="wp-quality-case-card">
               <div className="wp-task-icon">
                 <AlertTriangle />
               </div>
               <div className="wp-task-copy">
                 <Badge status={item.severity || "normal"} />
                 <h2>
-                  {item.type}: {item.summary}
+                  {item.summary}
                 </h2>
                 <p>
-                  {item.id} · {item.created_at}
+                  {new Date(item.created_at).toLocaleString("de-DE")}
                 </p>
+                {item.reported_by_name && <span><strong>Gemeldet von:</strong> {item.reported_by_name}</span>}
                 {item.comment && <span>{item.comment}</span>}
+                {!!item.knowledgebases?.length && (
+                  <span><strong>Wissensbereiche:</strong> {item.knowledgebases.map((base) => base.label).join(", ")}</span>
+                )}
+                {!!item.documents?.length && (
+                  <span><strong>Dokumente:</strong> {item.documents.map((document) => document.title).join(", ")}</span>
+                )}
+                {item.type === "incident" && (
+                  <>
+                    <span><strong>Was ist passiert:</strong> {technicalIncident(item).reason}</span>
+                    {technicalIncident(item).diagnostic.title && <span><strong>Dokument:</strong> {String(technicalIncident(item).diagnostic.title)}</span>}
+                    {technicalIncident(item).diagnostic.original_filename && <span><strong>Datei:</strong> {String(technicalIncident(item).diagnostic.original_filename)}</span>}
+                    <span>Dieser Fall wurde automatisch durch das System erzeugt.</span>
+                  </>
+                )}
+              </div>
+              <div className="wp-quality-case-actions">
+                {item.screenshot_filename && (
+                  <a className="wp-secondary" href={`${API}/portal/admin/feedback/${item.id}/screenshot`} target="_blank" rel="noreferrer">
+                    Screenshot ansehen
+                  </a>
+                )}
+                {item.attachments?.map((attachment) => (
+                  <a key={attachment.attachment_id} className="wp-secondary"
+                    href={`${API}/portal/admin/feedback/${item.id}/attachments/${attachment.attachment_id}`}
+                    target="_blank" rel="noreferrer">
+                    {attachment.original_filename}
+                  </a>
+                ))}
+                <button className="wp-secondary" onClick={() => { setSelected(item); setReply(""); setMessage(""); }}>
+                  Fall bearbeiten
+                </button>
               </div>
             </article>
           ))
@@ -3787,6 +4705,42 @@ function QualityCasesView({ data }: { data: QualityCases }) {
           </div>
         )}
       </div>
+      {selected && (
+        <div className="wp-confirm-backdrop" role="presentation">
+          <div className="wp-confirm-dialog wp-quality-case-dialog" role="dialog" aria-modal="true" aria-labelledby="quality-case-title">
+            <AlertTriangle />
+            <h2 id="quality-case-title">{selected.summary}</h2>
+            {selected.reported_by_name && <p>Gemeldet von <strong>{selected.reported_by_name}</strong></p>}
+            {selected.type === "incident" && <div><strong>Technische Einordnung</strong><p>{technicalIncident(selected).reason}</p></div>}
+            {selected.comment && <div><strong>Hinweis des Nutzers</strong><p>{selected.comment}</p></div>}
+            {selected.question && <details><summary>Übernommene Frage anzeigen</summary><p>{selected.question}</p></details>}
+            {selected.answer && <details><summary>Beanstandete Antwort anzeigen</summary><p>{selected.answer}</p></details>}
+            {!!selected.knowledgebases?.length && <p><strong>Wissensbereiche:</strong> {selected.knowledgebases.map((base) => base.label).join(", ")}</p>}
+            {!!selected.documents?.length && <p><strong>Dokumente:</strong> {selected.documents.map((document) => document.title).join(", ")}</p>}
+            {!!selected.attachments?.length && (
+              <div><strong>Angehängte Dateien</strong><ul>
+                {selected.attachments.map((attachment) => (
+                  <li key={attachment.attachment_id}><a
+                    href={`${API}/portal/admin/feedback/${selected.id}/attachments/${attachment.attachment_id}`}
+                    target="_blank" rel="noreferrer">{attachment.original_filename}</a></li>
+                ))}
+              </ul></div>
+            )}
+            <label>
+              Rückmeldung oder Abschlussnotiz
+              <textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Was wurde geprüft oder korrigiert?" />
+            </label>
+            {message && <p className="wp-message" role="status">{message}</p>}
+            <div className="wp-confirm-actions">
+              <button onClick={() => setSelected(null)} disabled={busy}>Schließen</button>
+              {selected.type === "feedback" && <button onClick={() => void sendReply()} disabled={busy || reply.trim().length < 3}>Nutzer benachrichtigen</button>}
+              <button className="wp-primary" onClick={() => void resolveCase()} disabled={busy || reply.trim().length < 3}>
+                {busy ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />} Fall gelöst
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -3806,16 +4760,19 @@ function DocumentList({
   session: Session;
   done: () => Promise<void>;
 }) {
+  const confirm = useConfirmation();
   const [selected, setSelected] = useState(""),
     [search, setSearch] = useState(""),
     [knowledgebaseFilter, setKnowledgebaseFilter] = useState(""),
-    [reason, setReason] = useState(""),
-    [confirmed, setConfirmed] = useState(false),
     [desired, setDesired] = useState("restricted"),
     [proposedOwner, setProposedOwner] = useState("");
   const [message, setMessage] = useState(""),
-    [bases, setBases] = useState<KBOverview[]>([]),
-    [targetBase, setTargetBase] = useState("");
+    [bases, setBases] = useState<KBOverview[]>([]);
+  const [reasonByDocument, setReasonByDocument] = useState<Record<string, string>>({});
+  const [publicationSelections, setPublicationSelections] = useState<Record<string, string[]>>({}),
+    [publicationBusy, setPublicationBusy] = useState<Record<string, boolean>>({});
+  const publicationSaveLocks = useRef(new Set<string>());
+  const reason = reasonByDocument[selected] || "";
   const isAdmin = ["admin", "portal_admin"].includes(session.role);
   useEffect(() => {
     if (!isAdmin) return;
@@ -3833,7 +4790,6 @@ function DocumentList({
   const toggle = (documentId: string) =>
     setSelected((current) => {
       setMessage("");
-      setTargetBase("");
       return current === documentId ? "" : documentId;
     });
 
@@ -3851,8 +4807,7 @@ function DocumentList({
     }
     try {
       await call();
-      setReason("");
-      setConfirmed(false);
+      setReasonByDocument((current) => ({ ...current, [selected]: "" }));
       setMessage(`${what} wurde eingereicht.`);
       await done();
     } catch (cause) {
@@ -3867,14 +4822,63 @@ function DocumentList({
       body: JSON.stringify(body),
     });
 
-  const publish = (documentId: string, active: boolean) =>
-    run(active ? "Die Zuordnung" : "Das Lösen der Zuordnung", () =>
-      api(`/portal/admin/documents/${documentId}/publications`, {
+  const publish = async (
+    documentId: string,
+    knowledgebaseId: string,
+    active: boolean,
+    nextSelection: string[],
+  ) => {
+    if (publicationSaveLocks.current.has(documentId)) return;
+    const documentReason = reasonByDocument[documentId] || "";
+    if (documentReason.trim().length < 3) {
+      setMessage("Bitte gib zuerst eine Begründung mit mindestens drei Zeichen ein.");
+      return;
+    }
+    if (nextSelection.length === 0) {
+      setMessage("Mindestens ein Wissensbereich muss mit dem Dokument verknüpft bleiben.");
+      return;
+    }
+    const knowledgebaseLabel =
+      bases.find((base) => base.knowledgebase_id === knowledgebaseId)?.label || knowledgebaseId;
+    const approved = await confirm({
+      title: active
+        ? "Wissensbereich hinzufügen?"
+        : "Wissensbereich entfernen?",
+      description: active
+        ? `Das Dokument wird zusätzlich mit „${knowledgebaseLabel}“ verknüpft. Möchtest du fortfahren?`
+        : `Die Verknüpfung des Dokuments mit „${knowledgebaseLabel}“ wird entfernt. Möchtest du fortfahren?`,
+      confirmLabel: active ? "Hinzufügen" : "Entfernen",
+      danger: !active,
+    });
+    if (!approved) return;
+    publicationSaveLocks.current.add(documentId);
+    setPublicationSelections((current) => ({ ...current, [documentId]: nextSelection }));
+    setPublicationBusy((current) => ({ ...current, [documentId]: true }));
+    setMessage("");
+    try {
+      await api(`/portal/admin/documents/${documentId}/publications`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ knowledgebase_id: targetBase, active, reason }),
-      }),
-    );
+        body: JSON.stringify({
+          knowledgebase_id: knowledgebaseId,
+          active,
+          reason: documentReason,
+        }),
+      });
+      setMessage(active ? "Der Wissensbereich wurde hinzugefügt." : "Der Wissensbereich wurde entfernt.");
+      await done();
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Die Verknüpfung konnte nicht geändert werden."));
+    } finally {
+      setPublicationSelections((current) => {
+        const next = { ...current };
+        delete next[documentId];
+        return next;
+      });
+      publicationSaveLocks.current.delete(documentId);
+      setPublicationBusy((current) => ({ ...current, [documentId]: false }));
+    }
+  };
   const requestRemoval = (kind: string) =>
     run(
       kind === "delete"
@@ -3889,14 +4893,25 @@ function DocumentList({
           reason,
         }),
     );
-  const renewal = () =>
-    run("Die Verlängerung", () =>
+  const renewal = async () => {
+    if (reason.trim().length < 3) {
+      return setMessage("Bitte gib zuerst eine Begründung mit mindestens drei Zeichen ein.");
+    }
+    const document = documents.find((item) => item.document_id === selected);
+    const approved = await confirm({
+      title: "Gültigkeit verlängern?",
+      description: `Du bestätigst, dass „${document?.title || selected}“ weiterhin aktuell ist. Nach den erforderlichen Freigaben wird die Gültigkeit verlängert. Möchtest du fortfahren?`,
+      confirmLabel: "Gültigkeit verlängern",
+    });
+    if (!approved) return;
+    return run("Die Verlängerung", () =>
       post("/portal/document-changes/renewal", {
         document_id: selected,
         reason,
-        confirmed,
+        confirmed: true,
       }),
     );
+  };
   const classification = () =>
     run("Die Einstufungsänderung", () =>
       post("/portal/document-changes/confidentiality", {
@@ -4010,10 +5025,16 @@ function DocumentList({
               <div>
               {group.documents.map((doc) => {
             const open = selected === doc.document_id;
-            const targetIsAssigned = [
+            const storedKnowledgebaseIds = [
               doc.primary_knowledgebase,
               ...doc.additional_knowledgebases,
-            ].some((base) => base?.knowledgebase_id === targetBase);
+            ].flatMap((base) => base?.knowledgebase_id ? [base.knowledgebase_id] : []);
+            const selectedKnowledgebaseIds =
+              publicationSelections[doc.document_id] || storedKnowledgebaseIds;
+            const selectedKnowledgebaseLabels = bases
+              .filter((base) => selectedKnowledgebaseIds.includes(base.knowledgebase_id))
+              .map((base) => base.label);
+            const publicationsAreSaving = Boolean(publicationBusy[doc.document_id]);
             return (
               <article
                 key={doc.document_id}
@@ -4067,18 +5088,15 @@ function DocumentList({
                     <label>
                       Begründung
                       <textarea
-                        value={reason}
-                        onChange={(e) => setReason(e.target.value)}
+                        value={reasonByDocument[doc.document_id] || ""}
+                        onChange={(e) =>
+                          setReasonByDocument((current) => ({
+                            ...current,
+                            [doc.document_id]: e.target.value,
+                          }))
+                        }
                         placeholder="Warum soll das geschehen?"
                       />
-                    </label>
-                    <label className="wp-check">
-                      <input
-                        type="checkbox"
-                        checked={confirmed}
-                        onChange={(e) => setConfirmed(e.target.checked)}
-                      />{" "}
-                      Ich bestätige, dass der Inhalt weiterhin aktuell ist.
                     </label>
                     <div className="wp-actions">
                       <button onClick={() => void renewal()}>
@@ -4111,43 +5129,53 @@ function DocumentList({
                     </div>
                     {isAdmin && doc.status === "active" ? (
                       <div className="wp-publish">
-                        <label>
-                          Wissensbereich zuordnen oder lösen
-                          <select
-                            value={targetBase}
-                            onChange={(e) => setTargetBase(e.target.value)}
-                          >
-                            <option value="">Bitte wählen</option>
-                            {bases.map((base) => (
-                              <option
-                                key={base.knowledgebase_id}
-                                value={base.knowledgebase_id}
-                              >
-                                {base.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <div className="wp-actions">
-                          {targetIsAssigned ? (
-                            <button
-                              disabled={!targetBase}
-                              onClick={() => void publish(doc.document_id, false)}
-                            >
-                              Aus diesem Wissensbereich entfernen
-                            </button>
-                          ) : (
-                            <button
-                              disabled={!targetBase}
-                              onClick={() => void publish(doc.document_id, true)}
-                            >
-                              Diesem Wissensbereich zuordnen
-                            </button>
-                          )}
-                        </div>
-                        {targetBase && targetIsAssigned && (
-                          <p className="wp-subtle">Dieser Wissensbereich ist bereits zugeordnet.</p>
-                        )}
+                        <span>Verknüpfte Knowledge Bases bearbeiten</span>
+                        <details className="wp-kb-multiselect">
+                          <summary>
+                            <span>
+                              {selectedKnowledgebaseLabels.length
+                                ? selectedKnowledgebaseLabels.join(", ")
+                                : "Bitte wählen"}
+                            </span>
+                            {publicationsAreSaving
+                              ? <LoaderCircle className="spin" size={16} />
+                              : <ChevronRight size={16} />}
+                          </summary>
+                          <fieldset className="wp-kb-options">
+                            <legend className="sr-only">
+                              Knowledge Bases für {doc.title} bearbeiten
+                            </legend>
+                            {bases.map((base) => {
+                              const assigned = selectedKnowledgebaseIds.includes(base.knowledgebase_id);
+                              return (
+                                <label key={base.knowledgebase_id}>
+                                  <input
+                                    type="checkbox"
+                                    checked={assigned}
+                                    disabled={publicationsAreSaving}
+                                    onChange={(event) => {
+                                      const next = event.target.checked
+                                        ? [...selectedKnowledgebaseIds, base.knowledgebase_id]
+                                        : selectedKnowledgebaseIds.filter(
+                                            (id) => id !== base.knowledgebase_id,
+                                          );
+                                      void publish(
+                                        doc.document_id,
+                                        base.knowledgebase_id,
+                                        event.target.checked,
+                                        [...new Set(next)],
+                                      );
+                                    }}
+                                  />
+                                  {base.label}
+                                </label>
+                              );
+                            })}
+                          </fieldset>
+                        </details>
+                        <small>
+                          Änderungen werden direkt gespeichert und im Audit-Verlauf dokumentiert.
+                        </small>
                       </div>
                     ) : isAdmin ? (
                       <div className="wp-info-box">
@@ -4275,10 +5303,10 @@ function TrashView({
   done: () => Promise<void>;
   session: Session;
 }) {
+  const confirm = useConfirmation();
   const [reason, setReason] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState("");
-  const [message, setMessage] = useState(""),
-    [pendingDelete, setPendingDelete] = useState("");
+  const [message, setMessage] = useState("");
   const canAdministerTrash = ["admin", "portal_admin"].includes(session.role);
   const openRequests = data.requests.filter(
     (item) => item.status === "pending",
@@ -4304,7 +5332,6 @@ function TrashView({
       setMessage(friendlyError(cause, `${what} ist fehlgeschlagen.`));
     } finally {
       setBusy("");
-      setPendingDelete("");
     }
   }
 
@@ -4319,10 +5346,20 @@ function TrashView({
     call(id, "Die Wiederherstellung", `/portal/admin/trash/${id}/restore`, {
       reason: reason[id] || "Wiederherstellung durch Admin",
     });
-  const purge = (id: string) =>
-    call(id, "Die endgültige Löschung", `/portal/admin/trash/${id}/delete`, {
-      reason: reason[id] || "Endgültige Löschung durch Admin",
+  const purge = async (id: string) => {
+    const item = data.trash.find((entry) => entry.document_id === id);
+    const approved = await confirm({
+      title: "Dokument endgültig löschen?",
+      description: `Du möchtest „${item?.title || id}“ endgültig löschen. Originaldatei, aufbereitete Fassung und Inhalt werden unwiderruflich entfernt. Nur die Auditdaten bleiben erhalten. Möchtest du fortfahren?`,
+      confirmLabel: "Endgültig löschen",
+      danger: true,
     });
+    if (!approved) return;
+    return call(id, "Die endgültige Löschung", `/portal/admin/trash/${id}/delete`, {
+      reason: reason[id] || "Endgültige Löschung durch Admin",
+      confirmed: true,
+    });
+  };
 
   return (
     <section className="wp-page">
@@ -4413,37 +5450,16 @@ function TrashView({
                     >
                       Wiederherstellen
                     </button>
-                    {/* Endgueltiges Loeschen ist unumkehrbar und deshalb zweistufig. */}
-                    {canAdministerTrash &&
-                      item.can_delete &&
-                      (pendingDelete === item.document_id ? (
-                        <>
-                          <button
-                            className="wp-danger"
-                            disabled={busy === item.document_id}
-                            onClick={() => void purge(item.document_id)}
-                          >
-                            Wirklich endgültig löschen
-                          </button>
-                          <button onClick={() => setPendingDelete("")}>
-                            Abbrechen
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          className="wp-danger"
-                          onClick={() => setPendingDelete(item.document_id)}
-                        >
-                          Endgültig löschen
-                        </button>
-                      ))}
+                    {canAdministerTrash && item.can_delete && (
+                      <button
+                        className="wp-danger"
+                        disabled={busy === item.document_id}
+                        onClick={() => void purge(item.document_id)}
+                      >
+                        Endgültig löschen
+                      </button>
+                    )}
                   </div>
-                  {pendingDelete === item.document_id && (
-                    <p className="wp-hint">
-                      Das Original, das Markdown und der Inhalt werden
-                      unwiderruflich gelöscht. Nur die Auditdaten bleiben.
-                    </p>
-                  )}
                   {item.legal_hold && (
                     <p className="wp-hint">
                       Legal Hold: eine Löschung ist ausgesetzt.

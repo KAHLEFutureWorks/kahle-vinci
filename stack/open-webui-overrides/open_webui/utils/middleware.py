@@ -3181,6 +3181,39 @@ def _append_canonical_rag_source_links(output: list[dict[str, Any]], sources: li
         text_part['text'] = f"{text}\n\nQuellen:\n" + '\n'.join(links)
 
 
+def _extract_kahle_rag_feedback_link(tool_result: Any) -> str:
+    text = tool_result if isinstance(tool_result, str) else ''
+    match = re.search(
+        r'FEEDBACK_LINK:\s*\[Wissensfehler melden\]'
+        r'\((/wissen/\?feedback=1&chat_id=[A-Za-z0-9_-]{1,100}'
+        r'&message_id=[A-Za-z0-9_-]{1,100}'
+        r'(?:&(?:document_ids|knowledgebase_ids)=[A-Za-z0-9_%,-]{0,3000})*)\)',
+        text,
+    )
+    return match.group(1) if match else ''
+
+
+def _append_canonical_rag_feedback_link(output: list[dict[str, Any]], feedback_link: str) -> None:
+    if not feedback_link:
+        return
+    message = next((item for item in reversed(output) if item.get('type') == 'message'), None)
+    if not message:
+        return
+    parts = message.get('content') or []
+    text_part = next((part for part in reversed(parts) if part.get('type') == 'output_text'), None)
+    if not text_part:
+        return
+    text = str(text_part.get('text') or '').rstrip()
+    # The model may preserve only the label or may rewrite the trusted URL.
+    # Remove either variant and append the canonical tool-provided link once.
+    text = re.sub(
+        r'(?im)^[ \t]*(?:\[Wissensfehler melden\]\([^)]+\)|Wissensfehler melden)[ \t]*$\n?',
+        '',
+        text,
+    ).rstrip()
+    text_part['text'] = f"{text}\n\n[Wissensfehler melden]({feedback_link})"
+
+
 def process_messages_with_output(
     messages: list[dict],
     reasoning_format: str | None = None,
@@ -5898,6 +5931,7 @@ async def streaming_chat_response_handler(response, ctx):
                 tool_call_sources = []  # Track citation sources from tool results
                 all_tool_call_sources = []  # Accumulated sources across all iterations
                 canonical_rag_sources = []  # Trusted original links from KAHLE_RAG_RESULT
+                canonical_rag_feedback_link = ''  # Trusted feedback target from KAHLE_RAG_RESULT
                 user_message = get_last_user_message(form_data['messages'])
                 tools = metadata.get('tools', {})
 
@@ -6059,6 +6093,10 @@ async def streaming_chat_response_handler(response, ctx):
                         )
                         if tool_function_name == 'rag_chat':
                             canonical_rag_sources.extend(_extract_kahle_rag_sources(tool_result))
+                            canonical_rag_feedback_link = (
+                                _extract_kahle_rag_feedback_link(tool_result)
+                                or canonical_rag_feedback_link
+                            )
                         # Signed download URLs are opaque data. Never send a
                         # successful file result back through the model for a
                         # second, streamed response: even a one-character model
@@ -6509,6 +6547,7 @@ async def streaming_chat_response_handler(response, ctx):
                             break
 
                 _append_canonical_rag_source_links(output, canonical_rag_sources)
+                _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
 
                 # Mark all in-progress items as completed
                 for item in output:

@@ -62,12 +62,12 @@ def setup(root: Path):
     return governance, lifecycle, kb.knowledgebase_id
 
 
-def submit(lifecycle, kb_id, sha=SHA_A, document_id=None):
+def submit(lifecycle, kb_id, sha=SHA_A, document_id=None, title="Arbeitsanweisung"):
     return lifecycle.submit(
         uploaded_by_user_id="employee",
         owner_user_id="employee",
         target_knowledgebase_id=kb_id,
-        title="Arbeitsanweisung",
+        title=title,
         original_filename="arbeitsanweisung.docx",
         original_file_id="file-1",
         original_sha256=sha,
@@ -100,6 +100,136 @@ def test_standard_manager_flow_activates_with_60_workday_expiry():
         assert case.status == "active"
         assert version["valid_from"] == "2026-08-06"
         assert version["valid_until"] == "2026-10-29"
+
+
+def test_sanitized_security_review_is_routed_directly_to_admin():
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+        case = submit(lifecycle, kb_id)
+        case = lifecycle.record_analysis(
+            case_id=case.case_id,
+            normalized_sha256=SHA_B,
+            markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(),
+        )
+        case = lifecycle.route_sanitized_security_review(
+            case_id=case.case_id,
+            actor_user_id="employee",
+            finding="embedded_executable_content_not_allowed",
+        )
+        assert case.status == "pending_admin_approval"
+        assert case.requires_admin is True
+        with lifecycle.store.connect() as db:
+            analysis = __import__("json").loads(db.execute(
+                "SELECT analysis_json FROM document_cases WHERE case_id=?", (case.case_id,),
+            ).fetchone()["analysis_json"])
+        assert analysis["sanitized_for_review"] is True
+
+
+def test_multiple_target_knowledgebases_are_activated_together():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, lifecycle, first_kb = setup(Path(directory))
+        second = governance.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "verkauf", "label": "Verkauf"},
+        )
+        governance.grant_access(
+            "admin", "employee", second.knowledgebase_id, can_read=True, can_upload=True,
+        )
+        case = lifecycle.submit(
+            uploaded_by_user_id="employee", owner_user_id="employee",
+            target_knowledgebase_id=first_kb,
+            target_knowledgebase_ids=(first_kb, second.knowledgebase_id),
+            title="Bereichsübergreifende Arbeitsanweisung",
+            original_filename="anweisung.pdf", original_file_id="file-multiple",
+            original_sha256=SHA_A, valid_workdays=30, confidentiality="internal",
+        )
+        case = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256=SHA_B,
+            markdown_sha256=SHA_C, analysis=lifecycle_module.Analysis(),
+        )
+        case = lifecycle.decide(
+            case_id=case.case_id, actor_user_id="manager",
+            decision="approve", reason="Fachlich geprüft",
+        )
+        lifecycle.activate(case_id=case.case_id)
+
+        active = {
+            publication["knowledgebase_id"]
+            for publication in lifecycle.publications_of(case.document_id)
+            if publication["status"] == "active"
+        }
+        assert active == {first_kb, second.knowledgebase_id}
+
+
+def test_changing_targets_only_updates_the_selected_case():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, lifecycle, first_kb = setup(Path(directory))
+        second = governance.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "verkauf", "label": "Verkauf"},
+        )
+        first_case = submit(lifecycle, first_kb, sha=SHA_A)
+        other_case = submit(lifecycle, first_kb, sha=SHA_B)
+        first_case = lifecycle.record_analysis(
+            case_id=first_case.case_id, normalized_sha256="d" * 64,
+            markdown_sha256="e" * 64, analysis=lifecycle_module.Analysis(),
+        )
+        lifecycle.record_analysis(
+            case_id=other_case.case_id, normalized_sha256="f" * 64,
+            markdown_sha256="1" * 64, analysis=lifecycle_module.Analysis(),
+        )
+
+        lifecycle.change_target_knowledgebases(
+            case_id=first_case.case_id, actor_user_id="manager",
+            knowledgebase_ids=(first_kb, second.knowledgebase_id),
+        )
+
+        changed = {
+            item["knowledgebase_id"] for item in lifecycle.publications_of(first_case.document_id)
+            if item["status"] != "inactive"
+        }
+        untouched = {
+            item["knowledgebase_id"] for item in lifecycle.publications_of(other_case.document_id)
+            if item["status"] != "inactive"
+        }
+        assert changed == {first_kb, second.knowledgebase_id}
+        assert untouched == {first_kb}
+
+
+def test_changing_targets_does_not_reorder_open_tasks():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, _, first_kb = setup(Path(directory))
+        clock = {"now": "2026-08-06T10:00:00+00:00"}
+        lifecycle = lifecycle_module.DocumentLifecycle(
+            governance.store, governance,
+            today=lambda: date(2026, 8, 6), now=lambda: clock["now"],
+            identifier=lambda: str(__import__("uuid").uuid4()), holidays=set(),
+        )
+        second_kb = governance.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "verkauf", "label": "Verkauf"},
+        ).knowledgebase_id
+
+        first_case = submit(lifecycle, first_kb, sha=SHA_A)
+        first_case = lifecycle.record_analysis(
+            case_id=first_case.case_id, normalized_sha256="2" * 64,
+            markdown_sha256="3" * 64, analysis=lifecycle_module.Analysis(),
+        )
+        clock["now"] = "2026-08-06T11:00:00+00:00"
+        second_case = submit(lifecycle, first_kb, sha=SHA_B)
+        lifecycle.record_analysis(
+            case_id=second_case.case_id, normalized_sha256="4" * 64,
+            markdown_sha256="5" * 64, analysis=lifecycle_module.Analysis(),
+        )
+        before = [task.case_id for task in lifecycle.tasks_for("manager")]
+        assert before == [first_case.case_id, second_case.case_id]
+
+        clock["now"] = "2026-08-06T12:00:00+00:00"
+        lifecycle.change_target_knowledgebases(
+            case_id=first_case.case_id, actor_user_id="manager",
+            knowledgebase_ids=(first_kb, second_kb),
+        )
+
+        after = [task.case_id for task in lifecycle.tasks_for("manager")]
+        assert after == before
 
 
 def test_clean_area_document_is_ready_for_automatic_activation_when_enabled():
@@ -387,6 +517,84 @@ def test_real_upload_is_bound_to_selected_version_candidate_before_replacement()
             assert db.execute("SELECT 1 FROM canonical_documents WHERE document_id=?", (draft.document_id,)).fetchone() is None
         pending = lifecycle.choose_action(case_id=draft.case_id, actor_user_id="employee", action="replace")
         assert pending.status == "pending_manager_approval"
+
+
+def test_contradicting_version_replacement_needs_manager_but_no_extra_admin():
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+        first = submit(lifecycle, kb_id, title="KAHLE KI Policy v1.4")
+        lifecycle.record_analysis(
+            case_id=first.case_id, normalized_sha256=SHA_B,
+            markdown_sha256=SHA_C, analysis=lifecycle_module.Analysis(),
+        )
+        lifecycle.decide(
+            case_id=first.case_id, actor_user_id="manager",
+            decision="approve", reason="Erstfassung",
+        )
+        first = lifecycle.activate(case_id=first.case_id)
+
+        draft = submit(
+            lifecycle, kb_id, sha="d" * 64, title="KAHLE KI Policy v1.5",
+        )
+        lifecycle.record_analysis(
+            case_id=draft.case_id, normalized_sha256="e" * 64,
+            markdown_sha256="f" * 64,
+            analysis=lifecycle_module.Analysis(
+                same_kb_similarity="very_high",
+                version_candidate_document_ids=(first.document_id,),
+                contradiction_document_ids=(first.document_id,),
+            ),
+        )
+        lifecycle.bind_replacement(
+            case_id=draft.case_id, target_document_id=first.document_id,
+            actor_user_id="employee",
+        )
+        pending = lifecycle.choose_action(
+            case_id=draft.case_id, actor_user_id="employee", action="replace",
+        )
+        assert pending.title == "KAHLE KI Policy v1.5"
+        assert pending.requires_admin is False
+        approved = lifecycle.decide(
+            case_id=draft.case_id, actor_user_id="manager",
+            decision="approve", reason="Änderungen fachlich geprüft",
+        )
+        assert approved.status == "ready_to_activate"
+        activated = lifecycle.activate(case_id=draft.case_id)
+        assert activated.title == "KAHLE KI Policy v1.5"
+        assert lifecycle.active_version(first.document_id) == draft.version_id
+        assert lifecycle.version_record(first.version_id)["status"] == "superseded"
+
+
+def test_security_finding_on_replacement_still_requires_admin():
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+        first = submit(lifecycle, kb_id)
+        lifecycle.record_analysis(
+            case_id=first.case_id, normalized_sha256=SHA_B,
+            markdown_sha256=SHA_C, analysis=lifecycle_module.Analysis(),
+        )
+        lifecycle.decide(
+            case_id=first.case_id, actor_user_id="manager",
+            decision="approve", reason="Erstfassung",
+        )
+        first = lifecycle.activate(case_id=first.case_id)
+        draft = submit(lifecycle, kb_id, sha="d" * 64)
+        lifecycle.record_analysis(
+            case_id=draft.case_id, normalized_sha256="e" * 64,
+            markdown_sha256="f" * 64,
+            analysis=lifecycle_module.Analysis(
+                version_candidate_document_ids=(first.document_id,),
+                prompt_injection_risk="medium",
+            ),
+        )
+        lifecycle.bind_replacement(
+            case_id=draft.case_id, target_document_id=first.document_id,
+            actor_user_id="employee",
+        )
+        pending = lifecycle.choose_action(
+            case_id=draft.case_id, actor_user_id="employee", action="replace",
+        )
+        assert pending.requires_admin is True
 
 
 def test_any_prompt_injection_signal_requires_manager_then_admin():

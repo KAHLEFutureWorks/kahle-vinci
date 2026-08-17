@@ -6,9 +6,10 @@ const root = new URL("../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
 
 test("renders the role-based KAHLE-Vinci knowledge portal", async () => {
-  const [page, portal, styles, dockerfile] = await Promise.all([
+  const [page, portal, styles, headerStyles, layout, favicon, dockerfile] = await Promise.all([
     source("app/page.tsx"), source("components/KnowledgePortal.tsx"),
-    source("app/portal.css"), source("Dockerfile"),
+    source("app/portal.css"), source("app/header-actions.css"), source("app/layout.tsx"),
+    source("public/favicon.svg"), source("Dockerfile"),
   ]);
   assert.match(page, /<KnowledgePortal \/>/);
   assert.match(portal, /Dokument bereitstellen/);
@@ -20,9 +21,15 @@ test("renders the role-based KAHLE-Vinci knowledge portal", async () => {
   assert.match(portal, /Meine Vorgänge/);
   assert.match(portal, /Admin-Aufgaben/);
   assert.match(portal, /Benutzer & Rechte/);
-  assert.match(portal, /portal\/auth\/step-up\/start/);
+  assert.doesNotMatch(portal, /portal\/auth\/step-up\/start/);
   assert.match(portal, /credentials: "include"/);
   assert.match(portal, /\/wissen\/api/);
+  assert.match(portal, /<a className="wp-back-link" href="\/" aria-label="Zurück zu KAHLE-Vinci"/);
+  assert.match(portal, /<ArrowLeft size=\{17\} \/>/);
+  assert.match(headerStyles, /\.wp-back-link\s*\{/);
+  assert.match(layout, /icon: "\/wissen\/favicon\.svg"/);
+  assert.match(layout, /title: "KAHLE-Vinci Wissensportal"/);
+  assert.match(favicon, /fill="#168dd4"/);
   assert.doesNotMatch(portal, /Qualit\?|Pr\?fung|F\?hr|G\?lt|L\?sch|\?nder|\?ber|\?ff/);
   assert.match(styles, /\.wp-shell/);
   assert.match(styles, /@media/);
@@ -30,8 +37,9 @@ test("renders the role-based KAHLE-Vinci knowledge portal", async () => {
 });
 
 test("meets the PRD accessibility and plain-language requirements", async () => {
-  const [portal, styles] = await Promise.all([
+  const [portal, styles, headerStyles, uploadStyles] = await Promise.all([
     source("components/KnowledgePortal.tsx"), source("app/portal.css"),
+    source("app/header-actions.css"), source("app/upload-result.css"),
   ]);
 
   // PRD 26.3: erkennbare Fokuszustände und Tastaturbedienung.
@@ -70,7 +78,7 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   // Entscheider sehen, warum ein Vorgang bei ihnen liegt.
   assert.match(portal, /reviewReason\[task\.status\]/);
   // Auditeinträge zeigen Klarnamen statt roher Benutzer-IDs.
-  assert.match(portal, /nameOf\(entry\.actor_user_id\)/);
+  assert.match(portal, /ausgeführt von \{entry\.actor_name\}/);
   // Kein rohes JSON im Qualitätsdashboard.
   assert.doesNotMatch(portal, /<pre>\{JSON\.stringify/);
   // Dokumentkacheln lassen sich wieder schließen.
@@ -82,7 +90,7 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(styles, /\.wp-kb-overview\{/);
 
   // Screenshot zur Wissensfehlermeldung, nur Bildformate.
-  assert.match(portal, /accept="image\/png,image\/jpeg"/);
+  assert.match(portal, /accept="image\/png,image\/jpeg,\.pdf,\.docx,\.xlsx,\.pptx,\.txt,\.md"/);
   assert.match(portal, /accept="\.pdf,\.docx,\.xlsx,\.pptx,\.txt,\.md"/);
   assert.doesNotMatch(portal, /\.md,\.csv/);
   assert.match(portal, /Dieses Dateiformat wird nicht/);
@@ -100,7 +108,7 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /chooseAction\(task\.case_id, ?"discard"\)/);
   // Endgültiges Löschen erscheint für Admins erst nach der Schutzfrist und ist zweistufig.
   assert.match(portal, /portal\/admin\/trash\/\$\{id\}\/delete/);
-  assert.match(portal, /Wirklich endgültig löschen/);
+  assert.match(portal, /Dokument endgültig löschen\?/);
   assert.match(portal, /canAdministerTrash\s*&&\s*item\.can_delete/);
   assert.match(portal, /item\.delete_eligible_on/);
 
@@ -114,10 +122,49 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
 
   // Archivieren und Entfernen warnen, wenn Dokumente betroffen sind.
   assert.match(portal, /function affectedDocuments/);
-  assert.match(portal, /Zum Fortfahren erneut bestätigen/);
+  assert.match(portal, /zugeordnete Dokumente/);
+  // Kritische Aktionen nutzen ein einheitliches, verständliches Bestätigungsfenster.
+  assert.match(portal, /wp-confirm-dialog/);
+  assert.match(portal, /Möchtest du diese Aktion wirklich durchführen/);
+  assert.match(portal, /confirmed: true/);
+  assert.match(portal, /JSON\.stringify\(\{ approve, reason, confirmed: true \}\)/);
+  // Freigaben nennen den Ansprechpartner und erlauben Rückfragen an alle Beteiligten.
+  assert.match(portal, /Ansprechpartner: \{task\.contact_name\}/);
+  assert.match(portal, /Rückfrage stellen/);
+  assert.match(portal, /inquiry-participants/);
+  assert.match(portal, /recipient_user_id: inquiryRecipient/);
+  assert.match(portal, /Die Rückfrage wurde als Mitteilung und per E-Mail versendet/);
+  assert.match(portal, /Ziel-Wissensbereiche/);
+  assert.match(portal, /target_knowledgebase_labels/);
+  assert.match(portal, /target-knowledgebases/);
+  assert.match(portal, /knowledgebase_ids: knowledgebaseIds/);
+  assert.match(portal, /selectedKnowledgebaseIds, setSelectedKnowledgebaseIds/);
+  assert.match(portal, /type="checkbox"/);
+  assert.match(portal, /knowledgebase_ids_json/);
+  assert.match(portal, /targetSaveLocks\.current\.has\(caseId\)/);
+  assert.match(portal, /targetBusy\[task\.case_id\]/);
+  assert.match(portal, /<LoaderCircle className="spin" size=\{16\} \/>/);
+  assert.match(portal, /<details className="wp-kb-multiselect/);
+  assert.match(headerStyles, /\.wp-kb-options\s*\{[^}]*position:\s*absolute/);
+  assert.match(headerStyles, /\.wp-kb-options\s*\{[^}]*max-height:\s*220px/);
+  assert.match(headerStyles, /\.wp-kb-options\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(uploadStyles, /\.wp-document-group article\.selected\s*\{[^}]*overflow:\s*visible/);
+  assert.match(uploadStyles, /\.wp-document-group article\.selected\s*\{[^}]*z-index:\s*\d+/);
+  assert.match(portal, /Vom Nutzer ausgewählt/);
+  assert.match(portal, /target_knowledgebase_history/);
+  assert.match(portal, /Verlauf des Ziel-Wissensbereichs/);
+  const uploadForm = portal.slice(portal.indexOf("function Upload("), portal.indexOf("function Tasks("));
+  assert.doesNotMatch(uploadForm, /Wer darf das Dokument sehen\?/);
+  assert.match(portal, /form\.append\("confidentiality", "internal"\)/);
+  assert.match(uploadForm, /data-visibility-policy="knowledgebase-rights"/);
+  assert.match(portal, /Verknüpfte Knowledge Bases/);
+  assert.match(portal, /review\.knowledgebases\.map\(\(base\) => base\.label\)/);
   // PRD 9.3: Admins ordnen bestehende Dokumente einem Bereich zu oder lösen die Zuordnung.
   assert.match(portal, /admin\/documents\/\$\{documentId\}\/publications/);
-  assert.match(portal, /Wissensbereich zuordnen oder lösen/);
+  assert.match(portal, /Verknüpfte Knowledge Bases bearbeiten/);
+  assert.match(portal, /publicationSaveLocks\.current\.has\(documentId\)/);
+  assert.match(portal, /publicationBusy\[doc\.document_id\]/);
+  assert.match(portal, /Mindestens ein Wissensbereich muss mit dem Dokument verknüpft bleiben/);
 
   // Altbestände werden sichtbar inventarisiert und erst über den normalen Freigabeprozess übernommen.
   assert.match(portal, /Altbestände migrieren/);
@@ -253,9 +300,18 @@ test("keeps draft publication controls unavailable and exposes the original", as
   assert.match(portal, /href=\{doc\.original_url\}/);
   assert.match(portal, /doc\.status === "active"/);
   assert.match(portal, /Erst nach der Freigabe kannst du weitere Wissensbereiche zuordnen/);
-  assert.match(portal, /Dieser Wissensbereich ist bereits zugeordnet/);
-  assert.match(portal, /Diesem Wissensbereich zuordnen/);
-  assert.match(portal, /Aus diesem Wissensbereich entfernen/);
+  assert.match(portal, /Wissensbereich hinzufügen\?/);
+  assert.match(portal, /Wissensbereich entfernen\?/);
+  assert.match(portal, /Änderungen werden direkt gespeichert und im Audit-Verlauf dokumentiert/);
+  assert.match(portal, /Veröffentlichung erneut versuchen/);
+  assert.match(portal, /Technische Veröffentlichung fehlgeschlagen/);
+  assert.match(portal, /task\.publication_error/);
+  assert.match(portal, /decisionFeedback\[task\.case_id\][\s\S]*role="status"/);
+  assert.match(portal, /reasonByDocument, setReasonByDocument/);
+  assert.match(portal, /value=\{reasonByDocument\[doc\.document_id\] \|\| ""\}/);
+  assert.match(portal, /\[doc\.document_id\]: e\.target\.value/);
+  const documentList = portal.slice(portal.indexOf("function DocumentList("), portal.indexOf("function RemovalsPage("));
+  assert.doesNotMatch(documentList, /\[reason, setReason\] = useState\(""\)/);
 });
 
 test("uses a clear saved user editor and combines absence with delegation", async () => {
@@ -265,5 +321,65 @@ test("uses a clear saved user editor and combines absence with delegation", asyn
   assert.match(portal, /Änderungen speichern/);
   assert.match(portal, /Abwesenheit und Vertretung wurden gemeinsam gespeichert/);
   assert.match(portal, /delegate_user_id:\s*delegate/);
+  assert.match(portal, /Automatisch mit Outlook synchronisiert/);
   assert.doesNotMatch(portal, /<h2>Vertretungen<\/h2>/);
+});
+
+test("supports actionable knowledge-error reporting and quality-case handling", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /onPaste=\{pasteScreenshot\}/);
+  assert.match(portal, /Datei auswählen/);
+  assert.match(portal, /multiple/);
+  assert.match(portal, /slice\(0, 5\)/);
+  assert.match(portal, /Vielen Dank für deine Meldung/);
+  assert.match(portal, /openQualityCases/);
+  assert.match(portal, /id === "trash" && Boolean\(removals\.unread_count\)/);
+  assert.match(portal, /\/portal\/admin\/trash\/read/);
+  assert.match(portal, /Nutzer benachrichtigen/);
+  assert.match(portal, /Fall gelöst/);
+  assert.match(portal, /Screenshot ansehen/);
+  assert.doesNotMatch(portal, /Danke\. Die Meldung wurde unter \$\{result\.feedback_id\}/);
+});
+
+test("offers searchable owner selection and human-readable audit entries", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /Name oder E-Mail suchen/);
+  assert.match(portal, /entry\.event_label/);
+  assert.match(portal, /entry\.subject_label/);
+  assert.match(portal, /entry\.details_label/);
+  assert.match(portal, /ausgeführt von \{entry\.actor_name\}/);
+  assert.match(portal, /Auditprotokoll durchsuchen/);
+  assert.match(portal, /Zu dieser Suche wurden keine Audit-Einträge gefunden/);
+  assert.match(portal, /audit\?limit=1000/);
+});
+
+test("closes pickers outside, validates validity dates, and explains technical failures", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /closeOpenDropdowns/);
+  assert.match(portal, /document\.querySelectorAll<HTMLDetailsElement>\("details\[open\]"\)/);
+  assert.match(portal, /max=\{maximumValidUntil\}/);
+  assert.match(portal, /Maximal 60 Tage sind möglich/);
+  assert.match(portal, /Zugeordnete Vertretung/);
+  assert.match(portal, /embedded_executable_content_not_allowed/);
+  assert.match(portal, /diagnostic_json/);
+});
+
+test("offers searchable manager and delegate assignment", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /function SearchableUserPicker/);
+  assert.match(portal, /Zugeordnete Führungskraft/);
+  assert.match(portal, /Zugeordnete Vertretung/);
+  assert.match(portal, /Name oder E-Mail suchen/);
+  assert.match(portal, /Kein passender Benutzer gefunden/);
+});
+
+test("shows version candidates to uploaders and reviewers", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /duplicate_matches/);
+  assert.match(portal, /Als neue Version von/);
+  assert.match(portal, /className="wp-version-action"/);
+  assert.match(portal, /Vorhandenes Dokument prüfen/);
+  assert.match(portal, /Als eigenständiges Dokument vorschlagen/);
+  assert.match(portal, /Wirklich als eigenständiges Dokument anlegen/);
+  assert.doesNotMatch(portal, /match\.version_candidate && !match\.has_conflict/);
 });

@@ -5,7 +5,8 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
+from urllib.parse import quote
 
 import requests
 
@@ -20,20 +21,19 @@ class MailTransport(Protocol):
 
 
 @dataclass
-class MicrosoftGraphMailTransport:
+class MicrosoftGraphClient:
     tenant_id: str
     client_id: str
     client_secret: str
-    sender: str
     timeout: int = 30
 
     def __post_init__(self) -> None:
-        if not all((self.tenant_id, self.client_id, self.client_secret, self.sender)):
-            raise ValueError("graph_mail_configuration_incomplete")
+        if not all((self.tenant_id, self.client_id, self.client_secret)):
+            raise ValueError("graph_configuration_incomplete")
         self._token = ""
         self._token_expires_at = 0.0
 
-    def _access_token(self) -> str:
+    def access_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 60:
             return self._token
         response = requests.post(
@@ -50,10 +50,39 @@ class MicrosoftGraphMailTransport:
         self._token_expires_at = time.time() + int(payload.get("expires_in", 3600))
         return self._token
 
+    def automatic_replies(self, user_principal_name: str) -> dict[str, Any]:
+        response = requests.get(
+            "https://graph.microsoft.com/v1.0/users/"
+            f"{quote(user_principal_name, safe='')}/mailboxSettings/automaticRepliesSetting",
+            headers={"Authorization": f"Bearer {self.access_token()}"},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("graph_automatic_replies_invalid")
+        return payload
+
+
+@dataclass
+class MicrosoftGraphMailTransport:
+    tenant_id: str
+    client_id: str
+    client_secret: str
+    sender: str
+    timeout: int = 30
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.client_id, self.client_secret, self.sender)):
+            raise ValueError("graph_mail_configuration_incomplete")
+        self.client = MicrosoftGraphClient(
+            self.tenant_id, self.client_id, self.client_secret, self.timeout,
+        )
+
     def send(self, message: OutboxMessage) -> None:
         response = requests.post(
-            f"https://graph.microsoft.com/v1.0/users/{self.sender}/sendMail",
-            headers={"Authorization": f"Bearer {self._access_token()}"},
+            f"https://graph.microsoft.com/v1.0/users/{quote(self.sender, safe='')}/sendMail",
+            headers={"Authorization": f"Bearer {self.client.access_token()}"},
             json={"message": {
                 "subject": message.subject,
                 "body": {"contentType": "Text", "content": message.body},

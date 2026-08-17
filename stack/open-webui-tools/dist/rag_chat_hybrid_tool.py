@@ -86,7 +86,8 @@ def explicit_source_identifiers(query: str) -> tuple[str, ...]:
 _TITLE_STOPWORDS = {
     "am", "an", "auf", "aus", "das", "der", "die", "ein", "eine", "einer",
     "fur", "im", "in", "mit", "oder", "steht", "und", "unser", "unsere",
-    "unserer", "von", "was", "zu", "kahle", "gruppe", "dokument", "datei",
+    "unserer", "von", "was", "wer", "zu", "kahle", "gruppe", "dokument", "datei",
+    "du", "uber", "weisst", "weiss", "weit", "kennt", "kennst",
 }
 def _title_terms(value: str) -> set[str]:
     normalized = unicodedata.normalize("NFKD", value or "")
@@ -113,6 +114,20 @@ def focused_document_ids(query: str, candidates: list[dict[str, Any]]) -> set[st
         shared = query_terms.intersection(title_terms)
         if document_id and len(shared) >= 2:
             matches.append((len(shared), len(shared) / max(1, len(title_terms)), document_id))
+    if not matches and 2 <= len(query_terms) <= 4:
+        # Short entity/role questions often name a person or function that is
+        # intentionally not part of the document title (for example "Thomas
+        # Keller" inside "Wichtige Kontakte Rollen"). An exact all-term match
+        # in an ACL-filtered active candidate is sufficiently specific to focus
+        # the document without fuzzy guessing.
+        for point in candidates:
+            payload = point.get("payload") or {}
+            document_id = str(payload.get("document_id") or "")
+            content_terms = _title_terms(
+                str(payload.get("parent_content") or payload.get("content") or "")
+            )
+            if document_id and query_terms.issubset(content_terms):
+                matches.append((len(query_terms), 1.0, document_id))
     if not matches:
         return set()
     best = max((count, coverage) for count, coverage, _document_id in matches)
@@ -328,8 +343,15 @@ class IonosReranker:
             response.raise_for_status()
             rows = response.json()["results"]
             return [(int(row["index"]), float(row["relevance_score"])) for row in rows]
+        except requests.Timeout as exc:
+            raise RetrievalError("reranker_unavailable:timeout") from exc
+        except requests.ConnectionError as exc:
+            raise RetrievalError("reranker_unavailable:connection") from exc
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            raise RetrievalError(f"reranker_unavailable:http_{status or 'unknown'}") from exc
         except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
-            raise RetrievalError("reranker_unavailable") from exc
+            raise RetrievalError(f"reranker_unavailable:{type(exc).__name__.lower()}") from exc
 class QdrantHybridRetriever:
     def __init__(self, qdrant_url: str, collection_alias: str, sparse_encoder: SparseQueryEncoder,
                  reranker: Reranker, timeout: float = 30, minimum_rerank_score: float = 0.25):
@@ -406,10 +428,25 @@ class QdrantHybridRetriever:
                     point for point in self._parent_centered(complete_points, 256)
                     if not _metadata_only(point)
                 ]
-        reranked = self.reranker.rerank(
-            query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
-            min(len(candidates), result_limit * 3),
-        )
+        try:
+            reranked = self.reranker.rerank(
+                query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
+                min(len(candidates), result_limit * 3),
+            )
+        except RetrievalError as exc:
+            # A named person, e-mail address or an otherwise unambiguous document
+            # identifier has already been matched against ACL-filtered active
+            # documents above. For that narrow case the hybrid RRF order is a
+            # safer degraded mode than returning "kein Wissen" solely because
+            # the external reranker is temporarily unavailable. Broad queries
+            # continue to fail closed because their relevance needs reranking.
+            if not str(exc).startswith("reranker_unavailable") or not (identifiers or focused_ids):
+                raise
+            reranked = sorted(
+                ((index, 1.0) for index in range(len(candidates))),
+                key=lambda item: float(candidates[item[0]].get("score") or 0),
+                reverse=True,
+            )[: min(len(candidates), result_limit * 3)]
         for index, _score in reranked:
             if index < 0 or index >= len(candidates):
                 raise RetrievalError("reranker_response_invalid")
@@ -543,6 +580,12 @@ class RemoteSparseQueryEncoder:
             raise RetrievalError("sparse_encoder_unavailable") from exc
 
 
+def _feedback_link(chat_id, message_id):
+    """Bewusst einfache, von OpenWebUI stabil verarbeitete Portaladresse."""
+    return (
+        "[Wissensfehler melden]"
+        f"(/wissen/?feedback=1&chat_id={chat_id}&message_id={message_id})"
+    )
 def _hybrid_setting(primary, fallback=""):
     return os.environ.get(primary) or fallback
 def _hybrid_embed(base_url, api_key, model, query, timeout):
@@ -620,12 +663,17 @@ class Tools:
             )
             chunks = retriever.retrieve(query, dense, scope)
         except Exception as exc:
+            error_code = (
+                str(exc).strip()
+                if isinstance(exc, RetrievalError) and str(exc).strip()
+                else type(exc).__name__
+            )
             _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
-                                 False, 0, started_at, type(exc).__name__)
+                                 False, 0, started_at, error_code)
             return (
                 "KAHLE_RAG_RESULT\nFOUND: false\n"
                 "ANSWER: Dazu habe ich keine verlässliche freigegebene Information.\n"
-                f"ERROR_CODE: {type(exc).__name__}"
+                f"ERROR_CODE: {error_code}"
             )
         if not chunks:
             _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
@@ -639,6 +687,7 @@ class Tools:
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
+                "knowledgebase_ids": list(chunk.knowledgebase_ids),
             })
         joined_context = "\n\n".join(context)
         _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
@@ -649,5 +698,5 @@ class Tools:
             "Bei Konflikt nicht stillschweigend entscheiden.\n"
             f"CONTEXT:\n{joined_context}\n"
             f"SOURCES_JSON: {json.dumps(sources, ensure_ascii=False)}\n"
-            f"FEEDBACK_LINK: [Wissensfehler melden](/wissen/?feedback=1&chat_id={__chat_id__}&message_id={__message_id__})"
+            f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}"
         )

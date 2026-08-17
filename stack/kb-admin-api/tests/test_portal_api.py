@@ -67,7 +67,8 @@ def test_portal_http_contract_bootstraps_identity_and_enforces_roles():
 
         current["user"] = identity("portal", "admin")
         response = client.patch(
-            "/portal/admin/users/employee/role", json={"role": "manager"}
+            "/portal/admin/users/employee/role",
+            json={"role": "manager", "confirmed": True},
         )
         assert response.status_code == 200
         assert response.json()["user"]["role"] == "manager"
@@ -78,7 +79,7 @@ def test_portal_http_contract_bootstraps_identity_and_enforces_roles():
         assert {item["user_id"] for item in users.json()["users"]} == {"portal", "employee"}
 
 
-def test_only_privileged_role_demotion_requires_fresh_microsoft_authentication():
+def test_every_role_change_requires_explicit_confirmation():
     with tempfile.TemporaryDirectory() as directory:
         module = load_app(Path(directory))
         current = {"user": identity("portal", "admin")}
@@ -101,17 +102,18 @@ def test_only_privileged_role_demotion_requires_fresh_microsoft_authentication()
         blocked = client.patch(
             "/portal/admin/users/target-admin/role", json={"role": "manager"}
         )
-        assert blocked.status_code == 503
-        assert blocked.json()["detail"] == "microsoft_step_up_not_configured"
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == "confirmation_required"
 
         ordinary = client.patch(
-            "/portal/admin/users/employee/role", json={"role": "manager"}
+            "/portal/admin/users/employee/role",
+            json={"role": "manager", "confirmed": True},
         )
         assert ordinary.status_code == 200
         assert ordinary.json()["user"]["role"] == "manager"
 
 
-def test_portal_admin_knowledgebase_mutation_requires_fresh_microsoft_authentication():
+def test_portal_admin_knowledgebase_mutation_requires_explicit_confirmation():
     with tempfile.TemporaryDirectory() as directory:
         module = load_app(Path(directory))
         current = {"user": identity("portal", "admin")}
@@ -119,21 +121,6 @@ def test_portal_admin_knowledgebase_mutation_requires_fresh_microsoft_authentica
         client = TestClient(module.app)
         assert client.get("/portal/session").status_code == 200
 
-        unavailable = client.post(
-            "/portal/admin/knowledgebase-changes",
-            json={
-                "kind": "create",
-                "payload": {"slug": "service", "label": "Service"},
-            },
-        )
-        assert unavailable.status_code == 503
-        assert unavailable.json()["detail"] == "microsoft_step_up_not_configured"
-
-        class ConfiguredStepUpWithoutProof:
-            def verify(self, proof, *, user_id):
-                raise module.StepUpError("step_up_proof_invalid")
-
-        module.STEP_UP_AUTHORITY = ConfiguredStepUpWithoutProof()
         blocked = client.post(
             "/portal/admin/knowledgebase-changes",
             json={
@@ -141,13 +128,24 @@ def test_portal_admin_knowledgebase_mutation_requires_fresh_microsoft_authentica
                 "payload": {"slug": "service", "label": "Service"},
             },
         )
-        assert blocked.status_code == 428
-        assert blocked.json()["detail"] == "fresh_microsoft_authentication_required"
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == "confirmation_required"
+
+        confirmed = client.post(
+            "/portal/admin/knowledgebase-changes",
+            json={
+                "kind": "create",
+                "payload": {"slug": "service", "label": "Service"},
+                "confirmed": True,
+            },
+        )
+        assert confirmed.status_code == 201
+        assert confirmed.json()["change"]["status"] == "approved"
 
 
 if __name__ == "__main__":
     test_portal_http_contract_bootstraps_identity_and_enforces_roles()
-    test_portal_admin_knowledgebase_mutation_requires_fresh_microsoft_authentication()
+    test_portal_admin_knowledgebase_mutation_requires_explicit_confirmation()
     print("portal api tests passed")
 
 
@@ -261,61 +259,6 @@ def test_migration_disposition_endpoints_exclude_and_restore_with_reason():
             ("exclude", "service/alt.md", "portal", "Derzeit nicht benötigt"),
             ("restore", "service/alt.md", "portal", "Derzeit nicht benötigt"),
         ]
-
-
-def _step_up_env(**overrides):
-    """Vollstaendige Step-up-Umgebung, einzelne Werte gezielt ueberschreibbar."""
-    env = {
-        "KB_PORTAL_STEP_UP_SECRET": "s" * 43,
-        "KB_PORTAL_ENTRA_TENANT_ID": "",
-        "KB_PORTAL_ENTRA_CLIENT_ID": "",
-        "KB_PORTAL_ENTRA_CLIENT_SECRET": "",
-        "KB_PORTAL_ENTRA_REDIRECT_URI": "",
-        "KB_PORTAL_LOCAL_STEP_UP": "false",
-    }
-    env.update(overrides)
-    return env
-
-
-def test_local_step_up_never_replaces_a_configured_microsoft_login():
-    """
-    Der lokale Ersatz ist ausschliesslich fuer die Abnahme gedacht. Sobald auch
-    nur eine Entra-Angabe existiert, ist die Umgebung nicht mehr rein lokal und
-    Microsoft muss gewinnen, selbst wenn das lokale Flag gesetzt wurde.
-    """
-    entra_fields = (
-        "KB_PORTAL_ENTRA_TENANT_ID", "KB_PORTAL_ENTRA_CLIENT_ID",
-        "KB_PORTAL_ENTRA_CLIENT_SECRET", "KB_PORTAL_ENTRA_REDIRECT_URI",
-    )
-    for field in entra_fields:
-        with tempfile.TemporaryDirectory() as directory:
-            module = load_app(
-                Path(directory),
-                env=_step_up_env(**{"KB_PORTAL_LOCAL_STEP_UP": "true", field: "gesetzt"}),
-            )
-            adapter = getattr(module.STEP_UP_AUTHORITY, "oidc", None)
-            assert not isinstance(adapter, module.LocalStepUpAdapter), (
-                f"local step-up must not activate when {field} is set"
-            )
-
-
-def test_local_step_up_requires_the_explicit_flag_and_a_secret():
-    for env in (
-        _step_up_env(),                                      # Flag fehlt
-        _step_up_env(KB_PORTAL_LOCAL_STEP_UP="true",
-                     KB_PORTAL_STEP_UP_SECRET=""),           # Secret fehlt
-    ):
-        with tempfile.TemporaryDirectory() as directory:
-            module = load_app(Path(directory), env=env)
-            assert module.STEP_UP_AUTHORITY is None
-
-
-def test_local_step_up_activates_only_in_a_purely_local_environment():
-    with tempfile.TemporaryDirectory() as directory:
-        module = load_app(
-            Path(directory), env=_step_up_env(KB_PORTAL_LOCAL_STEP_UP="true"),
-        )
-        assert isinstance(module.STEP_UP_AUTHORITY.oidc, module.LocalStepUpAdapter)
 
 
 def test_knowledgebase_overview_is_admin_only_and_ignores_read_rights():
@@ -560,6 +503,7 @@ def test_deleted_knowledgebase_notifies_all_users_who_had_read_access():
         deleted = client.post("/portal/admin/knowledgebase-changes", json={
             "kind": "delete", "knowledgebase_id": kb.knowledgebase_id,
             "payload": {"reason": "Altbestand wird entfernt"},
+            "confirmed": True,
         })
         assert deleted.status_code == 201, deleted.text
 
@@ -569,6 +513,108 @@ def test_deleted_knowledgebase_notifies_all_users_who_had_read_access():
         assert notifications[0]["document_title"] == "Altes Wissen"
         assert notifications[0]["status"] == "knowledgebase_delete"
         assert "nicht mehr abrufbar" in notifications[0]["message"]
+
+
+def test_reviewer_can_ask_involved_people_and_question_is_sent_in_app_and_by_mail():
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="manager", email="manager@kahle.de", display_name="Frau Führung",
+        )
+        module.PORTAL_GOVERNANCE.set_role("portal", "manager", "manager")
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="employee", email="employee@kahle.de", display_name="Herr Upload",
+        )
+        module.PORTAL_GOVERNANCE.assign_manager("portal", "employee", "manager")
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        alternate_kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "werkstatt", "label": "Werkstatt"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "employee", kb.knowledgebase_id, can_read=True, can_upload=True,
+        )
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="employee", owner_user_id="employee",
+            target_knowledgebase_id=kb.knowledgebase_id, title="Arbeitsanweisung",
+            original_filename="anweisung.pdf", original_file_id="file",
+            original_sha256="f" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        case = module.DOCUMENT_LIFECYCLE.record_analysis(
+            case_id=case.case_id, normalized_sha256="e" * 64,
+            markdown_sha256="d" * 64, analysis=module.Analysis(),
+        )
+        current["user"] = {
+            **identity("manager"), "name": "Frau Führung",
+        }
+        tasks = client.get("/portal/tasks").json()["tasks"]
+        assert tasks[0]["contact_name"] == "Herr Upload"
+        assert tasks[0]["target_knowledgebase_label"] == "Service"
+        changed = client.patch(
+            f"/portal/cases/{case.case_id}/target-knowledgebase",
+            json={"knowledgebase_id": alternate_kb.knowledgebase_id},
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["case"]["target_knowledgebase_id"] == alternate_kb.knowledgebase_id
+        tasks_after_change = client.get("/portal/tasks").json()["tasks"]
+        assert tasks_after_change[0]["target_knowledgebase_label"] == "Werkstatt"
+        history = tasks_after_change[0]["target_knowledgebase_history"]
+        assert [(item["knowledgebase_label"], item["selected_by_name"]) for item in history] == [
+            ("Service", "Herr Upload"),
+            ("Werkstatt", "Frau Führung"),
+        ]
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            event = db.execute(
+                "SELECT event_type FROM document_events WHERE case_id=? ORDER BY sequence DESC",
+                (case.case_id,),
+            ).fetchone()
+        assert event["event_type"] == "target_knowledgebases_changed"
+        participants = client.get(
+            f"/portal/cases/{case.case_id}/inquiry-participants"
+        ).json()["participants"]
+        assert [item["user_id"] for item in participants] == ["employee"]
+
+        sent = client.post(f"/portal/cases/{case.case_id}/inquiries", json={
+            "recipient_user_id": "employee",
+            "question": "Welche Filiale betrifft diese Arbeitsanweisung?",
+        })
+        assert sent.status_code == 201, sent.text
+
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute(
+                "UPDATE document_cases SET requires_admin=1 WHERE case_id=?", (case.case_id,)
+            )
+        module.DOCUMENT_LIFECYCLE.decide(
+            case_id=case.case_id, actor_user_id="manager", decision="approve", reason="",
+        )
+        current["user"] = identity("portal", "admin")
+        admin_participants = client.get(
+            f"/portal/cases/{case.case_id}/inquiry-participants"
+        ).json()["participants"]
+        assert {item["user_id"] for item in admin_participants} == {"employee", "manager"}
+        admin_task = client.get("/portal/tasks").json()["tasks"][0]
+        assert [item["knowledgebase_label"] for item in admin_task["target_knowledgebase_history"]] == [
+            "Service", "Werkstatt",
+        ]
+
+        current["user"] = identity("employee")
+        notification = client.get("/portal/notifications").json()["notifications"][0]
+        assert notification["status"] == "clarification_requested"
+        assert "Frau Führung" in notification["message"]
+        assert notification["reason"] == "Welche Filiale betrifft diese Arbeitsanweisung?"
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            mail = db.execute(
+                "SELECT recipient,subject,body FROM notification_outbox WHERE kind='case_inquiry'"
+            ).fetchone()
+        assert mail["recipient"] == "employee@kahle.de"
+        assert "Rückfrage zu Arbeitsanweisung" in mail["subject"]
+        assert "Welche Filiale" in mail["body"]
 
 
 def test_admins_can_reassign_a_document_to_another_knowledgebase():

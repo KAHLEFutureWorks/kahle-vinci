@@ -74,6 +74,17 @@ def load_canonical_rag_source_helpers():
     return namespace
 
 
+def load_canonical_rag_feedback_helpers():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    wanted = {"_extract_kahle_rag_feedback_link", "_append_canonical_rag_feedback_link"}
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    module = ast.Module(body=nodes, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {"Any": Any, "re": re}
+    exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
+    return namespace
+
+
 def test_stream_strip_hides_json_toolcall():
     strip = load_function_from_middleware("_strip_pseudo_toolcall_stream_text")
     assert strip('{\n  "tool": "safe_webcaller",\n  "parameters": {"query": "x"}\n}') == ""
@@ -225,6 +236,38 @@ def test_canonical_source_link_replaces_model_invented_host():
     text = output[0]["content"][0]["text"]
     assert "https://kahle.wissen" not in text
     assert "[Policy](/wissen/api/portal/sources/v1)" in text
+
+
+def test_canonical_feedback_link_replaces_plain_model_text_with_clickable_portal_link():
+    helpers = load_canonical_rag_feedback_helpers()
+    tool_result = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "FEEDBACK_LINK: [Wissensfehler melden](/wissen/?feedback=1&chat_id=chat-1&message_id=msg-1)"
+    )
+    link = helpers["_extract_kahle_rag_feedback_link"](tool_result)
+    output = [{
+        "type": "message",
+        "content": [{"type": "output_text", "text": "Die Antwort.\n\nWissensfehler melden"}],
+    }]
+
+    helpers["_append_canonical_rag_feedback_link"](output, link)
+
+    assert output[0]["content"][0]["text"] == (
+        "Die Antwort.\n\n"
+        "[Wissensfehler melden](/wissen/?feedback=1&chat_id=chat-1&message_id=msg-1)"
+    )
+
+
+def test_canonical_feedback_link_accepts_transition_links_with_source_references():
+    helpers = load_canonical_rag_feedback_helpers()
+    tool_result = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "FEEDBACK_LINK: [Wissensfehler melden]"
+        "(/wissen/?feedback=1&chat_id=chat-1&message_id=msg-1"
+        "&document_ids=doc-1%2Cdoc-2&knowledgebase_ids=kb-service)"
+    )
+    link = helpers["_extract_kahle_rag_feedback_link"](tool_result)
+    assert link.endswith("&knowledgebase_ids=kb-service")
 
 
 def load_fallback_tool_helpers():

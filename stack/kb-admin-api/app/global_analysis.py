@@ -256,6 +256,8 @@ class GlobalCorpus:
 
 
 class GlobalDocumentAnalyzer:
+    EMBEDDING_TEXT_LIMIT = 24_000
+
     def __init__(self, corpus: GlobalCorpus, embedding_provider: EmbeddingProvider | None = None,
                  contradiction_provider: ContradictionProvider | None = None,
                  thresholds: ComparisonThresholds | None = None):
@@ -270,7 +272,10 @@ class GlobalDocumentAnalyzer:
         exact = next((doc.document_id for doc in documents if normalized_sha256(doc.markdown) == digest), None)
         semantic: list[float | None] = [None] * len(documents)
         if documents and self.embedding_provider:
-            vectors = self.embedding_provider.embed([markdown] + [doc.markdown for doc in documents])
+            vectors = self.embedding_provider.embed(
+                [self._semantic_excerpt(title, markdown)]
+                + [self._semantic_excerpt(doc.title, doc.markdown) for doc in documents]
+            )
             if len(vectors) != len(documents) + 1:
                 raise GlobalAnalysisError("invalid_embedding_response")
             semantic = [cosine_similarity(vectors[0], vector) for vector in vectors[1:]]
@@ -295,6 +300,18 @@ class GlobalDocumentAnalyzer:
             ))
         matches.sort(key=lambda item: (item.level == "identical", item.combined_score), reverse=True)
         return GlobalAnalysisResult(digest, exact, tuple(matches), tuple(dict.fromkeys(contradictions)))
+
+    @classmethod
+    def _semantic_excerpt(cls, title: str, markdown: str) -> str:
+        """Keep embedding requests bounded while retaining start and conclusion."""
+        prefix = f"{title.strip()}\n\n"
+        remaining = max(1, cls.EMBEDDING_TEXT_LIMIT - len(prefix))
+        if len(markdown) <= remaining:
+            return prefix + markdown
+        separator = "\n\n[... gekuerzt fuer die Aehnlichkeitsanalyse ...]\n\n"
+        available = max(1, remaining - len(separator))
+        head = int(available * 0.7)
+        return prefix + markdown[:head] + separator + markdown[-(available - head):]
 
     def _level(self, score: float) -> str:
         if score >= self.thresholds.very_high:

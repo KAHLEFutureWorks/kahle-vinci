@@ -77,6 +77,72 @@ def test_clean_general_upload_uses_account_owner_and_is_activated_by_manager():
         assert completed.json()["result"]["case"]["status"] == "active"
 
 
+def test_failed_activation_returns_to_manager_as_retryable_publication():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        module = load_app(root)
+        module.SECURE_INGEST.storage.root = (root / "portal-files").resolve()
+        module.PORTAL_FILES_ROOT = module.SECURE_INGEST.storage.root
+        module.RAG_METADATA.files_root = module.SECURE_INGEST.storage.root
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="manager", email="manager@kahle.de", display_name="Leitung",
+        )
+        module.PORTAL_GOVERNANCE.set_role("portal", "manager", "manager")
+        module.PORTAL_GOVERNANCE.assign_manager("portal", "employee", "manager")
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "employee", kb.knowledgebase_id, can_read=True, can_upload=True,
+        )
+        module.SECURE_INGEST.scanner = SimpleNamespace(scan=lambda *_: None)
+        module.SECURE_INGEST.converter = SimpleNamespace(
+            convert=lambda *_: "# Servicewissen\n\nGepruefter fachlicher Inhalt.\n",
+        )
+
+        uploaded = client.post(
+            "/portal/documents",
+            data={"knowledgebase_id": kb.knowledgebase_id, "title": "Servicewissen",
+                  "valid_workdays": "60", "confidentiality": "internal"},
+            files={"file": ("service.md", b"Original", "text/markdown")},
+        ).json()
+
+        indexing_calls = []
+        module._trigger_hybrid_version_sync = lambda version_id: (
+            indexing_calls.append(version_id) or {"ok": False, "error": "qdrant_unavailable"}
+        )
+        current["user"] = identity("manager")
+        failed_job = client.post(
+            f"/portal/cases/{uploaded['case_id']}/decision",
+            json={"decision": "approve", "reason": ""},
+        ).json()
+        assert client.get(f"/portal/decision-jobs/{failed_job['job_id']}").json()["status"] == "failed"
+
+        tasks = client.get("/portal/tasks").json()["tasks"]
+        retry = next(item for item in tasks if item["case_id"] == uploaded["case_id"])
+        assert retry["status"] == "ready_to_activate"
+        assert retry["publication_error"] == "qdrant_unavailable"
+
+        module._trigger_hybrid_version_sync = lambda version_id: (
+            indexing_calls.append(version_id) or {"ok": True}
+        )
+        retried = client.post(
+            f"/portal/cases/{uploaded['case_id']}/decision",
+            json={"decision": "approve", "reason": ""},
+        ).json()
+        completed = client.get(f"/portal/decision-jobs/{retried['job_id']}").json()
+        assert completed["status"] == "completed"
+        assert completed["result"]["case"]["status"] == "active"
+        assert indexing_calls == [uploaded["version_id"], uploaded["version_id"]]
+
+
 def test_restricted_term_upload_is_stopped_for_admin_review_with_visible_finding():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory); module = load_app(root)
@@ -424,6 +490,38 @@ def test_upload_job_accepts_workdays_alone():
         assert response.status_code == 202, response.text
         job = client.get(f"/portal/upload-jobs/{response.json()['job_id']}").json()
         assert job["status"] == "completed", job.get("error_code")
+
+
+def test_upload_job_accepts_multiple_knowledgebases():
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, first_id = _upload_ready_client(directory)
+        second = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "verkauf", "label": "Verkauf"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "employee", second.knowledgebase_id, can_read=True, can_upload=True,
+        )
+        response = client.post(
+            "/portal/upload-jobs",
+            data={
+                "knowledgebase_id": first_id,
+                "knowledgebase_ids_json": __import__("json").dumps([first_id, second.knowledgebase_id]),
+                "title": "Gemeinsames Wissen", "valid_workdays": "30",
+                "confidentiality": "internal",
+            },
+            files={"file": ("wissen.md", b"Original", "text/markdown")},
+        )
+        assert response.status_code == 202, response.text
+        job = client.get(f"/portal/upload-jobs/{response.json()['job_id']}").json()
+        assert job["status"] == "completed", job.get("error_code")
+        case_id = job["result"]["case_id"]
+        case = module.DOCUMENT_LIFECYCLE.submission(case_id)
+        selected = {
+            item["knowledgebase_id"]
+            for item in module.DOCUMENT_LIFECYCLE.publications_of(case.document_id)
+            if item["status"] != "inactive"
+        }
+        assert selected == {first_id, second.knowledgebase_id}
 
 
 def test_upload_job_accepts_a_date_alone():

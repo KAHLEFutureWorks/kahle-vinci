@@ -54,11 +54,15 @@ foreach ($item in $defaults.GetEnumerator()) {
 }
 
 $composeFile = Join-Path $ProjectRoot "stack\docker-compose.yml"
+$uiFile = Join-Path $ProjectRoot "stack\docker-compose.kahle-ui.yml"
+if (-not (Test-Path -LiteralPath $uiFile)) {
+  throw "KAHLE OpenWebUI UI overlay is missing: $uiFile"
+}
 
 # Caddy ist nur fuer die Produktion definiert. Ohne dieses Overlay gibt es
 # lokal keinen Reverse Proxy und /wissen/ ist nicht erreichbar.
 $edgeFile = Join-Path $ProjectRoot "stack\docker-compose.local-edge.yml"
-$composeFiles = @("compose", "-f", $composeFile)
+$composeFiles = @("compose", "-f", $composeFile, "-f", $uiFile)
 if (-not $NoEdge) {
   $composeFiles += @("-f", $edgeFile)
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("ACME_EMAIL"))) {

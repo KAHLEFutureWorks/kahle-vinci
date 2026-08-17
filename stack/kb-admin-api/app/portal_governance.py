@@ -106,7 +106,8 @@ class SQLiteGovernanceStore:
                     absent_until TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     updated_by TEXT NOT NULL REFERENCES portal_users(user_id),
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'manual'
                 );
 
                 CREATE TABLE IF NOT EXISTS knowledgebases (
@@ -170,6 +171,8 @@ class SQLiteGovernanceStore:
             absence_columns = {row["name"] for row in db.execute("PRAGMA table_info(manager_absences)")}
             if "delegate_user_id" not in absence_columns:
                 db.execute("ALTER TABLE manager_absences ADD COLUMN delegate_user_id TEXT REFERENCES portal_users(user_id)")
+            if "source" not in absence_columns:
+                db.execute("ALTER TABLE manager_absences ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
 
 
 class PortalGovernance:
@@ -207,7 +210,7 @@ class PortalGovernance:
         stamp = self.now()
         with self.store.connect() as db:
             existing = db.execute(
-                "SELECT role FROM portal_users WHERE user_id = ?", (user_id,)
+                "SELECT role,email,display_name FROM portal_users WHERE user_id = ?", (user_id,)
             ).fetchone()
             portal_admins = db.execute(
                 "SELECT COUNT(*) AS count FROM portal_users WHERE active = 1 AND role = 'portal_admin'"
@@ -219,26 +222,31 @@ class PortalGovernance:
                 if bootstrap_portal_admin and portal_admins == 0
                 else "employee"
             )
-            db.execute(
-                """
-                INSERT INTO portal_users (
-                    user_id, email, display_name, active, role, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    email = excluded.email,
-                    display_name = excluded.display_name,
-                    updated_at = excluded.updated_at
-                """,
-                (user_id, email, display_name, int(active), role, stamp, stamp),
+            identity_changed = (
+                not existing or existing["email"] != email
+                or existing["display_name"] != display_name
             )
-            self._audit(
-                db,
-                user_id,
-                "identity_synced",
-                "user",
-                user_id,
-                {"email": email, "active": active},
-            )
+            if identity_changed:
+                db.execute(
+                    """
+                    INSERT INTO portal_users (
+                        user_id, email, display_name, active, role, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        email = excluded.email,
+                        display_name = excluded.display_name,
+                        updated_at = excluded.updated_at
+                    """,
+                    (user_id, email, display_name, int(active), role, stamp, stamp),
+                )
+                self._audit(
+                    db,
+                    user_id,
+                    "identity_synced",
+                    "user",
+                    user_id,
+                    {"email": email, "active": active},
+                )
         return self.identity(user_id)
 
     def identity(self, user_id: str) -> Identity:
@@ -392,6 +400,12 @@ class PortalGovernance:
         if manager_user_id == delegate_user_id:
             raise GovernanceError("self_delegate_not_allowed")
         with self.store.connect() as db:
+            if valid_from is None and valid_until is None:
+                db.execute(
+                    "DELETE FROM manager_delegates WHERE manager_user_id=? "
+                    "AND valid_from IS NULL AND valid_until IS NULL AND delegate_user_id<>?",
+                    (manager_user_id, delegate_user_id),
+                )
             db.execute(
                 """
                 INSERT INTO manager_delegates (
@@ -494,15 +508,64 @@ class PortalGovernance:
                         raise GovernanceError("manager_delegate_required")
                     delegate_user_id = existing["delegate_user_id"]
                 db.execute(
-                    "INSERT INTO manager_absences(manager_user_id,absent_from,absent_until,reason,updated_by,updated_at,delegate_user_id) VALUES (?,?,?,?,?,?,?) "
+                    "INSERT INTO manager_absences(manager_user_id,absent_from,absent_until,reason,updated_by,updated_at,delegate_user_id,source) VALUES (?,?,?,?,?,?,?,'manual') "
                     "ON CONFLICT(manager_user_id) DO UPDATE SET absent_from=excluded.absent_from, "
                     "absent_until=excluded.absent_until, reason=excluded.reason, "
-                    "updated_by=excluded.updated_by, updated_at=excluded.updated_at, delegate_user_id=excluded.delegate_user_id",
+                    "updated_by=excluded.updated_by, updated_at=excluded.updated_at, "
+                    "delegate_user_id=excluded.delegate_user_id, source='manual'",
                     (manager_user_id, start, end, reason.strip(), actor_user_id, self.now(), delegate_user_id),
                 )
                 event, details = "manager_absence_set", {"absent_from": start, "absent_until": end,
                                                           "reason": reason.strip(), "delegate_user_id": delegate_user_id}
             self._audit(db, actor_user_id, event, "user", manager_user_id, details)
+
+    def sync_outlook_absence(
+        self, manager_user_id: str, absent_from: str | None, absent_until: str | None,
+    ) -> str:
+        """Synchronize Outlook automatic replies without overwriting manual absences."""
+        manager = self.identity(manager_user_id)
+        if not manager.active or manager.role not in {"manager", "admin", "portal_admin"}:
+            return "ignored"
+        with self.store.connect() as db:
+            current = db.execute(
+                "SELECT * FROM manager_absences WHERE manager_user_id=?", (manager_user_id,),
+            ).fetchone()
+            if absent_from is None and absent_until is None:
+                if not current or current["source"] != "outlook":
+                    return "unchanged"
+                db.execute("DELETE FROM manager_absences WHERE manager_user_id=?", (manager_user_id,))
+                self._audit(db, manager_user_id, "outlook_absence_removed", "user", manager_user_id,
+                            {"source": "Outlook"})
+                return "removed"
+            start = self._iso_date(absent_from, "absent_from")
+            end = self._iso_date(absent_until, "absent_until")
+            if start > end:
+                raise GovernanceError("invalid_absence")
+            if current and current["source"] == "manual":
+                return "manual_preserved"
+            delegate = db.execute(
+                "SELECT delegate_user_id FROM manager_delegates WHERE manager_user_id=? "
+                "AND (valid_from IS NULL OR valid_from<=?) AND (valid_until IS NULL OR valid_until>=?) "
+                "ORDER BY delegate_user_id LIMIT 1",
+                (manager_user_id, start, end),
+            ).fetchone()
+            if not delegate:
+                return "delegate_required"
+            if current and current["absent_from"] == start and current["absent_until"] == end:
+                return "unchanged"
+            db.execute(
+                "INSERT INTO manager_absences(manager_user_id,absent_from,absent_until,reason,updated_by,updated_at,delegate_user_id,source) "
+                "VALUES (?,?,?,?,?,?,?,'outlook') ON CONFLICT(manager_user_id) DO UPDATE SET "
+                "absent_from=excluded.absent_from,absent_until=excluded.absent_until,reason=excluded.reason,"
+                "updated_by=excluded.updated_by,updated_at=excluded.updated_at,delegate_user_id=excluded.delegate_user_id,source='outlook'",
+                (manager_user_id, start, end, "Automatisch aus Outlook übernommen", manager_user_id,
+                 self.now(), delegate["delegate_user_id"]),
+            )
+            self._audit(db, manager_user_id, "outlook_absence_synced", "user", manager_user_id, {
+                "absent_from": start, "absent_until": end,
+                "delegate_user_id": delegate["delegate_user_id"], "source": "Outlook",
+            })
+            return "synced"
 
     def list_absences(self, actor_user_id: str) -> list[dict[str, Any]]:
         self._require_role(actor_user_id, ADMIN_ROLES)
@@ -646,10 +709,19 @@ class PortalGovernance:
                 ),
             )
             if status == "approved":
+                before = None
+                if knowledgebase_id:
+                    before = db.execute(
+                        "SELECT label,slug,purpose,status FROM knowledgebases WHERE knowledgebase_id = ?",
+                        (knowledgebase_id,),
+                    ).fetchone()
                 knowledgebase_id = self._apply_change(db, kind, knowledgebase_id, clean_payload)
                 db.execute(
                     "UPDATE knowledgebase_change_requests SET knowledgebase_id = ? WHERE request_id = ?",
                     (knowledgebase_id, request_id),
+                )
+                self._audit_knowledgebase_change(
+                    db, actor_user_id, kind, knowledgebase_id, clean_payload, before,
                 )
             self._audit(
                 db,
@@ -678,8 +750,17 @@ class PortalGovernance:
         knowledgebase_id = request.knowledgebase_id
         with self.store.connect() as db:
             if approve:
+                before = None
+                if request.knowledgebase_id:
+                    before = db.execute(
+                        "SELECT label,slug,purpose,status FROM knowledgebases WHERE knowledgebase_id = ?",
+                        (request.knowledgebase_id,),
+                    ).fetchone()
                 knowledgebase_id = self._apply_change(
                     db, request.kind, request.knowledgebase_id, request.payload
+                )
+                self._audit_knowledgebase_change(
+                    db, actor_user_id, request.kind, knowledgebase_id, request.payload, before,
                 )
             db.execute(
                 """
@@ -821,6 +902,36 @@ class PortalGovernance:
                 (stamp, knowledgebase_id),
             )
         return knowledgebase_id
+
+    def _audit_knowledgebase_change(
+        self, db: sqlite3.Connection, actor_user_id: str, kind: ChangeKind,
+        knowledgebase_id: str, payload: dict[str, Any], before: sqlite3.Row | None,
+    ) -> None:
+        """Record the applied business change, separate from its approval workflow."""
+        event_type = {
+            "create": "knowledgebase_created",
+            "rename": "knowledgebase_renamed",
+            "archive": "knowledgebase_archived",
+            "delete": "knowledgebase_deleted",
+        }[kind]
+        details: dict[str, Any] = {"change_type": kind}
+        if before:
+            details["before_label"] = before["label"]
+            details["before_status"] = before["status"]
+        if kind == "create":
+            details.update({
+                "after_label": payload["label"], "slug": payload["slug"],
+                "purpose": payload.get("purpose", ""),
+            })
+        elif kind == "rename":
+            details["after_label"] = payload["label"]
+        elif kind == "archive":
+            details["after_status"] = "archiviert"
+        elif kind == "delete":
+            details["after_status"] = "gelöscht"
+        self._audit(
+            db, actor_user_id, event_type, "knowledgebase", knowledgebase_id, details,
+        )
 
     def _ensure_another_portal_admin(self, excluded_user_id: str) -> None:
         with self.store.connect() as db:

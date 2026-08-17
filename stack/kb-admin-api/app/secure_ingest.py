@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Protocol
 
 import requests
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 
 class IngestError(ValueError):
@@ -69,9 +69,11 @@ class SecureFileInspector:
         "md": "text/markdown",
     }
 
-    def __init__(self, max_bytes: int = 50 * 1024 * 1024, max_pdf_pages: int = 200):
+    def __init__(self, max_bytes: int = 50 * 1024 * 1024, max_pdf_pages: int = 1000,
+                 max_office_pages: int = 200):
         self.max_bytes = max_bytes
         self.max_pdf_pages = max_pdf_pages
+        self.max_office_pages = max_office_pages
 
     def inspect(self, filename: str, data: bytes) -> InspectedFile:
         safe_name = Path(filename or "").name
@@ -104,7 +106,7 @@ class SecureFileInspector:
                 raise IngestError("pdf_page_limit_exceeded")
         elif extension in self.OFFICE_ROOTS:
             pages = self._inspect_office(extension, data)
-            if pages > self.max_pdf_pages:
+            if pages > self.max_office_pages:
                 raise IngestError("office_page_limit_exceeded")
         else:
             self._inspect_text(data)
@@ -117,6 +119,43 @@ class SecureFileInspector:
             sha256=hashlib.sha256(data).hexdigest(),
             page_count=pages,
         )
+
+    def sanitize_pdf_for_admin_review(self, filename: str, data: bytes) -> bytes:
+        """Create a passive PDF containing visible pages only.
+
+        This is deliberately limited to PDFs. Office macros and embedded Office
+        objects cannot be made trustworthy by a generic server-side rewrite.
+        The rebuilt PDF drops the original catalog, attachments, JavaScript,
+        forms, annotations and automatic actions before it is inspected again.
+        """
+        safe_name = Path(filename or "").name
+        if safe_name != filename or Path(safe_name).suffix.lower() != ".pdf":
+            raise IngestError("security_review_not_available")
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            if reader.is_encrypted:
+                raise IngestError("encrypted_file_not_allowed")
+            writer = PdfWriter()
+            for source_page in reader.pages:
+                writer.add_page(source_page)
+                page = writer.pages[-1]
+                # Annotations may contain file attachments, URI/launch actions
+                # or JavaScript. A knowledge document does not need them.
+                if "/Annots" in page:
+                    del page["/Annots"]
+                if "/AA" in page:
+                    del page["/AA"]
+            output = io.BytesIO()
+            writer.write(output)
+            sanitized = output.getvalue()
+        except IngestError:
+            raise
+        except Exception as exc:
+            raise IngestError("security_review_sanitization_failed") from exc
+        # The normal gate remains authoritative. Never create an override that
+        # can silently carry one of the forbidden structures forward.
+        self.inspect(filename, sanitized)
+        return sanitized
 
     def _inspect_office(self, extension: str, data: bytes) -> int:
         if data.startswith(bytes.fromhex("D0CF11E0")):

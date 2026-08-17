@@ -32,7 +32,7 @@ required=(
   OWUI_FILE_PROXY_API_KEY DOC_WORKER_API_KEY
   OAUTH_SESSION_TOKEN_ENCRYPTION_KEY OAUTH_CLIENT_INFO_ENCRYPTION_KEY
   KB_ADMIN_UNLOCK_CODE_HASH KB_ADMIN_UNLOCK_SESSION_SECRET
-  KB_PORTAL_STEP_UP_SECRET KB_PORTAL_ENTRA_REDIRECT_URI PORTAL_ALLOWED_EMAIL_DOMAINS
+  PORTAL_ALLOWED_EMAIL_DOMAINS
 )
 
 for name in "${required[@]}"; do
@@ -63,6 +63,7 @@ webui_url="$(env_value WEBUI_URL)"
 redirect_uri="$(env_value MICROSOFT_REDIRECT_URI)"
 tenant_id="$(env_value MICROSOFT_CLIENT_TENANT_ID)"
 client_id="$(env_value MICROSOFT_CLIENT_ID)"
+client_secret="$(env_value MICROSOFT_CLIENT_SECRET)"
 provider_url="$(env_value OPENID_PROVIDER_URL)"
 allowed_domains="$(env_value OAUTH_ALLOWED_DOMAINS)"
 session_key="$(env_value OAUTH_SESSION_TOKEN_ENCRYPTION_KEY)"
@@ -71,9 +72,13 @@ mail_tenant_id="$(env_value KB_MAIL_TENANT_ID)"
 mail_client_id="$(env_value KB_MAIL_CLIENT_ID)"
 mail_client_secret="$(env_value KB_MAIL_CLIENT_SECRET)"
 mail_sender="$(env_value KB_MAIL_SENDER)"
-portal_step_up_secret="$(env_value KB_PORTAL_STEP_UP_SECRET)"
-portal_redirect_uri="$(env_value KB_PORTAL_ENTRA_REDIRECT_URI)"
 portal_allowed_domains="$(env_value PORTAL_ALLOWED_EMAIL_DOMAINS)"
+
+# Portal mail and Outlook absence sync use the existing Vinci Graph app by
+# default. KB_MAIL_* remains available only as an explicit credential override.
+mail_tenant_id="${mail_tenant_id:-${tenant_id}}"
+mail_client_id="${mail_client_id:-${client_id}}"
+mail_client_secret="${mail_client_secret:-${client_secret}}"
 
 if [[ "${public_hostname}" != "vinci.kahle.de" || "${webui_url}" != "https://vinci.kahle.de" ]]; then
   echo "ERROR: production identity must be vinci.kahle.de over HTTPS." >&2
@@ -82,16 +87,6 @@ fi
 
 if [[ "${redirect_uri}" != "${webui_url}/oauth/microsoft/callback" ]]; then
   echo "ERROR: MICROSOFT_REDIRECT_URI must exactly match ${webui_url}/oauth/microsoft/callback." >&2
-  exit 1
-fi
-
-if [[ "${portal_redirect_uri}" != "${webui_url}/wissen/api/portal/auth/step-up/callback" ]]; then
-  echo "ERROR: KB_PORTAL_ENTRA_REDIRECT_URI must exactly match ${webui_url}/wissen/api/portal/auth/step-up/callback." >&2
-  exit 1
-fi
-
-if (( ${#portal_step_up_secret} < 43 )); then
-  echo "ERROR: KB_PORTAL_STEP_UP_SECRET must contain at least 43 characters." >&2
   exit 1
 fi
 
@@ -105,16 +100,7 @@ if [[ ! "${client_id}" =~ ${uuid_pattern} ]]; then
   echo "ERROR: MICROSOFT_CLIENT_ID is not a valid UUID." >&2
   exit 1
 fi
-mail_values=("${mail_tenant_id}" "${mail_client_id}" "${mail_client_secret}" "${mail_sender}")
-mail_count=0
-for value in "${mail_values[@]}"; do
-  [[ -n "${value}" ]] && ((mail_count += 1))
-done
-if (( mail_count != 0 && mail_count != 4 )); then
-  echo "ERROR: Graph mail configuration must either be complete or entirely empty." >&2
-  exit 1
-fi
-if (( mail_count == 4 )); then
+if [[ -n "${mail_sender}" ]]; then
   if [[ ! "${mail_tenant_id}" =~ ${uuid_pattern} || ! "${mail_client_id}" =~ ${uuid_pattern} ]]; then
     echo "ERROR: Microsoft Graph mail tenant and client IDs must be valid UUIDs." >&2
     exit 1

@@ -167,7 +167,10 @@ def test_admins_can_delete_only_after_recovery_period_and_legal_hold_still_block
         # Vor Ablauf der Frist darf niemand physisch loeschen.
         current["user"] = identity("admin2", "user")
         assert client.get("/portal/session").status_code == 200
-        forbidden = client.post(f"/portal/admin/trash/{normal}/delete", json={"reason": "Weg"})
+        forbidden = client.post(
+            f"/portal/admin/trash/{normal}/delete",
+            json={"reason": "Weg", "confirmed": True},
+        )
         assert forbidden.status_code == 409
         assert forbidden.json()["detail"] == "trash_recovery_period_active"
 
@@ -180,13 +183,19 @@ def test_admins_can_delete_only_after_recovery_period_and_legal_hold_still_block
             db.execute("UPDATE document_trash SET trashed_at='2026-06-01' WHERE document_id IN (?, ?)", (normal, held))
 
         current["user"] = identity("portal", "admin")
-        blocked = client.post(f"/portal/admin/trash/{held}/delete", json={"reason": "Weg damit"})
+        blocked = client.post(
+            f"/portal/admin/trash/{held}/delete",
+            json={"reason": "Weg damit", "confirmed": True},
+        )
         assert blocked.status_code == 409
         assert blocked.json()["detail"] == "legal_hold_blocks_deletion"
 
         # Auch ein normaler Admin darf nach Ablauf der Frist loeschen.
         current["user"] = identity("admin2", "user")
-        deleted = client.post(f"/portal/admin/trash/{normal}/delete", json={"reason": "Endgültig weg"})
+        deleted = client.post(
+            f"/portal/admin/trash/{normal}/delete",
+            json={"reason": "Endgültig weg", "confirmed": True},
+        )
         assert deleted.status_code == 200, deleted.text
         remaining = [item["document_id"] for item in client.get("/portal/admin/removals").json()["trash"]]
         assert normal not in remaining and held in remaining

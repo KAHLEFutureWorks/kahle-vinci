@@ -172,6 +172,7 @@ Konkrete Tool-Nutzung:
 - Automatisierungen: `automations_create`, `automations_list`, `automations_update`, `automations_toggle`, `automations_delete` aus `OWUI Productivity`.
 Wichtig zur Task-Ausfuehrung:
 - `kv_task_create` und `kv_tasks_create_many` erstellen persistente Aufgaben. Das bedeutet NICHT, dass die Aufgaben erledigt sind.
+- Relative Faelligkeiten wie "morgen" oder "kommenden Montag" werden vom KAHLE-Tasks-Tool anhand des aktuellen Datums in Europe/Berlin aufgeloest. Uebergib kein geratenes Datum und uebernimm das im Tool-Ergebnis gespeicherte Faelligkeitsdatum.
 - Wenn der Nutzer nur "erstelle Tasks" sagt: nur Tasks erstellen, nicht automatisch abarbeiten.
 - Wenn der Nutzer sagt "arbeite die Tasks ab", "fuehre die Tasks aus", "teile in Tasks auf und arbeite sie ab" oder aehnlich:
   1. Nutze `kv_tasks_list` oder `kv_tasks_create_many`, um die Aufgabenlage zu kennen.

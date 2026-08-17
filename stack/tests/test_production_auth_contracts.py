@@ -92,7 +92,6 @@ def test_pending_environment_has_fixed_public_identity_and_preserves_existing_en
 def test_oauth_encryption_keys_are_generated_only_when_missing():
     assert 'ensure_env OAUTH_SESSION_TOKEN_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
     assert 'ensure_env OAUTH_CLIENT_INFO_ENCRYPTION_KEY "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
-    assert 'ensure_env KB_PORTAL_STEP_UP_SECRET "$(openssl rand -hex 48)"' in PREPARE_SCRIPT
 
 
 def test_production_start_validates_exact_entra_and_sso_configuration():
@@ -208,7 +207,10 @@ def test_production_allows_mail_capture_until_graph_is_configured():
         assert name in production_template
     assert "KB_MAIL_CAPTURE_PATH" in env_example
     assert "KB_MAIL_CAPTURE_PATH" in production_template
-    assert "Graph mail configuration must either be complete or entirely empty" in START_SCRIPT
+    assert 'mail_tenant_id="${mail_tenant_id:-${tenant_id}}"' in START_SCRIPT
+    assert 'mail_client_id="${mail_client_id:-${client_id}}"' in START_SCRIPT
+    assert "KB_GRAPH_ABSENCE_SYNC_ENABLED" in env_example
+    assert "KB_GRAPH_ABSENCE_SYNC_ENABLED" in production_template
     assert "KB_MAIL_TENANT_ID: ${KB_MAIL_TENANT_ID:?" not in PROD_COMPOSE
     assert "Microsoft Graph mail tenant and client IDs must be valid UUIDs" in START_SCRIPT
     assert "KB_MAIL_SENDER must be a kahle.de mailbox" in START_SCRIPT
@@ -230,14 +232,10 @@ def test_production_overlay_does_not_resurrect_removed_local_reranker():
     assert "\n  reranker:" not in PROD_COMPOSE
 
 
-def test_production_requires_portal_step_up_and_domain_configuration():
+def test_production_requires_portal_domain_configuration():
     production_template = (STACK_DIR / "env.production.template").read_text(encoding="utf-8")
     legacy_example = (STACK_DIR / ".env.production.example").read_text(encoding="utf-8")
-    required = (
-        "KB_PORTAL_STEP_UP_SECRET",
-        "KB_PORTAL_ENTRA_REDIRECT_URI",
-        "PORTAL_ALLOWED_EMAIL_DOMAINS",
-    )
+    required = ("PORTAL_ALLOWED_EMAIL_DOMAINS",)
     for name in required:
         assert f"{name}: ${{{name}:?" in PROD_COMPOSE
         assert name in START_SCRIPT

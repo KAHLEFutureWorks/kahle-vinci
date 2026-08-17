@@ -15,6 +15,17 @@ class Embeddings:
         return vectors
 
 
+class SizeLimitedEmbeddings:
+    def __init__(self):
+        self.lengths = []
+
+    def embed(self, texts):
+        self.lengths = [len(text) for text in texts]
+        if any(length > 24_000 for length in self.lengths):
+            raise RuntimeError("embedding input too large")
+        return [[1.0, 0.0] for _ in texts]
+
+
 def test_normalization_removes_frontmatter_and_format_noise():
     left = "---\nowner: a@kahle.de\n---\n# Regel\n**Maximal 10 Tage.**"
     right = "# REGEL\nMaximal   10 Tage."
@@ -42,6 +53,19 @@ def test_semantic_and_lexical_signals_are_combined_and_version_is_suggested(tmp_
     assert result.matches[0].version_candidate is True
     assert result.contradiction_document_ids == ("doc-a",)
     assert result.matches[0].conflicting_passages
+
+
+def test_large_documents_use_bounded_semantic_representations(tmp_path: Path):
+    corpus = GlobalCorpus(SQLiteGovernanceStore(tmp_path / "portal.sqlite3"))
+    corpus.upsert(CorpusDocument("doc-a", "v-a", "Handbuch", "A" * 130_000, ("service",)))
+    embeddings = SizeLimitedEmbeddings()
+
+    GlobalDocumentAnalyzer(corpus, embeddings).analyze(
+        version_id="v-new", title="Neues Handbuch", markdown="B" * 127_000,
+    )
+
+    assert embeddings.lengths
+    assert max(embeddings.lengths) <= 24_000
 
 
 def test_withdrawn_or_rejected_drafts_leave_global_comparison_corpus(tmp_path: Path):

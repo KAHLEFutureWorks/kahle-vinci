@@ -16,6 +16,14 @@ import requests
 from pydantic import BaseModel, Field
 
 
+def _feedback_link(chat_id, message_id):
+    """Bewusst einfache, von OpenWebUI stabil verarbeitete Portaladresse."""
+    return (
+        "[Wissensfehler melden]"
+        f"(/wissen/?feedback=1&chat_id={chat_id}&message_id={message_id})"
+    )
+
+
 def _hybrid_setting(primary, fallback=""):
     return os.environ.get(primary) or fallback
 
@@ -101,12 +109,17 @@ class Tools:
             )
             chunks = retriever.retrieve(query, dense, scope)
         except Exception as exc:
+            error_code = (
+                str(exc).strip()
+                if isinstance(exc, RetrievalError) and str(exc).strip()
+                else type(exc).__name__
+            )
             _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
-                                 False, 0, started_at, type(exc).__name__)
+                                 False, 0, started_at, error_code)
             return (
                 "KAHLE_RAG_RESULT\nFOUND: false\n"
                 "ANSWER: Dazu habe ich keine verlässliche freigegebene Information.\n"
-                f"ERROR_CODE: {type(exc).__name__}"
+                f"ERROR_CODE: {error_code}"
             )
         if not chunks:
             _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
@@ -120,6 +133,7 @@ class Tools:
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
+                "knowledgebase_ids": list(chunk.knowledgebase_ids),
             })
         joined_context = "\n\n".join(context)
         _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
@@ -130,5 +144,5 @@ class Tools:
             "Bei Konflikt nicht stillschweigend entscheiden.\n"
             f"CONTEXT:\n{joined_context}\n"
             f"SOURCES_JSON: {json.dumps(sources, ensure_ascii=False)}\n"
-            f"FEEDBACK_LINK: [Wissensfehler melden](/wissen/?feedback=1&chat_id={__chat_id__}&message_id={__message_id__})"
+            f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}"
         )

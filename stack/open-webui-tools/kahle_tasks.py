@@ -218,6 +218,28 @@ def _normalize_due_date(due_date: str, source_text: str = "") -> str:
         return (base + timedelta(days=1)).isoformat()
     if "heute" in text:
         return base.isoformat()
+
+    weekdays = {
+        "montag": 0,
+        "dienstag": 1,
+        "mittwoch": 2,
+        "donnerstag": 3,
+        "freitag": 4,
+        "samstag": 5,
+        "sonntag": 6,
+    }
+    weekday_match = re.search(
+        r"\b(?:(kommenden?|n(?:a|ä)chsten?)\s+)?"
+        r"(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if weekday_match:
+        target_weekday = weekdays[weekday_match.group(2).lower()]
+        days_ahead = (target_weekday - base.weekday()) % 7
+        if weekday_match.group(1) and days_ahead == 0:
+            days_ahead = 7
+        return (base + timedelta(days=days_ahead)).isoformat()
     return _clean_text(due_date, 80)
 
 
@@ -396,7 +418,7 @@ class Tools:
 
         :param title: Kurzer, eindeutiger Aufgabentitel.
         :param description: Optionaler Kontext oder naechster Schritt.
-        :param due_date: Optionales Faelligkeitsdatum, bevorzugt YYYY-MM-DD.
+        :param due_date: Optionales Faelligkeitsdatum als YYYY-MM-DD. Relative Angaben aus der Nutzernachricht werden serverseitig mit Europe/Berlin aufgeloest.
         :param priority: low, normal, high oder urgent.
         """
         try:

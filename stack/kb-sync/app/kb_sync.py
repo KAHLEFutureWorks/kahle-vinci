@@ -371,6 +371,37 @@ class KnowledgebaseSync:
             self.reconcile_collection(collection)
         self.reconcile_hybrid()
 
+    def _rebuild_hybrid_locked(
+        self, inventory: CanonicalInventory, *, migration_candidates: int,
+    ) -> dict[str, Any]:
+        """Build the complete hybrid baseline while the caller holds hybrid_lock."""
+        report = self.hybrid_builder.rebuild(list(inventory.documents))
+        self.state.data.setdefault("hybrid", {}).update({
+            "digest": inventory.digest,
+            "status": "active",
+            "collection": report["collection"],
+            "documents": report["documents"],
+            "chunks": report["chunks"],
+            "migration_candidates": migration_candidates,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        self.state.save()
+        print(
+            f"hybrid_index_activated collection={report['collection']} "
+            f"documents={report['documents']} chunks={report['chunks']}", flush=True,
+        )
+        return report
+
+    def _bootstrap_hybrid_locked(self, inventory: CanonicalInventory) -> dict[str, Any]:
+        legacy = load_canonical_inventory(self.config.kb_root)
+        report_path = self.config.state_path.parent / "hybrid-migration-inventory.json"
+        write_inventory_report(CanonicalInventory(
+            inventory.documents, legacy.migration_candidates, inventory.digest,
+        ), report_path)
+        return self._rebuild_hybrid_locked(
+            inventory, migration_candidates=len(legacy.migration_candidates),
+        )
+
     def reconcile_hybrid(self, *, force: bool = False) -> None:
         with self.hybrid_lock:
             inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
@@ -387,29 +418,20 @@ class KnowledgebaseSync:
                 return
             if not force and hybrid_state.get("digest") == inventory.digest:
                 return
-            report = self.hybrid_builder.rebuild(list(inventory.documents))
-            hybrid_state.update({
-                "digest": inventory.digest,
-                "status": "active",
-                "collection": report["collection"],
-                "documents": report["documents"],
-                "chunks": report["chunks"],
-                "migration_candidates": len(legacy.migration_candidates),
-                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            })
-            self.state.save()
-            print(
-                f"hybrid_index_activated collection={report['collection']} "
-                f"documents={report['documents']} chunks={report['chunks']}", flush=True,
+            self._rebuild_hybrid_locked(
+                inventory, migration_candidates=len(legacy.migration_candidates),
             )
 
     def reconcile_hybrid_version(self, version_id: str) -> dict[str, Any]:
         """Update exactly one active portal version in the live hybrid index."""
         with self.hybrid_lock:
-            snapshot = BM25Snapshot.load(self.config.hybrid_snapshot_path)
+            inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
+            try:
+                snapshot = BM25Snapshot.load(self.config.hybrid_snapshot_path)
+            except FileNotFoundError:
+                return self._bootstrap_hybrid_locked(inventory)
             if snapshot.build_id != HYBRID_BUILD_ID:
                 raise HybridSyncError("hybrid_schema_migration_required")
-            inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
             document = next((item for item in inventory.documents if item.version_id == version_id), None)
             if document is None:
                 raise HybridSyncError("active_version_not_indexable")
@@ -427,10 +449,15 @@ class KnowledgebaseSync:
     def reconcile_hybrid_document(self, document_id: str) -> dict[str, Any]:
         """Synchronize current state of one document, including deactivation."""
         with self.hybrid_lock:
-            snapshot = BM25Snapshot.load(self.config.hybrid_snapshot_path)
+            inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
+            try:
+                snapshot = BM25Snapshot.load(self.config.hybrid_snapshot_path)
+            except FileNotFoundError:
+                if not inventory.documents:
+                    raise HybridSyncError("hybrid_snapshot_unavailable")
+                return self._bootstrap_hybrid_locked(inventory)
             if snapshot.build_id != HYBRID_BUILD_ID:
                 raise HybridSyncError("hybrid_schema_migration_required")
-            inventory = load_portal_inventory(self.config.portal_db_path, self.config.portal_files_root)
             document = next((item for item in inventory.documents if item.document_id == document_id), None)
             if document:
                 report = self.hybrid_builder.sync_document(document)

@@ -1,0 +1,66 @@
+diff --git a/src/lib/components/layout/Sidebar.svelte b/src/lib/components/layout/Sidebar.svelte
+index f8ac62b..27b1d21 100644
+--- a/src/lib/components/layout/Sidebar.svelte
++++ b/src/lib/components/layout/Sidebar.svelte
+@@ -86,6 +86,7 @@
+ 	import SearchIcon from './Sidebar/icons/Search.svelte';
+ 	import Sidebar from '../icons/Sidebar.svelte';
+ 	import WorkspaceIcon from './Sidebar/icons/Workspace.svelte';
++	import BookOpenIcon from '../icons/BookOpen.svelte';
+ 	import { slide } from 'svelte/transition';
+ 	import HotkeyHint from '../common/HotkeyHint.svelte';
+ 	import Dropdown from '../common/Dropdown.svelte';
+@@ -1056,6 +1057,27 @@
+ 						</div>
+ 					{/if}
+ 				{/each}
++
++				<div class="">
++					<Tooltip content="Wissensportal" placement="right">
++						<a
++							id="sidebar-knowledge-portal-icon-button"
++							class="cursor-pointer flex size-8 items-center justify-center transition group"
++							href="/wissen/"
++							on:click={() => {
++								itemClickHandler();
++							}}
++							draggable="false"
++							aria-label="Wissensportal"
++						>
++							<div
++								class="self-center flex size-[30px] items-center justify-center rounded-lg transition group-hover:bg-gray-50 dark:group-hover:bg-gray-900"
++							>
++								<BookOpenIcon className="size-4" strokeWidth="1.5" />
++							</div>
++						</a>
++					</Tooltip>
++				</div>
+ 			</div>
+ 		</button>
+ 
+@@ -1270,6 +1292,25 @@
+ 							{/if}
+ 						{/each}
+ 					</div>
++
++					<div class="px-1 flex justify-center text-gray-700 dark:text-gray-300">
++						<a
++							id="sidebar-knowledge-portal-button"
++							class="grow flex items-center space-x-2 rounded-xl px-2 py-1.5 transition hover:bg-gray-50 dark:hover:bg-gray-900"
++							href="/wissen/"
++							on:click={itemClickHandler}
++							draggable="false"
++							aria-label="Wissensportal"
++						>
++							<div class="self-center flex size-4 shrink-0 items-center justify-center">
++								<BookOpenIcon className="size-4" strokeWidth="1.5" />
++							</div>
++
++							<div class="flex self-center translate-y-[0.5px]">
++								<div class="self-center text-[13px] leading-5">Wissensportal</div>
++							</div>
++						</a>
++					</div>
+ 				</div>
+ 
+ 				{#if ($models ?? []).length > 0 && (($settings?.pinnedModels ?? []).length > 0 || $config?.default_pinned_models)}

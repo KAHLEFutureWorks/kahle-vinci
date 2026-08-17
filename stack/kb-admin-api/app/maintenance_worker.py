@@ -5,18 +5,27 @@ import time
 import traceback
 from datetime import date, datetime
 from pathlib import Path
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 import requests
 
 try:
-    from .mail_delivery import LocalMailCaptureTransport, MicrosoftGraphMailTransport, OutboxDispatcher
+    from .mail_delivery import (
+        LocalMailCaptureTransport, MicrosoftGraphClient, MicrosoftGraphMailTransport,
+        OutboxDispatcher,
+    )
     from .maintenance import MaintenanceService, is_workday
+    from .outlook_absence import sync_outlook_absences
     from .portal_governance import SQLiteGovernanceStore
     from .quality_cases import QualityCaseService
 except ImportError:  # pragma: no cover
-    from mail_delivery import LocalMailCaptureTransport, MicrosoftGraphMailTransport, OutboxDispatcher
+    from mail_delivery import (
+        LocalMailCaptureTransport, MicrosoftGraphClient, MicrosoftGraphMailTransport,
+        OutboxDispatcher,
+    )
     from maintenance import MaintenanceService, is_workday
+    from outlook_absence import sync_outlook_absences
     from portal_governance import SQLiteGovernanceStore
     from quality_cases import QualityCaseService
 
@@ -46,7 +55,10 @@ def expiry_digest_due(now: datetime, last_digest_date: date | None) -> bool:
 
 
 def run_once(service: MaintenanceService, dispatcher: OutboxDispatcher | None,
-             *, generate_expiry_digest: bool = True) -> None:
+             *, generate_expiry_digest: bool = True,
+             absence_sync: Callable[[], object] | None = None) -> None:
+    if absence_sync:
+        absence_sync()
     if generate_expiry_digest:
         service.generate_expiry_digest()
     service.process_pending_approvals()
@@ -67,20 +79,37 @@ def main() -> None:
     QualityCaseService(store)
     service = MaintenanceService(store, today=lambda: datetime.now(BERLIN).date())
     dispatcher = None
-    graph = (
-        os.getenv("KB_MAIL_TENANT_ID", ""), os.getenv("KB_MAIL_CLIENT_ID", ""),
-        os.getenv("KB_MAIL_CLIENT_SECRET", ""), os.getenv("KB_MAIL_SENDER", ""),
+    graph_credentials = (
+        os.getenv("KB_MAIL_TENANT_ID", "") or os.getenv("MICROSOFT_CLIENT_TENANT_ID", ""),
+        os.getenv("KB_MAIL_CLIENT_ID", "") or os.getenv("MICROSOFT_CLIENT_ID", ""),
+        os.getenv("KB_MAIL_CLIENT_SECRET", "") or os.getenv("MICROSOFT_CLIENT_SECRET", ""),
     )
-    if all(graph):
-        dispatcher = OutboxDispatcher(service, MicrosoftGraphMailTransport(*graph))
+    mail_sender = os.getenv("KB_MAIL_SENDER", "")
+    graph_client = MicrosoftGraphClient(*graph_credentials) if all(graph_credentials) else None
+    if graph_client and mail_sender:
+        dispatcher = OutboxDispatcher(
+            service, MicrosoftGraphMailTransport(*graph_credentials, mail_sender),
+        )
     elif capture_path := os.getenv("KB_MAIL_CAPTURE_PATH", "").strip():
         dispatcher = OutboxDispatcher(service, LocalMailCaptureTransport(Path(capture_path)))
     last_expiry_digest: date | None = None
+    absence_sync = None
+    if graph_client and os.getenv("KB_GRAPH_ABSENCE_SYNC_ENABLED", "false").lower() == "true":
+        def run_absence_sync() -> None:
+            result = sync_outlook_absences(
+                store, graph_client, today=datetime.now(BERLIN).date(),
+            )
+            if result.get("failed") or result.get("delegate_required"):
+                print(f"outlook_absence_sync_attention result={result}", flush=True)
+        absence_sync = run_absence_sync
     while True:
         now = datetime.now(BERLIN)
         digest_due = expiry_digest_due(now, last_expiry_digest)
         try:
-            run_once(service, dispatcher, generate_expiry_digest=digest_due)
+            run_once(
+                service, dispatcher, generate_expiry_digest=digest_due,
+                absence_sync=absence_sync,
+            )
             if digest_due:
                 last_expiry_digest = now.date()
         except Exception as exc:

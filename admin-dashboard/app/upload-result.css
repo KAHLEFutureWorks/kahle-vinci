@@ -70,6 +70,11 @@
 .wp-document-group > h2 { margin: 0 0 10px; font-size: 18px; }
 .wp-document-group > div { display: flex; flex-direction: column; gap: 10px; }
 .wp-document-group article { background: #fff; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.wp-document-group article.selected {
+  position: relative;
+  z-index: 30;
+  overflow: visible;
+}
 .wp-additional-kbs { color: var(--blue) !important; font-weight: 700; }
 
 @media (max-width: 520px) {

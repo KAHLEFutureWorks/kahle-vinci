@@ -370,6 +370,62 @@ def test_normative_question_prefers_authoritative_sources_and_removes_duplicate_
     assert sum(shared in chunk.parent_content for chunk in chunks) == 1
 
 
+def test_short_person_query_focuses_document_by_exact_content_terms():
+    candidates = [{
+        "payload": {
+            "document_id": "contacts",
+            "title": "KAHLE Wichtige Kontakte Rollen",
+            "parent_content": "Geschäftsführer: Thomas Keller (keller@kahle.de)",
+        },
+    }, {
+        "payload": {
+            "document_id": "other",
+            "title": "Service Richtlinie",
+            "parent_content": "Allgemeine Informationen zum Service.",
+        },
+    }]
+
+    assert module.focused_document_ids("Was weißt du über Thomas Keller?", candidates) == {"contacts"}
+
+
+def test_named_entity_uses_acl_filtered_hybrid_order_when_reranker_is_unavailable(monkeypatch):
+    points = [{
+        "id": "p1", "score": .9,
+        "payload": {
+            "document_id": "contacts", "version_id": "v1",
+            "title": "KAHLE Wichtige Kontakte Rollen",
+            "content": "Geschäftsführer: Thomas Keller (keller@kahle.de)",
+            "parent_content": "Geschäftsführer: Thomas Keller (keller@kahle.de)",
+            "knowledgebase_ids": ["allgemein"], "status": "active", "published": True,
+            "source_id": "s", "source_url": "/s", "valid_until": "2026-11-01",
+        },
+    }]
+
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"result": {"points": points}}
+
+    monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: Response())
+
+    class Sparse:
+        def encode_query(self, query):
+            return {"build_id": "build-1", "indices": [1], "values": [1.0]}
+
+    class UnavailableReranker:
+        def rerank(self, query, documents, top_n):
+            raise module.RetrievalError("reranker_unavailable:http_503")
+
+    chunks = module.QdrantHybridRetriever(
+        "http://qdrant", "vinci_knowledge", Sparse(), UnavailableReranker(),
+    ).retrieve(
+        "Was weißt du über Thomas Keller?", [1.0],
+        module.RetrievalScope("u", ("allgemein",), ("v1",)),
+        today=date(2026, 8, 17),
+    )
+
+    assert [chunk.document_id for chunk in chunks] == ["contacts"]
+
+
 def test_ionos_reranker_reads_the_documented_response_shape():
     """IONOS antwortet im Cohere-Format, nicht im TEI-Format."""
     captured = {}
@@ -401,6 +457,24 @@ def test_ionos_reranker_reads_the_documented_response_shape():
     assert captured["payload"]["documents"] == ["a", "b"]
     assert captured["payload"]["model"] == "Qwen/Qwen3-VL-Reranker-8B"
     assert ranked == [(1, 0.96), (0, 0.02)]
+
+
+def test_ionos_reranker_reports_safe_http_diagnostic_without_response_body(monkeypatch):
+    response = module.requests.Response()
+    response.status_code = 429
+    response._content = b"secret provider response"
+
+    def post(*args, **kwargs):
+        raise module.requests.HTTPError(response=response)
+
+    monkeypatch.setattr(module.requests, "post", post)
+    with pytest.raises(module.RetrievalError) as captured:
+        module.IonosReranker("https://example.invalid/v1", "secret", "model").rerank(
+            "Thomas Keller", ["internal content"], 1,
+        )
+
+    assert str(captured.value) == "reranker_unavailable:http_429"
+    assert "secret" not in str(captured.value)
 
 
 def test_distributed_tool_bundles_are_self_contained_and_current():

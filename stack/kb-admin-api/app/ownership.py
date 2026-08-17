@@ -96,7 +96,7 @@ class OwnershipService:
 
     def create_initial_proposal(
         self, document_id: str, case_id: str, uploader_user_id: str,
-        proposed_owner_user_id: str, reason: str = "Owner f?r Erstver?ffentlichung vorgeschlagen",
+        proposed_owner_user_id: str, reason: str = "Owner für Erstveröffentlichung vorgeschlagen",
     ) -> str:
         proposed = self.governance.identity(proposed_owner_user_id)
         if not proposed.active or proposed_owner_user_id == uploader_user_id:

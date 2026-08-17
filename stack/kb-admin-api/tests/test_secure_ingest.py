@@ -3,6 +3,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from pypdf import PdfWriter
 
 from app.secure_ingest import (
     ConversionQualityInspector,
@@ -104,6 +105,17 @@ def test_office_documents_over_200_pages_are_rejected():
         SecureFileInspector().inspect("too-long.pptx", output.getvalue())
 
 
+def test_large_pdf_manual_is_allowed_up_to_1000_pages():
+    writer = PdfWriter()
+    for _ in range(201):
+        writer.add_blank_page(width=200, height=200)
+    output = io.BytesIO()
+    writer.write(output)
+
+    inspected = SecureFileInspector().inspect("manual.pdf", output.getvalue())
+    assert inspected.page_count == 201
+
+
 def test_embedded_executable_content_is_rejected_before_conversion():
     inspector = SecureFileInspector()
     embedded = office_bytes("word/document.xml", extra=("word/embeddings/oleObject1.bin", b"payload"))
@@ -111,6 +123,25 @@ def test_embedded_executable_content_is_rejected_before_conversion():
         inspector.inspect("embedded.docx", embedded)
     with pytest.raises(IngestError, match="embedded_executable_content_not_allowed"):
         inspector.inspect("active.pdf", b"%PDF-1.7\n/JavaScript /JS (run)")
+
+
+def test_pdf_security_review_rebuilds_visible_pages_without_active_content():
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.add_js("app.alert('active')")
+    writer.add_attachment("payload.txt", b"hidden attachment")
+    source = io.BytesIO()
+    writer.write(source)
+
+    inspector = SecureFileInspector()
+    with pytest.raises(IngestError, match="embedded_executable_content_not_allowed"):
+        inspector.inspect("trusted.pdf", source.getvalue())
+
+    sanitized = inspector.sanitize_pdf_for_admin_review("trusted.pdf", source.getvalue())
+    result = inspector.inspect("trusted.pdf", sanitized)
+    assert result.page_count == 1
+    assert b"/JavaScript" not in sanitized
+    assert b"/EmbeddedFile" not in sanitized
 
 
 def test_document_worker_retries_transient_outage_before_success(monkeypatch):

@@ -1,5 +1,24 @@
 # KAHLE-Vinci Wissensportal – Betrieb und Administration
 
+## Lokale Schulungsaccounts
+
+Für Bildschirmaufnahmen können zwei ausschließlich lokale Konten reproduzierbar angelegt werden. Zuerst muss der lokale Stack laufen. Danach im Projektstamm ausführen:
+
+```powershell
+.\scripts\setup-local-training-accounts.ps1
+```
+
+Der Befehl legt einen Benutzer und eine Führungskraft an, ordnet den Benutzer der Führungskraft zu und gibt beiden Konten Lese- und Uploadrechte für alle aktiven Wissensbereiche. Ein erneuter Aufruf setzt Namen, Passwörter, Rollen und Rechte auf den definierten Schulungsstand zurück. Das Skript bricht ab, wenn OpenWebUI nicht als erwartete lokale Instanz auf `127.0.0.1:3001` läuft.
+
+Standardzugänge:
+
+| Rolle | E-Mail | Passwort |
+|---|---|---|
+| Benutzer | `mitarbeiter.schulung@kahle.de` | `Vinci-Mitarbeiter-2026!` |
+| Führungskraft | `fuehrungskraft.schulung@kahle.de` | `Vinci-Fuehrung-2026!` |
+
+Die Werte können bei Bedarf als Parameter überschrieben werden. Die Schulungskonten sind nicht für Produktion vorgesehen.
+
 Stand: 6. August 2026. Diese Anleitung beschreibt den lokalen Abnahmebetrieb. Eine Aktivierung auf dem Produktionsserver ist erst nach bestandenem Go-live-Gate zulässig.
 
 ## 1. Rollen und Verantwortungen
