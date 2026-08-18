@@ -48,3 +48,31 @@ def test_welcome_mail_uses_approved_text_and_preserves_signature_paragraph() -> 
         "saveToSentItems": True,
     }
 
+
+def test_pending_access_mail_names_requester_and_links_admin_area() -> None:
+    session = Mock()
+    token_response = Mock()
+    token_response.json.return_value = {"access_token": "token", "expires_in": 3600}
+    mail_response = Mock()
+    session.post.side_effect = [token_response, mail_response]
+    mailer = MicrosoftGraphWelcomeMailer(
+        "tenant", "client", "secret", "oltmanns@kahle.de", session=session
+    )
+
+    mailer.send_pending_access_request(
+        EligibleUser("admin-1", "admin@kahle.de", "Jan", "Admin", "admin"),
+        EligibleUser("pending-1", "new.user@kahle.de", "New", "User", "pending"),
+    )
+
+    message = session.post.call_args_list[1].kwargs["json"]["message"]
+    assert message["subject"] == "Neue Zugriffsanfrage für KAHLE-Vinci"
+    assert message["toRecipients"] == [
+        {"emailAddress": {"address": "admin@kahle.de"}}
+    ]
+    assert message["body"]["content"] == (
+        "Hallo Jan,\n\n"
+        "New User (new.user@kahle.de) hat den Zugang zu KAHLE-Vinci angefragt.\n\n"
+        "Bitte prüfe die Anfrage und gib den Nutzer bei Bedarf als Benutzer oder Admin frei:\n\n"
+        "https://vinci.kahle.de/admin/users\n\n"
+        "Solange keine Freigabe erfolgt, bleibt der Zugang gesperrt.\n\n"
+    )

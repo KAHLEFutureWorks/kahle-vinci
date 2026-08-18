@@ -12,7 +12,7 @@ class SQLiteOpenWebUIUserReader:
         self._invalid_users: list[InvalidUser] = []
 
     def eligible_users(self) -> list[EligibleUser]:
-        rows = self._read_rows()
+        rows = self._read_rows(("user", "admin"))
         users: list[EligibleUser] = []
         invalid_users: list[InvalidUser] = []
         for row in rows:
@@ -30,18 +30,33 @@ class SQLiteOpenWebUIUserReader:
     def invalid_users(self) -> list[InvalidUser]:
         return list(self._invalid_users)
 
-    def _read_rows(self) -> list[sqlite3.Row]:
+    def pending_users(self) -> list[EligibleUser]:
+        return self._valid_users_for_roles(("pending",))
+
+    def admin_users(self) -> list[EligibleUser]:
+        return self._valid_users_for_roles(("admin",))
+
+    def _valid_users_for_roles(self, roles: tuple[str, ...]) -> list[EligibleUser]:
+        users: list[EligibleUser] = []
+        for row in self._read_rows(roles):
+            user, _ = self._to_eligible_user(row)
+            if user is not None:
+                users.append(user)
+        return users
+
+    def _read_rows(self, roles: tuple[str, ...]) -> list[sqlite3.Row]:
         database_uri = f"file:{self.database_path.resolve().as_posix()}?mode=ro"
         connection = sqlite3.connect(database_uri, uri=True, timeout=20)
         connection.row_factory = sqlite3.Row
         try:
             return connection.execute(
-                """
+                f"""
                 SELECT id, name, email, role
                 FROM user
-                WHERE lower(coalesce(role, '')) IN ('user', 'admin')
+                WHERE lower(coalesce(role, '')) IN ({','.join('?' for _ in roles)})
                 ORDER BY id
-                """
+                """,
+                roles,
             ).fetchall()
         finally:
             connection.close()

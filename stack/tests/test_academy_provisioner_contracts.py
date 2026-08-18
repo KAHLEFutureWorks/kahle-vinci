@@ -36,9 +36,9 @@ def test_academy_provisioner_requires_key_and_uses_exact_course_name() -> None:
     assert "Einführung in die KAHLE-Vinci Nutzung" in compose
     assert "LEARNINGSUITE_API_KEY=<secret>" in environment
     assert "LEARNINGSUITE_ALLOWED_EMAILS=<test-email>@kahle.de" in environment
-    assert "KB_MAIL_TENANT_ID: ${KB_MAIL_TENANT_ID:?KB_MAIL_TENANT_ID is required}" in compose
-    assert "KB_MAIL_CLIENT_ID: ${KB_MAIL_CLIENT_ID:?KB_MAIL_CLIENT_ID is required}" in compose
-    assert "KB_MAIL_CLIENT_SECRET: ${KB_MAIL_CLIENT_SECRET:?KB_MAIL_CLIENT_SECRET is required}" in compose
+    assert "MICROSOFT_CLIENT_TENANT_ID: ${MICROSOFT_CLIENT_TENANT_ID:?MICROSOFT_CLIENT_TENANT_ID is required}" in compose
+    assert "MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:?MICROSOFT_CLIENT_ID is required}" in compose
+    assert "MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:?MICROSOFT_CLIENT_SECRET is required}" in compose
     assert "VINCI_WELCOME_MAIL_SENDER: ${VINCI_WELCOME_MAIL_SENDER:-oltmanns@kahle.de}" in compose
     assert "VINCI_WELCOME_MAIL_SENDER=oltmanns@kahle.de" in environment
 

@@ -8,6 +8,8 @@ Bei der Anlage wird keine allgemeine LearningSuite-Anmelde-E-Mail versendet. Die
 
 Vor der LearningSuite-Verarbeitung sendet KAHLE-Vinci einmalig eine Willkommensmail über Microsoft Graph. Als Absender wird das vorhandene Postfach aus `VINCI_WELCOME_MAIL_SENDER` verwendet. Der Versandstatus wird pro normalisierter E-Mail-Adresse gespeichert. Erst nach erfolgreichem Versand der Willkommensmail wird der Academy-Zugang verarbeitet, damit die externe Einladung nicht ohne den vorherigen Hinweis auf ihre Echtheit eintrifft.
 
+Neue Nutzer mit der Rolle `pending` werden noch nicht freigeschaltet. Der Dienst informiert stattdessen jeden aktuell in OpenWebUI hinterlegten Admin genau einmal über die neue Zugriffsanfrage. Die Nachricht enthält Name und E-Mail-Adresse des Antragstellers sowie den direkten Link `https://vinci.kahle.de/admin/users`. Der Versandstatus wird je Kombination aus Antragsteller und Admin gespeichert. Scheitert ein einzelner Versand, wird nur dieser Empfänger erneut versucht.
+
 ## Einrichtung auf dem Server
 
 1. Die Datei `/opt/kahle-vinci/stack/.env.production` aus `env.production.template` ergänzen:
@@ -18,9 +20,9 @@ Vor der LearningSuite-Verarbeitung sendet KAHLE-Vinci einmalig eine Willkommensm
    LEARNINGSUITE_COURSE_NAME=Einführung in die KAHLE-Vinci Nutzung
    LEARNINGSUITE_PROVISION_INTERVAL_SECONDS=60
    LEARNINGSUITE_ALLOWED_EMAILS=janssen@kahle.de
-   KB_MAIL_TENANT_ID=<Microsoft-Entra-Tenant-ID>
-   KB_MAIL_CLIENT_ID=<Microsoft-Graph-App-ID>
-   KB_MAIL_CLIENT_SECRET=<Microsoft-Graph-App-Secret>
+   MICROSOFT_CLIENT_TENANT_ID=<Microsoft-Entra-Tenant-ID>
+   MICROSOFT_CLIENT_ID=<Microsoft-Graph-App-ID>
+   MICROSOFT_CLIENT_SECRET=<Microsoft-Graph-App-Secret>
    VINCI_WELCOME_MAIL_SENDER=oltmanns@kahle.de
    ```
 
@@ -45,11 +47,13 @@ Der Container besitzt keine veröffentlichten Ports. Er erhält die OpenWebUI-Da
 ## Abnahme
 
 1. Einen Testnutzer in OpenWebUI mit Rollenstatus `pending` anlegen. Es darf kein Academy-Account entstehen.
-2. Demselben Nutzer die Rolle `user` geben und maximal eine Minute warten.
-3. Prüfen, ob der LearningSuite-Account mit Microsoft-E-Mail, Vor- und Nachnamen existiert und der Kurs freigeschaltet ist.
-4. Prüfen, ob zuerst genau eine KAHLE-Vinci-Willkommensmail von `oltmanns@kahle.de` angekommen ist.
-5. Prüfen, ob danach genau eine Kursfreischaltungs-E-Mail mit Login-Link angekommen ist.
-6. Den Worker noch einmal laufen lassen. Es darf keine der beiden E-Mails erneut versendet werden.
+2. Prüfen, ob jeder Vinci-Admin genau eine E-Mail mit Name und E-Mail-Adresse des Antragstellers erhält.
+3. Den Worker erneut laufen lassen. Es darf keine zweite Admin-Benachrichtigung versendet werden.
+4. Demselben Nutzer die Rolle `user` geben und maximal eine Minute warten.
+5. Prüfen, ob der LearningSuite-Account mit Microsoft-E-Mail, Vor- und Nachnamen existiert und der Kurs freigeschaltet ist.
+6. Prüfen, ob zuerst genau eine KAHLE-Vinci-Willkommensmail von `oltmanns@kahle.de` angekommen ist.
+7. Prüfen, ob danach genau eine Kursfreischaltungs-E-Mail mit Login-Link angekommen ist.
+8. Den Worker noch einmal laufen lassen. Es darf keine der beiden E-Mails erneut versendet werden.
 
 Während der Abnahme verarbeitet `LEARNINGSUITE_ALLOWED_EMAILS` ausschließlich die dort aufgeführten, komma- oder semikolongetrennten E-Mail-Adressen. Eine fehlende oder leere Einstellung stoppt den Dienst sicher. Nach erfolgreicher Abnahme wird die Variable einmalig auf `*` gesetzt. Ab diesem Zeitpunkt werden alle freigegebenen Nutzer mit der Rolle `user` oder `admin` automatisch verarbeitet.
 

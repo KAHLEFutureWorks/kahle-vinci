@@ -39,7 +39,10 @@ def run_forever(
             state.record_heartbeat(int(now_epoch()))
             print(
                 "academy_provisioner_cycle "
-                f"completed={result['completed']} failed={result['failed']} skipped={result['skipped']}",
+                f"completed={result['completed']} failed={result['failed']} "
+                f"skipped={result['skipped']} "
+                f"pending_notified={result.get('pending_notified', 0)} "
+                f"pending_failed={result.get('pending_failed', 0)}",
                 flush=True,
             )
         except ProvisioningError as exc:
@@ -70,9 +73,9 @@ def main() -> int:
         config.course_name,
         allowed_emails=config.allowed_emails,
         welcome_mailer=MicrosoftGraphWelcomeMailer(
-            os.environ["KB_MAIL_TENANT_ID"],
-            os.environ["KB_MAIL_CLIENT_ID"],
-            os.environ["KB_MAIL_CLIENT_SECRET"],
+            os.environ["MICROSOFT_CLIENT_TENANT_ID"],
+            os.environ["MICROSOFT_CLIENT_ID"],
+            os.environ["MICROSOFT_CLIENT_SECRET"],
             os.environ["VINCI_WELCOME_MAIL_SENDER"],
         ),
     )

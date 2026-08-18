@@ -90,6 +90,30 @@ class SQLiteProvisioningStateStore:
                 (email.strip().lower(), now_epoch),
             )
 
+    def pending_notice_was_sent(self, pending_user_id: str, admin_email: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT sent_at FROM pending_admin_notification
+                WHERE pending_user_id = ? AND admin_email = ?
+                """,
+                (pending_user_id, admin_email.strip().lower()),
+            ).fetchone()
+        return bool(row and row["sent_at"] is not None)
+
+    def record_pending_notice_sent(
+        self, pending_user_id: str, admin_email: str, *, now_epoch: int
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO pending_admin_notification(pending_user_id, admin_email, sent_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(pending_user_id, admin_email) DO UPDATE SET sent_at=excluded.sent_at
+                """,
+                (pending_user_id, admin_email.strip().lower(), now_epoch),
+            )
+
     def heartbeat_epoch(self) -> int | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -123,6 +147,16 @@ class SQLiteProvisioningStateStore:
                 CREATE TABLE IF NOT EXISTS welcome_mail_state (
                     email TEXT PRIMARY KEY,
                     sent_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_admin_notification (
+                    pending_user_id TEXT NOT NULL,
+                    admin_email TEXT NOT NULL,
+                    sent_at INTEGER NOT NULL,
+                    PRIMARY KEY(pending_user_id, admin_email)
                 )
                 """
             )

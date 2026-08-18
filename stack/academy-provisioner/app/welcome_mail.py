@@ -12,6 +12,7 @@ from .models import EligibleUser
 
 
 WELCOME_SUBJECT = "Dein Zugang zu KAHLE-Vinci wurde freigeschaltet"
+PENDING_ACCESS_SUBJECT = "Neue Zugriffsanfrage für KAHLE-Vinci"
 
 
 def welcome_body(first_name: str) -> str:
@@ -29,6 +30,17 @@ def welcome_body(first_name: str) -> str:
     )
 
 
+def pending_access_body(admin_first_name: str, pending_user: EligibleUser) -> str:
+    return (
+        f"Hallo {admin_first_name},\n\n"
+        f"{pending_user.first_name} {pending_user.last_name} "
+        f"({pending_user.email}) hat den Zugang zu KAHLE-Vinci angefragt.\n\n"
+        "Bitte prüfe die Anfrage und gib den Nutzer bei Bedarf als Benutzer oder Admin frei:\n\n"
+        "https://vinci.kahle.de/admin/users\n\n"
+        "Solange keine Freigabe erfolgt, bleibt der Zugang gesperrt.\n\n"
+    )
+
+
 @dataclass
 class MicrosoftGraphWelcomeMailer:
     tenant_id: str
@@ -41,6 +53,18 @@ class MicrosoftGraphWelcomeMailer:
     _token_expires_at: float = field(default=0.0, init=False)
 
     def send_welcome(self, user: EligibleUser) -> None:
+        self._send(user.email, WELCOME_SUBJECT, welcome_body(user.first_name))
+
+    def send_pending_access_request(
+        self, admin: EligibleUser, pending_user: EligibleUser
+    ) -> None:
+        self._send(
+            admin.email,
+            PENDING_ACCESS_SUBJECT,
+            pending_access_body(admin.first_name, pending_user),
+        )
+
+    def _send(self, recipient: str, subject: str, body: str) -> None:
         try:
             response = self.session.post(
                 "https://graph.microsoft.com/v1.0/users/"
@@ -48,13 +72,13 @@ class MicrosoftGraphWelcomeMailer:
                 headers={"Authorization": f"Bearer {self._access_token()}"},
                 json={
                     "message": {
-                        "subject": WELCOME_SUBJECT,
+                        "subject": subject,
                         "body": {
                             "contentType": "Text",
-                            "content": welcome_body(user.first_name),
+                            "content": body,
                         },
                         "toRecipients": [
-                            {"emailAddress": {"address": user.email}}
+                            {"emailAddress": {"address": recipient}}
                         ],
                     },
                     "saveToSentItems": True,

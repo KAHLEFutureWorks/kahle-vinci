@@ -8,9 +8,17 @@ from app.provisioner import AcademyProvisioner
 
 
 class FakeReader:
-    def __init__(self, users: list[EligibleUser], invalid_users: list[InvalidUser] | None = None) -> None:
+    def __init__(
+        self,
+        users: list[EligibleUser],
+        invalid_users: list[InvalidUser] | None = None,
+        pending_users: list[EligibleUser] | None = None,
+        admin_users: list[EligibleUser] | None = None,
+    ) -> None:
         self.users = users
         self.invalid_users_list = invalid_users or []
+        self.pending_users_list = pending_users or []
+        self.admin_users_list = admin_users or []
 
     def eligible_users(self) -> list[EligibleUser]:
         return self.users
@@ -18,12 +26,19 @@ class FakeReader:
     def invalid_users(self) -> list[InvalidUser]:
         return self.invalid_users_list
 
+    def pending_users(self) -> list[EligibleUser]:
+        return self.pending_users_list
+
+    def admin_users(self) -> list[EligibleUser]:
+        return self.admin_users_list
+
 
 class FakeState:
     def __init__(self) -> None:
         self.completed: list[tuple[str, str]] = []
         self.failures: list[tuple[str, str]] = []
         self.welcome_sent: set[str] = set()
+        self.pending_notices: set[tuple[str, str]] = set()
 
     def was_completed(self, user_id: str) -> bool:
         return any(completed_user_id == user_id for completed_user_id, _ in self.completed)
@@ -45,6 +60,14 @@ class FakeState:
 
     def record_welcome_sent(self, email: str, *, now_epoch: int) -> None:
         self.welcome_sent.add(email)
+
+    def pending_notice_was_sent(self, pending_user_id: str, admin_email: str) -> bool:
+        return (pending_user_id, admin_email) in self.pending_notices
+
+    def record_pending_notice_sent(
+        self, pending_user_id: str, admin_email: str, *, now_epoch: int
+    ) -> None:
+        self.pending_notices.add((pending_user_id, admin_email))
 
 
 class FakeClient:
@@ -70,9 +93,44 @@ class FakeClient:
 class FakeWelcomeMailer:
     def __init__(self) -> None:
         self.sent: list[EligibleUser] = []
+        self.pending_sent: list[tuple[EligibleUser, EligibleUser]] = []
 
     def send_welcome(self, user: EligibleUser) -> None:
         self.sent.append(user)
+
+    def send_pending_access_request(
+        self, admin: EligibleUser, pending_user: EligibleUser
+    ) -> None:
+        self.pending_sent.append((admin, pending_user))
+
+
+def test_new_pending_user_notifies_each_admin_exactly_once() -> None:
+    pending = EligibleUser(
+        "pending-1", "new.user@kahle.de", "New", "User", "pending"
+    )
+    admins = [
+        EligibleUser("admin-1", "admin.one@kahle.de", "Admin", "One", "admin"),
+        EligibleUser("admin-2", "admin.two@kahle.de", "Admin", "Two", "admin"),
+    ]
+    state = FakeState()
+    mailer = FakeWelcomeMailer()
+    provisioner = AcademyProvisioner(
+        FakeReader([], pending_users=[pending], admin_users=admins),
+        FakeClient(),
+        state,
+        "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=frozenset({"someone.else@kahle.de"}),
+        welcome_mailer=mailer,
+        now_epoch=lambda: 100,
+    )
+
+    first = provisioner.run_once()
+    second = provisioner.run_once()
+
+    assert first["pending_notified"] == 2
+    assert first["pending_failed"] == 0
+    assert second["pending_notified"] == 0
+    assert mailer.pending_sent == [(admins[0], pending), (admins[1], pending)]
 
 
 def test_first_role_release_sends_one_welcome_before_academy_provisioning() -> None:
@@ -93,8 +151,8 @@ def test_first_role_release_sends_one_welcome_before_academy_provisioning() -> N
     first = provisioner.run_once()
     second = provisioner.run_once()
 
-    assert first == {"completed": 1, "failed": 0, "skipped": 0}
-    assert second == {"completed": 0, "failed": 0, "skipped": 1}
+    assert first == {"completed": 1, "failed": 0, "skipped": 0, "pending_notified": 0, "pending_failed": 0}
+    assert second == {"completed": 0, "failed": 0, "skipped": 1, "pending_notified": 0, "pending_failed": 0}
     assert mailer.sent == [user]
     assert state.welcome_sent == {"reschke@kahle.de"}
     assert client.created == ["user-1"]
@@ -119,7 +177,7 @@ def test_failed_welcome_mail_blocks_academy_email_and_retries_later() -> None:
         now_epoch=lambda: 100,
     ).run_once()
 
-    assert result == {"completed": 0, "failed": 1, "skipped": 0}
+    assert result == {"completed": 0, "failed": 1, "skipped": 0, "pending_notified": 0, "pending_failed": 0}
     assert state.failures == [("user-1", "welcome_mail_failed")]
     assert state.welcome_sent == set()
     assert client.created == []
@@ -136,7 +194,7 @@ def test_existing_course_access_never_sends_another_course_email() -> None:
         allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
-    assert result == {"completed": 1, "failed": 0, "skipped": 0}
+    assert result == {"completed": 1, "failed": 0, "skipped": 0, "pending_notified": 0, "pending_failed": 0}
     assert client.grants == []
     assert state.completed == [("user-1", "member-user-1")]
 
@@ -160,7 +218,7 @@ def test_failure_for_one_user_does_not_block_next_user() -> None:
         allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
-    assert result == {"completed": 1, "failed": 1, "skipped": 0}
+    assert result == {"completed": 1, "failed": 1, "skipped": 0, "pending_notified": 0, "pending_failed": 0}
     assert state.failures == [("user-1", "member_create_failed")]
     assert state.completed == [("user-2", "member-user-2")]
     assert client.grants == [("member-user-2", "course-1")]
@@ -179,7 +237,7 @@ def test_invalid_openwebui_identity_is_recorded_without_calling_learningsuite() 
         now_epoch=lambda: 100,
     ).run_once()
 
-    assert result == {"completed": 0, "failed": 1, "skipped": 0}
+    assert result == {"completed": 0, "failed": 1, "skipped": 0, "pending_notified": 0, "pending_failed": 0}
     assert state.failures == [("user-1", "invalid_email")]
     assert client.created == []
 
@@ -195,7 +253,7 @@ def test_completed_user_is_skipped_without_any_learningsuite_request() -> None:
         allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
-    assert result == {"completed": 0, "failed": 0, "skipped": 1}
+    assert result == {"completed": 0, "failed": 0, "skipped": 1, "pending_notified": 0, "pending_failed": 0}
     assert client.created == []
     assert client.grants == []
 
@@ -213,7 +271,7 @@ def test_new_users_are_bounded_to_a_rate_safe_batch() -> None:
         allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
-    assert result == {"completed": 20, "failed": 0, "skipped": 1}
+    assert result == {"completed": 20, "failed": 0, "skipped": 1, "pending_notified": 0, "pending_failed": 0}
     assert len(client.created) == 20
 
 
@@ -236,7 +294,7 @@ def test_transport_failure_for_one_user_does_not_block_next_user() -> None:
         allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
-    assert result == {"completed": 1, "failed": 1, "skipped": 0}
+    assert result == {"completed": 1, "failed": 1, "skipped": 0, "pending_notified": 0, "pending_failed": 0}
     assert state.failures == [("user-1", "learningsuite_request_failed")]
     assert state.completed == [("user-2", "member-user-2")]
 
@@ -283,7 +341,7 @@ def test_allowlist_processes_only_matching_email() -> None:
         now_epoch=lambda: 100,
     ).run_once()
 
-    assert result == {"completed": 1, "failed": 0, "skipped": 1}
+    assert result == {"completed": 1, "failed": 0, "skipped": 1, "pending_notified": 0, "pending_failed": 0}
     assert client.created == ["user-1"]
 
 
@@ -300,7 +358,7 @@ def test_allowlist_skips_invalid_identity_outside_rollout_scope() -> None:
         now_epoch=lambda: 100,
     ).run_once()
 
-    assert result == {"completed": 0, "failed": 0, "skipped": 1}
+    assert result == {"completed": 0, "failed": 0, "skipped": 1, "pending_notified": 0, "pending_failed": 0}
     assert state.failures == []
     assert client.created == []
 

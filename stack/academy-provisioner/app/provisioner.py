@@ -16,6 +16,10 @@ class UserReader(Protocol):
 
     def invalid_users(self) -> list[InvalidUser]: ...
 
+    def pending_users(self) -> list[EligibleUser]: ...
+
+    def admin_users(self) -> list[EligibleUser]: ...
+
 
 class LearningSuiteClient(Protocol):
     def resolve_course_id(self, course_name: str) -> str: ...
@@ -30,6 +34,10 @@ class LearningSuiteClient(Protocol):
 class WelcomeMailer(Protocol):
     def send_welcome(self, user: EligibleUser) -> None: ...
 
+    def send_pending_access_request(
+        self, admin: EligibleUser, pending_user: EligibleUser
+    ) -> None: ...
+
 
 class ProvisioningState(Protocol):
     def was_completed(self, user_id: str) -> bool: ...
@@ -43,6 +51,12 @@ class ProvisioningState(Protocol):
     def welcome_was_sent(self, email: str) -> bool: ...
 
     def record_welcome_sent(self, email: str, *, now_epoch: int) -> None: ...
+
+    def pending_notice_was_sent(self, pending_user_id: str, admin_email: str) -> bool: ...
+
+    def record_pending_notice_sent(
+        self, pending_user_id: str, admin_email: str, *, now_epoch: int
+    ) -> None: ...
 
 
 class AcademyProvisioner:
@@ -66,7 +80,28 @@ class AcademyProvisioner:
         self.now_epoch = now_epoch
 
     def run_once(self) -> dict[str, int]:
-        result = {"completed": 0, "failed": 0, "skipped": 0}
+        result = {
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "pending_notified": 0,
+            "pending_failed": 0,
+        }
+        if self.welcome_mailer:
+            for pending_user in self.reader.pending_users():
+                for admin in self.reader.admin_users():
+                    if self.state.pending_notice_was_sent(
+                        pending_user.openwebui_id, admin.email
+                    ):
+                        continue
+                    try:
+                        self.welcome_mailer.send_pending_access_request(admin, pending_user)
+                        self.state.record_pending_notice_sent(
+                            pending_user.openwebui_id, admin.email, now_epoch=self._now()
+                        )
+                        result["pending_notified"] += 1
+                    except ProvisioningError:
+                        result["pending_failed"] += 1
         users = self.reader.eligible_users()
         invalid_users = self.reader.invalid_users()
         if self.allowed_emails is not None:

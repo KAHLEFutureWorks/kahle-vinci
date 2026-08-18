@@ -56,6 +56,25 @@ def test_reader_converts_microsoft_surname_first_name_format(tmp_path: Path) -> 
     ]
 
 
+def test_reader_exposes_pending_requests_and_current_admins(tmp_path: Path) -> None:
+    database = make_webui_db(
+        tmp_path,
+        [
+            ("pending-1", "User.New", "new.user@kahle.de", "pending"),
+            ("admin-1", "Admin.One", "admin.one@kahle.de", "admin"),
+            ("user-1", "Regular.User", "regular.user@kahle.de", "user"),
+        ],
+    )
+    reader = SQLiteOpenWebUIUserReader(database)
+
+    assert reader.pending_users() == [
+        EligibleUser("pending-1", "new.user@kahle.de", "New", "User", "pending")
+    ]
+    assert reader.admin_users() == [
+        EligibleUser("admin-1", "admin.one@kahle.de", "One", "Admin", "admin")
+    ]
+
+
 def test_reader_reports_malformed_email_with_precise_error(tmp_path: Path) -> None:
     database = make_webui_db(
         tmp_path, [("user-1", "Amal Remo", "amal-at-kahle", "user")]
@@ -72,10 +91,12 @@ def test_state_records_completion_failure_and_heartbeat(tmp_path: Path) -> None:
     state.record_completed("user-1", "member-1", now_epoch=100)
     state.record_failure("user-2", "invalid_name", now_epoch=101)
     state.record_welcome_sent("AMAL@KAHLE.DE", now_epoch=101)
+    state.record_pending_notice_sent("pending-1", "ADMIN@KAHLE.DE", now_epoch=101)
     state.record_heartbeat(102)
 
     assert state.was_completed("user-1") is True
     assert state.member_id("user-1") == "member-1"
     assert state.last_error("user-2") == "invalid_name"
     assert state.welcome_was_sent("amal@kahle.de") is True
+    assert state.pending_notice_was_sent("pending-1", "admin@kahle.de") is True
     assert state.heartbeat_epoch() == 102
