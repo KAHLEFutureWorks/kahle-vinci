@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+from app.learningsuite import ProvisioningError
+from app.models import EligibleUser
+from app.provisioner import AcademyProvisioner
+
+
+class FakeReader:
+    def __init__(self, users: list[EligibleUser], invalid_ids: list[str] | None = None) -> None:
+        self.users = users
+        self.invalid_ids = invalid_ids or []
+
+    def eligible_users(self) -> list[EligibleUser]:
+        return self.users
+
+    def invalid_user_ids(self) -> list[str]:
+        return self.invalid_ids
+
+
+class FakeState:
+    def __init__(self) -> None:
+        self.completed: list[tuple[str, str]] = []
+        self.failures: list[tuple[str, str]] = []
+
+    def record_completed(self, user_id: str, member_id: str, *, now_epoch: int) -> None:
+        self.completed.append((user_id, member_id))
+
+    def record_failure(self, user_id: str, error_code: str, *, now_epoch: int) -> None:
+        self.failures.append((user_id, error_code))
+
+
+class FakeClient:
+    def __init__(self, *, has_access: bool = False) -> None:
+        self.has_access = has_access
+        self.grants: list[tuple[str, str]] = []
+        self.created: list[str] = []
+
+    def resolve_course_id(self, _: str) -> str:
+        return "course-1"
+
+    def find_or_create_member(self, user: EligibleUser) -> str:
+        self.created.append(user.openwebui_id)
+        return f"member-{user.openwebui_id}"
+
+    def has_course_access(self, _: str, __: str) -> bool:
+        return self.has_access
+
+    def grant_course_access(self, member_id: str, course_id: str) -> None:
+        self.grants.append((member_id, course_id))
+
+
+def test_existing_course_access_never_sends_another_course_email() -> None:
+    user = EligibleUser("user-1", "amal@kahle.de", "Amal", "Remo", "user")
+    client = FakeClient(has_access=True)
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader([user]), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+    ).run_once()
+
+    assert result == {"completed": 1, "failed": 0, "skipped": 0}
+    assert client.grants == []
+    assert state.completed == [("user-1", "member-user-1")]
+
+
+def test_failure_for_one_user_does_not_block_next_user() -> None:
+    class FailingFirstClient(FakeClient):
+        def find_or_create_member(self, user: EligibleUser) -> str:
+            if user.openwebui_id == "user-1":
+                raise ProvisioningError("member_create_failed")
+            return super().find_or_create_member(user)
+
+    users = [
+        EligibleUser("user-1", "a@kahle.de", "A", "One", "user"),
+        EligibleUser("user-2", "b@kahle.de", "B", "Two", "admin"),
+    ]
+    client = FailingFirstClient()
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+    ).run_once()
+
+    assert result == {"completed": 1, "failed": 1, "skipped": 0}
+    assert state.failures == [("user-1", "member_create_failed")]
+    assert state.completed == [("user-2", "member-user-2")]
+    assert client.grants == [("member-user-2", "course-1")]
+
+
+def test_invalid_openwebui_name_is_recorded_without_calling_learningsuite() -> None:
+    client = FakeClient()
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader([], ["user-1"]), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+    ).run_once()
+
+    assert result == {"completed": 0, "failed": 1, "skipped": 0}
+    assert state.failures == [("user-1", "invalid_name")]
+    assert client.created == []
