@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.openwebui import SQLiteOpenWebUIUserReader
 from app.state import SQLiteProvisioningStateStore
-from app.models import EligibleUser
+from app.models import EligibleUser, InvalidUser
 
 
 def make_webui_db(tmp_path: Path, rows: list[tuple[str, str, str, str]]) -> Path:
@@ -43,7 +43,17 @@ def test_reader_reports_eligible_user_with_incomplete_name_as_invalid(tmp_path: 
     reader = SQLiteOpenWebUIUserReader(database)
 
     assert reader.eligible_users() == []
-    assert reader.invalid_user_ids() == ["user-1"]
+    assert reader.invalid_users() == [InvalidUser("user-1", "invalid_name")]
+
+
+def test_reader_reports_malformed_email_with_precise_error(tmp_path: Path) -> None:
+    database = make_webui_db(
+        tmp_path, [("user-1", "Amal Remo", "amal-at-kahle", "user")]
+    )
+    reader = SQLiteOpenWebUIUserReader(database)
+
+    assert reader.eligible_users() == []
+    assert reader.invalid_users() == [InvalidUser("user-1", "invalid_email")]
 
 
 def test_state_records_completion_failure_and_heartbeat(tmp_path: Path) -> None:

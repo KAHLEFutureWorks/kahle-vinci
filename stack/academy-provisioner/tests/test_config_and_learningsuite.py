@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 from app.config import ConfigError, ProvisioningConfig
 from app.learningsuite import ProvisioningError, RequestsLearningSuiteClient
@@ -69,3 +70,14 @@ def test_new_member_receives_only_course_access_email() -> None:
         "disableAccessNotificationEmail": False,
         "sendLoginLinkInCourseEmail": True,
     }
+
+
+def test_transport_errors_are_exposed_as_sanitized_provisioning_errors() -> None:
+    session = Mock()
+    session.get.side_effect = requests.Timeout("connection timed out")
+    client = RequestsLearningSuiteClient("https://api.test/api/v1", "secret", session)
+
+    with pytest.raises(ProvisioningError, match="learningsuite_request_failed"):
+        client.find_or_create_member(
+            EligibleUser("user-1", "amal@kahle.de", "Amal", "Remo", "user")
+        )

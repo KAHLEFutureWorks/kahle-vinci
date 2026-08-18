@@ -27,11 +27,7 @@ class RequestsLearningSuiteClient:
         self.timeout_seconds = timeout_seconds
 
     def resolve_course_id(self, course_name: str) -> str:
-        response = self.session.get(
-            f"{self.api_base_url}/courses/published",
-            headers=self.headers,
-            timeout=self.timeout_seconds,
-        )
+        response = self._request("get", "/courses/published")
         courses = self._json(response, "courses_lookup_failed")
         if not isinstance(courses, list):
             raise ProvisioningError("courses_response_invalid")
@@ -51,19 +47,15 @@ class RequestsLearningSuiteClient:
         return course_id
 
     def find_or_create_member(self, user: EligibleUser) -> str:
-        response = self.session.get(
-            f"{self.api_base_url}/members/by-email",
-            params={"email": user.email},
-            headers=self.headers,
-            timeout=self.timeout_seconds,
-        )
+        response = self._request("get", "/members/by-email", params={"email": user.email})
         if response.status_code == 200:
             return self._member_id(self._json(response, "member_lookup_failed"))
         if response.status_code != 404:
             self._json(response, "member_lookup_failed")
 
-        response = self.session.post(
-            f"{self.api_base_url}/members",
+        response = self._request(
+            "post",
+            "/members",
             json={
                 "email": user.email,
                 "firstName": user.first_name,
@@ -72,34 +64,38 @@ class RequestsLearningSuiteClient:
                 "disableLoginEmail": True,
                 "locale": "de",
             },
-            headers=self.headers,
-            timeout=self.timeout_seconds,
         )
         return self._member_id(self._json(response, "member_create_failed"))
 
     def has_course_access(self, member_id: str, course_id: str) -> bool:
-        response = self.session.get(
-            f"{self.api_base_url}/members/{member_id}/courses",
-            headers=self.headers,
-            timeout=self.timeout_seconds,
-        )
+        response = self._request("get", f"/members/{member_id}/courses")
         courses = self._json(response, "course_access_lookup_failed")
         if not isinstance(courses, list):
             raise ProvisioningError("course_access_response_invalid")
         return any(self._course_id(course) == course_id for course in courses)
 
     def grant_course_access(self, member_id: str, course_id: str) -> None:
-        response = self.session.put(
-            f"{self.api_base_url}/members/{member_id}/courses",
+        response = self._request(
+            "put",
+            f"/members/{member_id}/courses",
             json={
                 "courseIds": [course_id],
                 "disableAccessNotificationEmail": False,
                 "sendLoginLinkInCourseEmail": True,
             },
-            headers=self.headers,
-            timeout=self.timeout_seconds,
         )
         self._json(response, "course_access_grant_failed")
+
+    def _request(self, method: str, path: str, **kwargs: object) -> Any:
+        try:
+            return getattr(self.session, method)(
+                f"{self.api_base_url}{path}",
+                headers=self.headers,
+                timeout=self.timeout_seconds,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise ProvisioningError("learningsuite_request_failed") from exc
 
     @staticmethod
     def _course_id(course: object) -> str:

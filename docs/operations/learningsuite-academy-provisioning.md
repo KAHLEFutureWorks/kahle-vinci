@@ -43,4 +43,4 @@ Der Container besitzt keine veröffentlichten Ports. Er erhält die OpenWebUI-Da
 4. Prüfen, ob genau eine Kursfreischaltungs-E-Mail mit Login-Link angekommen ist.
 5. Den Worker noch einmal laufen lassen. Es darf keine zweite E-Mail versendet werden.
 
-Fehler einzelner Nutzer werden im Statusspeicher festgehalten und beim nächsten Durchlauf erneut versucht. Ein nicht gefundener oder mehrfach gefundener Kursname stoppt den Durchlauf ohne eine Teilfreischaltung. Deaktivierungen, Löschungen und nachträgliche Profiländerungen werden bewusst noch nicht synchronisiert.
+Fehler einzelner Nutzer werden im Statusspeicher festgehalten und beim nächsten Durchlauf erneut versucht. Pro Durchlauf werden höchstens 20 noch nicht abgeschlossene Nutzer verarbeitet. Damit bleibt der Dienst auch bei einer Erstfreischaltung klar unter dem LearningSuite-Limit von 120 API-Aufrufen pro Minute. Ein nicht gefundener oder mehrfach gefundener Kursname stoppt den Durchlauf ohne eine Teilfreischaltung. Deaktivierungen, Löschungen und nachträgliche Profiländerungen werden bewusst noch nicht synchronisiert.

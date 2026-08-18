@@ -1,26 +1,29 @@
 from __future__ import annotations
 
 from app.learningsuite import ProvisioningError
-from app.models import EligibleUser
+from app.models import EligibleUser, InvalidUser
 from app.provisioner import AcademyProvisioner
 
 
 class FakeReader:
-    def __init__(self, users: list[EligibleUser], invalid_ids: list[str] | None = None) -> None:
+    def __init__(self, users: list[EligibleUser], invalid_users: list[InvalidUser] | None = None) -> None:
         self.users = users
-        self.invalid_ids = invalid_ids or []
+        self.invalid_users_list = invalid_users or []
 
     def eligible_users(self) -> list[EligibleUser]:
         return self.users
 
-    def invalid_user_ids(self) -> list[str]:
-        return self.invalid_ids
+    def invalid_users(self) -> list[InvalidUser]:
+        return self.invalid_users_list
 
 
 class FakeState:
     def __init__(self) -> None:
         self.completed: list[tuple[str, str]] = []
         self.failures: list[tuple[str, str]] = []
+
+    def was_completed(self, user_id: str) -> bool:
+        return any(completed_user_id == user_id for completed_user_id, _ in self.completed)
 
     def record_completed(self, user_id: str, member_id: str, *, now_epoch: int) -> None:
         self.completed.append((user_id, member_id))
@@ -87,14 +90,72 @@ def test_failure_for_one_user_does_not_block_next_user() -> None:
     assert client.grants == [("member-user-2", "course-1")]
 
 
-def test_invalid_openwebui_name_is_recorded_without_calling_learningsuite() -> None:
+def test_invalid_openwebui_identity_is_recorded_without_calling_learningsuite() -> None:
     client = FakeClient()
     state = FakeState()
 
     result = AcademyProvisioner(
-        FakeReader([], ["user-1"]), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+        FakeReader([], [InvalidUser("user-1", "invalid_email")]),
+        client,
+        state,
+        "Einführung in die KAHLE-Vinci Nutzung",
+        now_epoch=lambda: 100,
     ).run_once()
 
     assert result == {"completed": 0, "failed": 1, "skipped": 0}
-    assert state.failures == [("user-1", "invalid_name")]
+    assert state.failures == [("user-1", "invalid_email")]
     assert client.created == []
+
+
+def test_completed_user_is_skipped_without_any_learningsuite_request() -> None:
+    user = EligibleUser("user-1", "amal@kahle.de", "Amal", "Remo", "user")
+    client = FakeClient()
+    state = FakeState()
+    state.record_completed("user-1", "member-user-1", now_epoch=90)
+
+    result = AcademyProvisioner(
+        FakeReader([user]), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+    ).run_once()
+
+    assert result == {"completed": 0, "failed": 0, "skipped": 1}
+    assert client.created == []
+    assert client.grants == []
+
+
+def test_new_users_are_bounded_to_a_rate_safe_batch() -> None:
+    users = [
+        EligibleUser(f"user-{number}", f"user-{number}@kahle.de", "Test", str(number), "user")
+        for number in range(21)
+    ]
+    client = FakeClient()
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+    ).run_once()
+
+    assert result == {"completed": 20, "failed": 0, "skipped": 1}
+    assert len(client.created) == 20
+
+
+def test_transport_failure_for_one_user_does_not_block_next_user() -> None:
+    class TransportFailingClient(FakeClient):
+        def find_or_create_member(self, user: EligibleUser) -> str:
+            if user.openwebui_id == "user-1":
+                raise ProvisioningError("learningsuite_request_failed")
+            return super().find_or_create_member(user)
+
+    users = [
+        EligibleUser("user-1", "a@kahle.de", "A", "One", "user"),
+        EligibleUser("user-2", "b@kahle.de", "B", "Two", "user"),
+    ]
+    client = TransportFailingClient()
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+    ).run_once()
+
+    assert result == {"completed": 1, "failed": 1, "skipped": 0}
+    assert state.failures == [("user-1", "learningsuite_request_failed")]
+    assert state.completed == [("user-2", "member-user-2")]

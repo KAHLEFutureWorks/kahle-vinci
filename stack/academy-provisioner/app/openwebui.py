@@ -3,29 +3,31 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from .models import EligibleUser
+from .models import EligibleUser, InvalidUser
 
 
 class SQLiteOpenWebUIUserReader:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
-        self._invalid_user_ids: list[str] = []
+        self._invalid_users: list[InvalidUser] = []
 
     def eligible_users(self) -> list[EligibleUser]:
         rows = self._read_rows()
         users: list[EligibleUser] = []
-        invalid_user_ids: list[str] = []
+        invalid_users: list[InvalidUser] = []
         for row in rows:
-            user = self._to_eligible_user(row)
+            user, error_code = self._to_eligible_user(row)
             if user is None:
-                invalid_user_ids.append(str(row["id"] or ""))
+                user_id = str(row["id"] or "").strip()
+                if user_id and error_code:
+                    invalid_users.append(InvalidUser(user_id, error_code))
             else:
                 users.append(user)
-        self._invalid_user_ids = [user_id for user_id in invalid_user_ids if user_id]
+        self._invalid_users = invalid_users
         return users
 
-    def invalid_user_ids(self) -> list[str]:
-        return list(self._invalid_user_ids)
+    def invalid_users(self) -> list[InvalidUser]:
+        return list(self._invalid_users)
 
     def _read_rows(self) -> list[sqlite3.Row]:
         database_uri = f"file:{self.database_path.resolve().as_posix()}?mode=ro"
@@ -44,20 +46,25 @@ class SQLiteOpenWebUIUserReader:
             connection.close()
 
     @staticmethod
-    def _to_eligible_user(row: sqlite3.Row) -> EligibleUser | None:
+    def _to_eligible_user(row: sqlite3.Row) -> tuple[EligibleUser | None, str | None]:
         user_id = str(row["id"] or "").strip()
         email = str(row["email"] or "").strip().lower()
         name_parts = str(row["name"] or "").split()
-        if not user_id or not SQLiteOpenWebUIUserReader._is_valid_email(email):
-            return None
+        if not user_id:
+            return None, None
+        if not SQLiteOpenWebUIUserReader._is_valid_email(email):
+            return None, "invalid_email"
         if len(name_parts) < 2:
-            return None
-        return EligibleUser(
-            openwebui_id=user_id,
-            email=email,
-            first_name=name_parts[0],
-            last_name=" ".join(name_parts[1:]),
-            role=str(row["role"] or "").strip().lower(),
+            return None, "invalid_name"
+        return (
+            EligibleUser(
+                openwebui_id=user_id,
+                email=email,
+                first_name=name_parts[0],
+                last_name=" ".join(name_parts[1:]),
+                role=str(row["role"] or "").strip().lower(),
+            ),
+            None,
         )
 
     @staticmethod

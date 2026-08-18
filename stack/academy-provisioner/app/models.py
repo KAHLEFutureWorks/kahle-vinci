@@ -10,3 +10,9 @@ class EligibleUser:
     first_name: str
     last_name: str
     role: str
+
+
+@dataclass(frozen=True)
+class InvalidUser:
+    openwebui_id: str
+    error_code: str
