@@ -343,4 +343,3 @@ Liefere Paketpfad, kleingeschriebene SHA-256, PowerShell-SCP-Befehl, Installatio
 - [ ] **Step 6: Abschluss ohne Commit oder Push**
 
 Zeige `git status --short`, trenne Voränderungen von dieser Umsetzung und bestätige, dass nichts committed oder gepusht wurde.
-

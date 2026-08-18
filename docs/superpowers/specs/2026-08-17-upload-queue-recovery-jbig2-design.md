@@ -25,4 +25,3 @@ Für automatisch abgeschlossene Upload-Jobs wird der vorhandene jobbezogene Inci
 - Recovery erzeugt Incident und Nutzerbenachrichtigung.
 - Ein nicht dekodierbares JBIG2-Bild lässt vorhandenen PDF-Text bestehen.
 - Backend-, Dokument-Worker- und Dashboard-Suiten bleiben grün.
-
