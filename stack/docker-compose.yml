@@ -377,6 +377,38 @@ services:
     networks:
       - appnet
 
+  academy-provisioner:
+    build:
+      context: ./academy-provisioner
+      dockerfile: Dockerfile
+    container_name: academy-provisioner
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      LEARNINGSUITE_API_KEY: ${LEARNINGSUITE_API_KEY:?LEARNINGSUITE_API_KEY is required}
+      LEARNINGSUITE_API_BASE_URL: ${LEARNINGSUITE_API_BASE_URL:-https://api.learningsuite.io/api/v1}
+      LEARNINGSUITE_COURSE_NAME: ${LEARNINGSUITE_COURSE_NAME:-Einführung in die KAHLE-Vinci Nutzung}
+      LEARNINGSUITE_PROVISION_INTERVAL_SECONDS: ${LEARNINGSUITE_PROVISION_INTERVAL_SECONDS:-60}
+      OPENWEBUI_DB_PATH: /open-webui-data/webui.db
+      LEARNINGSUITE_STATE_DB_PATH: /state/provisioning.sqlite3
+    volumes:
+      - open-webui:/open-webui-data:ro
+      - academy_provisioner_state:/state
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    networks:
+      - appnet
+
   n8n:
     image: n8nio/n8n:2.16.1
     container_name: n8n
@@ -486,6 +518,7 @@ services:
 volumes:
   open-webui:
     name: open-webui
+  academy_provisioner_state: {}
   qdrant_data: {}
   document_worker_data: {}
   clamav_data: {}

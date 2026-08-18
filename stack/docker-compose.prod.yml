@@ -76,6 +76,11 @@ services:
     cpus: 2.0
     pids_limit: 256
 
+  academy-provisioner:
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+
   n8n:
     mem_limit: 1500m
     cpus: 2.0
