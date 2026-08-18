@@ -43,7 +43,17 @@ def test_reader_reports_eligible_user_with_incomplete_name_as_invalid(tmp_path: 
     reader = SQLiteOpenWebUIUserReader(database)
 
     assert reader.eligible_users() == []
-    assert reader.invalid_users() == [InvalidUser("user-1", "invalid_name")]
+    assert reader.invalid_users() == [InvalidUser("user-1", "amal@kahle.de", "invalid_name")]
+
+
+def test_reader_converts_microsoft_surname_first_name_format(tmp_path: Path) -> None:
+    database = make_webui_db(
+        tmp_path, [("user-1", "Janssen.Jan", "janssen@kahle.de", "user")]
+    )
+
+    assert SQLiteOpenWebUIUserReader(database).eligible_users() == [
+        EligibleUser("user-1", "janssen@kahle.de", "Jan", "Janssen", "user")
+    ]
 
 
 def test_reader_reports_malformed_email_with_precise_error(tmp_path: Path) -> None:
@@ -53,7 +63,7 @@ def test_reader_reports_malformed_email_with_precise_error(tmp_path: Path) -> No
     reader = SQLiteOpenWebUIUserReader(database)
 
     assert reader.eligible_users() == []
-    assert reader.invalid_users() == [InvalidUser("user-1", "invalid_email")]
+    assert reader.invalid_users() == [InvalidUser("user-1", "amal-at-kahle", "invalid_email")]
 
 
 def test_state_records_completion_failure_and_heartbeat(tmp_path: Path) -> None:

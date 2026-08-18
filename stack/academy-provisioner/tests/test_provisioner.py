@@ -105,7 +105,7 @@ def test_invalid_openwebui_identity_is_recorded_without_calling_learningsuite() 
     state = FakeState()
 
     result = AcademyProvisioner(
-        FakeReader([], [InvalidUser("user-1", "invalid_email")]),
+        FakeReader([], [InvalidUser("user-1", "invalid", "invalid_email")]),
         client,
         state,
         "Einführung in die KAHLE-Vinci Nutzung",
@@ -219,6 +219,24 @@ def test_allowlist_processes_only_matching_email() -> None:
 
     assert result == {"completed": 1, "failed": 0, "skipped": 1}
     assert client.created == ["user-1"]
+
+
+def test_allowlist_skips_invalid_identity_outside_rollout_scope() -> None:
+    client = FakeClient()
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader([], [InvalidUser("user-2", "another.user@kahle.de", "invalid_name")]),
+        client,
+        state,
+        "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=frozenset({"janssen@kahle.de"}),
+        now_epoch=lambda: 100,
+    ).run_once()
+
+    assert result == {"completed": 0, "failed": 0, "skipped": 1}
+    assert state.failures == []
+    assert client.created == []
 
 
 def test_allowlist_decision_is_required_for_every_provisioner() -> None:

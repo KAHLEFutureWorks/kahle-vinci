@@ -20,7 +20,8 @@ class SQLiteOpenWebUIUserReader:
             if user is None:
                 user_id = str(row["id"] or "").strip()
                 if user_id and error_code:
-                    invalid_users.append(InvalidUser(user_id, error_code))
+                    email = str(row["email"] or "").strip().lower()
+                    invalid_users.append(InvalidUser(user_id, email, error_code))
             else:
                 users.append(user)
         self._invalid_users = invalid_users
@@ -49,19 +50,28 @@ class SQLiteOpenWebUIUserReader:
     def _to_eligible_user(row: sqlite3.Row) -> tuple[EligibleUser | None, str | None]:
         user_id = str(row["id"] or "").strip()
         email = str(row["email"] or "").strip().lower()
-        name_parts = str(row["name"] or "").split()
+        raw_name = str(row["name"] or "").strip()
+        name_parts = raw_name.split()
         if not user_id:
             return None, None
         if not SQLiteOpenWebUIUserReader._is_valid_email(email):
             return None, "invalid_email"
-        if len(name_parts) < 2:
-            return None, "invalid_name"
+        if len(name_parts) >= 2:
+            first_name = name_parts[0]
+            last_name = " ".join(name_parts[1:])
+        else:
+            surname, separator, first_name = raw_name.partition(".")
+            surname = surname.strip()
+            first_name = first_name.strip()
+            if not separator or not surname or not first_name or "." in first_name:
+                return None, "invalid_name"
+            last_name = surname
         return (
             EligibleUser(
                 openwebui_id=user_id,
                 email=email,
-                first_name=name_parts[0],
-                last_name=" ".join(name_parts[1:]),
+                first_name=first_name,
+                last_name=last_name,
                 role=str(row["role"] or "").strip().lower(),
             ),
             None,

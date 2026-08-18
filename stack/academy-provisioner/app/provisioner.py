@@ -58,7 +58,14 @@ class AcademyProvisioner:
     def run_once(self) -> dict[str, int]:
         result = {"completed": 0, "failed": 0, "skipped": 0}
         users = self.reader.eligible_users()
-        for user in self.reader.invalid_users():
+        invalid_users = self.reader.invalid_users()
+        if self.allowed_emails is not None:
+            allowed_invalid_users = [
+                user for user in invalid_users if user.email in self.allowed_emails
+            ]
+            result["skipped"] += len(invalid_users) - len(allowed_invalid_users)
+            invalid_users = allowed_invalid_users
+        for user in invalid_users:
             self.state.record_failure(user.openwebui_id, user.error_code, now_epoch=self._now())
             result["failed"] += 1
 

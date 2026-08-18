@@ -15,4 +15,5 @@ class EligibleUser:
 @dataclass(frozen=True)
 class InvalidUser:
     openwebui_id: str
+    email: str
     error_code: str
