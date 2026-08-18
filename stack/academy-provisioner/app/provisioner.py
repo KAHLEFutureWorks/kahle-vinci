@@ -27,6 +27,10 @@ class LearningSuiteClient(Protocol):
     def grant_course_access(self, member_id: str, course_id: str) -> None: ...
 
 
+class WelcomeMailer(Protocol):
+    def send_welcome(self, user: EligibleUser) -> None: ...
+
+
 class ProvisioningState(Protocol):
     def was_completed(self, user_id: str) -> bool: ...
 
@@ -35,6 +39,10 @@ class ProvisioningState(Protocol):
     def record_completed(self, user_id: str, member_id: str, *, now_epoch: int) -> None: ...
 
     def record_failure(self, user_id: str, error_code: str, *, now_epoch: int) -> None: ...
+
+    def welcome_was_sent(self, email: str) -> bool: ...
+
+    def record_welcome_sent(self, email: str, *, now_epoch: int) -> None: ...
 
 
 class AcademyProvisioner:
@@ -46,6 +54,7 @@ class AcademyProvisioner:
         course_name: str,
         *,
         allowed_emails: frozenset[str] | None,
+        welcome_mailer: WelcomeMailer | None = None,
         now_epoch: Callable[[], float] = time.time,
     ) -> None:
         self.reader = reader
@@ -53,6 +62,7 @@ class AcademyProvisioner:
         self.state = state
         self.course_name = course_name
         self.allowed_emails = allowed_emails
+        self.welcome_mailer = welcome_mailer
         self.now_epoch = now_epoch
 
     def run_once(self) -> dict[str, int]:
@@ -87,6 +97,9 @@ class AcademyProvisioner:
         course_id = self.client.resolve_course_id(self.course_name)
         for user in users_to_provision:
             try:
+                if self.welcome_mailer and not self.state.welcome_was_sent(user.email):
+                    self.welcome_mailer.send_welcome(user)
+                    self.state.record_welcome_sent(user.email, now_epoch=self._now())
                 member_id = self.client.find_or_create_member(user)
                 if not self.client.has_course_access(member_id, course_id):
                     self.client.grant_course_access(member_id, course_id)

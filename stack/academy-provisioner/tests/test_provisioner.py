@@ -23,6 +23,7 @@ class FakeState:
     def __init__(self) -> None:
         self.completed: list[tuple[str, str]] = []
         self.failures: list[tuple[str, str]] = []
+        self.welcome_sent: set[str] = set()
 
     def was_completed(self, user_id: str) -> bool:
         return any(completed_user_id == user_id for completed_user_id, _ in self.completed)
@@ -38,6 +39,12 @@ class FakeState:
 
     def record_failure(self, user_id: str, error_code: str, *, now_epoch: int) -> None:
         self.failures.append((user_id, error_code))
+
+    def welcome_was_sent(self, email: str) -> bool:
+        return email in self.welcome_sent
+
+    def record_welcome_sent(self, email: str, *, now_epoch: int) -> None:
+        self.welcome_sent.add(email)
 
 
 class FakeClient:
@@ -58,6 +65,65 @@ class FakeClient:
 
     def grant_course_access(self, member_id: str, course_id: str) -> None:
         self.grants.append((member_id, course_id))
+
+
+class FakeWelcomeMailer:
+    def __init__(self) -> None:
+        self.sent: list[EligibleUser] = []
+
+    def send_welcome(self, user: EligibleUser) -> None:
+        self.sent.append(user)
+
+
+def test_first_role_release_sends_one_welcome_before_academy_provisioning() -> None:
+    user = EligibleUser("user-1", "reschke@kahle.de", "Ralf", "Reschke", "user")
+    client = FakeClient()
+    state = FakeState()
+    mailer = FakeWelcomeMailer()
+    provisioner = AcademyProvisioner(
+        FakeReader([user]),
+        client,
+        state,
+        "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=frozenset({"reschke@kahle.de"}),
+        welcome_mailer=mailer,
+        now_epoch=lambda: 100,
+    )
+
+    first = provisioner.run_once()
+    second = provisioner.run_once()
+
+    assert first == {"completed": 1, "failed": 0, "skipped": 0}
+    assert second == {"completed": 0, "failed": 0, "skipped": 1}
+    assert mailer.sent == [user]
+    assert state.welcome_sent == {"reschke@kahle.de"}
+    assert client.created == ["user-1"]
+
+
+def test_failed_welcome_mail_blocks_academy_email_and_retries_later() -> None:
+    class FailingWelcomeMailer(FakeWelcomeMailer):
+        def send_welcome(self, user: EligibleUser) -> None:
+            raise ProvisioningError("welcome_mail_failed")
+
+    user = EligibleUser("user-1", "reschke@kahle.de", "Ralf", "Reschke", "user")
+    client = FakeClient()
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader([user]),
+        client,
+        state,
+        "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=frozenset({"reschke@kahle.de"}),
+        welcome_mailer=FailingWelcomeMailer(),
+        now_epoch=lambda: 100,
+    ).run_once()
+
+    assert result == {"completed": 0, "failed": 1, "skipped": 0}
+    assert state.failures == [("user-1", "welcome_mail_failed")]
+    assert state.welcome_sent == set()
+    assert client.created == []
+    assert client.grants == []
 
 
 def test_existing_course_access_never_sends_another_course_email() -> None:

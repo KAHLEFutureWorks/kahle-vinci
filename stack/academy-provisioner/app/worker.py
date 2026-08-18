@@ -12,6 +12,7 @@ from .learningsuite import ProvisioningError, RequestsLearningSuiteClient
 from .openwebui import SQLiteOpenWebUIUserReader
 from .provisioner import AcademyProvisioner
 from .state import SQLiteProvisioningStateStore
+from .welcome_mail import MicrosoftGraphWelcomeMailer
 
 
 class CycleRunner(Protocol):
@@ -68,6 +69,12 @@ def main() -> int:
         state,
         config.course_name,
         allowed_emails=config.allowed_emails,
+        welcome_mailer=MicrosoftGraphWelcomeMailer(
+            os.environ["KB_MAIL_TENANT_ID"],
+            os.environ["KB_MAIL_CLIENT_ID"],
+            os.environ["KB_MAIL_CLIENT_SECRET"],
+            os.environ["VINCI_WELCOME_MAIL_SENDER"],
+        ),
     )
     run_forever(provisioner, state, interval_seconds=config.interval_seconds)
     return 0

@@ -72,6 +72,24 @@ class SQLiteProvisioningStateStore:
                 (str(epoch_seconds),),
             )
 
+    def welcome_was_sent(self, email: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT sent_at FROM welcome_mail_state WHERE email = ?",
+                (email.strip().lower(),),
+            ).fetchone()
+        return bool(row and row["sent_at"] is not None)
+
+    def record_welcome_sent(self, email: str, *, now_epoch: int) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO welcome_mail_state(email, sent_at) VALUES (?, ?)
+                ON CONFLICT(email) DO UPDATE SET sent_at=excluded.sent_at
+                """,
+                (email.strip().lower(), now_epoch),
+            )
+
     def heartbeat_epoch(self) -> int | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -97,6 +115,14 @@ class SQLiteProvisioningStateStore:
                 CREATE TABLE IF NOT EXISTS worker_state (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS welcome_mail_state (
+                    email TEXT PRIMARY KEY,
+                    sent_at INTEGER NOT NULL
                 )
                 """
             )

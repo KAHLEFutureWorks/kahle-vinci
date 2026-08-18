@@ -71,9 +71,11 @@ def test_state_records_completion_failure_and_heartbeat(tmp_path: Path) -> None:
 
     state.record_completed("user-1", "member-1", now_epoch=100)
     state.record_failure("user-2", "invalid_name", now_epoch=101)
+    state.record_welcome_sent("AMAL@KAHLE.DE", now_epoch=101)
     state.record_heartbeat(102)
 
     assert state.was_completed("user-1") is True
     assert state.member_id("user-1") == "member-1"
     assert state.last_error("user-2") == "invalid_name"
+    assert state.welcome_was_sent("amal@kahle.de") is True
     assert state.heartbeat_epoch() == 102
