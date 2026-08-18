@@ -120,6 +120,33 @@ def test_manager_delegation_and_separate_read_upload_access():
         portal.require_access("employee", kb_id, "upload")
 
 
+def test_employee_cannot_be_assigned_as_approval_delegate():
+    with tempfile.TemporaryDirectory() as directory:
+        portal = portal_at(Path(directory))
+        bootstrap(portal)
+
+        try:
+            portal.assign_delegate("admin", "manager", "employee")
+            raise AssertionError("an employee must not become an approval delegate")
+        except module.GovernanceError as exc:
+            assert str(exc) == "delegate_approval_role_required"
+
+
+def test_manager_assignment_rejects_direct_and_indirect_cycles():
+    with tempfile.TemporaryDirectory() as directory:
+        portal = portal_at(Path(directory))
+        bootstrap(portal)
+        portal.sync_identity(user_id="manager-2", email="manager-2@kahle.de", display_name="Leitung 2")
+        portal.set_role("owner", "manager-2", "manager")
+        portal.assign_manager("admin", "manager", "manager-2")
+
+        try:
+            portal.assign_manager("admin", "manager-2", "manager")
+            raise AssertionError("a reciprocal manager assignment must be rejected")
+        except module.GovernanceError as exc:
+            assert str(exc) == "manager_cycle_not_allowed"
+
+
 def test_admin_prepares_knowledgebase_change_portal_admin_decides():
     with tempfile.TemporaryDirectory() as directory:
         portal = portal_at(Path(directory))

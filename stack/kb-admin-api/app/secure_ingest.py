@@ -13,7 +13,7 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 import requests
 from pypdf import PdfReader, PdfWriter
@@ -55,7 +55,10 @@ class MalwareScanner(Protocol):
 
 
 class MarkdownConverter(Protocol):
-    def convert(self, filename: str, data: bytes, title: str) -> str: ...
+    def convert(
+        self, filename: str, data: bytes, title: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> str: ...
 
 
 class SecureFileInspector:
@@ -296,10 +299,68 @@ class ClamAVScanner:
 
 
 class DocumentWorkerAdapter:
-    def __init__(self, base_url: str, api_key: str = "", timeout: float = 300.0, retries: int = 3):
-        self.base_url, self.api_key, self.timeout, self.retries = base_url.rstrip("/"), api_key, timeout, max(1, retries)
+    PDF_PAGES_PER_CHUNK = 50
+    supports_conversion_progress = True
 
-    def convert(self, filename: str, data: bytes, title: str) -> str:
+    def __init__(
+        self, base_url: str, api_key: str = "", timeout: float = 300.0,
+        retries: int = 3, pdf_pages_per_chunk: int = PDF_PAGES_PER_CHUNK,
+    ):
+        self.base_url, self.api_key, self.timeout, self.retries = base_url.rstrip("/"), api_key, timeout, max(1, retries)
+        self.pdf_pages_per_chunk = max(1, pdf_pages_per_chunk)
+
+    def convert(
+        self, filename: str, data: bytes, title: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> str:
+        if Path(filename).suffix.lower() == ".pdf" and data.startswith(b"%PDF-"):
+            return self._convert_pdf_in_chunks(filename, data, title, progress_callback)
+        return self._convert_once(filename, data, title)
+
+    def _convert_pdf_in_chunks(
+        self, filename: str, data: bytes, title: str,
+        progress_callback: Callable[[int, int], None] | None,
+    ) -> str:
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            page_count = len(reader.pages)
+        except Exception as exc:
+            raise IngestError("document_conversion_failed") from exc
+        if not page_count:
+            raise IngestError("document_conversion_empty")
+
+        chunk_ranges = list(range(0, page_count, self.pdf_pages_per_chunk))
+        parts: list[str] = []
+        source_name = Path(filename)
+        for chunk_number, start in enumerate(chunk_ranges, start=1):
+            end = min(start + self.pdf_pages_per_chunk, page_count)
+            writer = PdfWriter()
+            for page in reader.pages[start:end]:
+                writer.add_page(page)
+            payload = io.BytesIO()
+            writer.write(payload)
+            chunk_filename = (
+                f"{source_name.stem}__seiten_{start + 1:04d}-{end:04d}{source_name.suffix}"
+            )
+            try:
+                markdown = self._convert_once(chunk_filename, payload.getvalue(), title)
+            except IngestError as exc:
+                if str(exc).startswith("document_conversion_failed"):
+                    raise IngestError(f"document_conversion_failed:pages={start + 1}-{end}") from exc
+                raise
+            # The document worker numbers pages within each input file. Restore
+            # source-page numbering after joining the independently converted blocks.
+            markdown = re.sub(
+                r"<!-- Seite (\d+) -->",
+                lambda match: f"<!-- Seite {start + int(match.group(1))} -->",
+                markdown,
+            )
+            parts.append(f"<!-- PDF-Seiten {start + 1}-{end} -->\n\n{markdown.strip()}")
+            if progress_callback:
+                progress_callback(chunk_number, len(chunk_ranges))
+        return "\n\n".join(parts).strip() + "\n"
+
+    def _convert_once(self, filename: str, data: bytes, title: str) -> str:
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         last_error: requests.RequestException | None = None
         for attempt in range(self.retries):
@@ -376,12 +437,18 @@ class SecureIngestPipeline:
         self.injection_inspector = injection_inspector or PromptInjectionInspector()
         self.quality_inspector = ConversionQualityInspector()
 
-    def ingest(self, document_id: str, version_id: str, filename: str, data: bytes, title: str) -> IngestResult:
+    def ingest(
+        self, document_id: str, version_id: str, filename: str, data: bytes, title: str,
+        conversion_progress: Callable[[int, int], None] | None = None,
+    ) -> IngestResult:
         inspected = self.inspector.inspect(filename, data)
         self.scanner.scan(filename, data)
         original = self.storage.store(document_id, version_id, inspected.extension, data)
         try:
-            markdown = self.converter.convert(filename, data, title)
+            if conversion_progress and getattr(self.converter, "supports_conversion_progress", False):
+                markdown = self.converter.convert(filename, data, title, conversion_progress)
+            else:
+                markdown = self.converter.convert(filename, data, title)
             injection = self.injection_inspector.inspect(markdown)
             conversion_quality, conversion_issues = self.quality_inspector.inspect(markdown)
             markdown_path = self.storage.store_markdown(original, markdown)

@@ -197,7 +197,8 @@ test("meets the PRD accessibility and plain-language requirements", async () => 
   assert.match(portal, /Zur Freigabe durch dich/);
   assert.match(portal, /Danach geht der Vorgang zur Freigabe/);
   // Freigabeknöpfe erscheinen nie am eigenen Vorgang.
-  assert.match(portal, /!own && canDecide && task\.status\.includes\("approval"\)/);
+  assert.match(portal, /!own && canDecide && hasReviewDecision/);
+  assert.match(portal, /task\.status\.includes\("approval"\) \|\| task\.status === "needs_correction"/);
 
   // PRD 26.2: keine Fachbegriffe für normale Nutzer.
   assert.match(portal, /confidentialityText\[result\.confidentiality\]/);
@@ -371,6 +372,7 @@ test("offers searchable manager and delegate assignment", async () => {
   assert.match(portal, /Zugeordnete Vertretung/);
   assert.match(portal, /Name oder E-Mail suchen/);
   assert.match(portal, /Kein passender Benutzer gefunden/);
+  assert.match(portal, /\["manager", "admin", "portal_admin"\]\.includes\(user\.role\)/);
 });
 
 test("shows version candidates to uploaders and reviewers", async () => {
@@ -382,4 +384,25 @@ test("shows version candidates to uploaders and reviewers", async () => {
   assert.match(portal, /Als eigenständiges Dokument vorschlagen/);
   assert.match(portal, /Wirklich als eigenständiges Dokument anlegen/);
   assert.doesNotMatch(portal, /match\.version_candidate && !match\.has_conflict/);
+});
+
+test("shows the persistent upload queue and assigns technical cases to an upload", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /Meine laufenden Uploads/);
+  assert.match(portal, /Position \$\{item\.position\}/);
+  assert.match(portal, /Auftrags-ID:/);
+  assert.match(portal, /Hochgeladen von:/);
+  assert.match(portal, /Vorgesehener Owner:/);
+  assert.match(portal, /Betroffener Seitenbereich:/);
+  assert.match(portal, /upload_worker_interrupted/);
+});
+
+test("uses German upload messages and offers decisions for preparation review", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /failed:\s*"Verarbeitung fehlgeschlagen"/);
+  assert.match(portal, /upload_worker_interrupted:\s*"Die Verarbeitung wurde unterbrochen/);
+  assert.match(portal, /task\.status === "needs_correction"/);
+  assert.match(portal, /Ablehnen/);
+  assert.match(portal, /Weiterleiten/);
+  assert.match(portal, /Freigeben/);
 });

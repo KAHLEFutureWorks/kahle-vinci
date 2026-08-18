@@ -115,10 +115,35 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
 
 
 class IonosEmbeddingProvider:
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60, retries: int = 3):
-        self.base_url, self.api_key, self.model, self.timeout, self.retries = base_url.rstrip("/"), api_key, model, timeout, max(1, retries)
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60,
+                 retries: int = 3, max_batch_texts: int = 8,
+                 max_batch_characters: int = 60_000):
+        self.base_url, self.api_key, self.model = base_url.rstrip("/"), api_key, model
+        self.timeout, self.retries = timeout, max(1, retries)
+        self.max_batch_texts = max(1, max_batch_texts)
+        self.max_batch_characters = max(1, max_batch_characters)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        batch: list[str] = []
+        batch_characters = 0
+        for text in texts:
+            # A single excerpt is already bounded by GlobalDocumentAnalyzer.
+            # Split the corpus request further so a growing knowledge base never
+            # exceeds the provider's aggregate token/payload limit.
+            if batch and (
+                len(batch) >= self.max_batch_texts
+                or batch_characters + len(text) > self.max_batch_characters
+            ):
+                vectors.extend(self._embed_batch(batch))
+                batch, batch_characters = [], 0
+            batch.append(text)
+            batch_characters += len(text)
+        if batch:
+            vectors.extend(self._embed_batch(batch))
+        return vectors
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         last_error: Exception | None = None
         for attempt in range(self.retries):
             try:

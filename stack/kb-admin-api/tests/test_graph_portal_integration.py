@@ -20,6 +20,7 @@ class FakeGraphClient:
 def test_outlook_absence_sync_uses_existing_delegate_and_preserves_manual_entries():
     with tempfile.TemporaryDirectory() as directory:
         governance, _, _ = setup(Path(directory))
+        governance.set_role("portal", "employee", "manager")
         governance.assign_delegate(
             "admin", "manager", "employee", valid_from="2026-08-10", valid_until="2026-08-25",
         )

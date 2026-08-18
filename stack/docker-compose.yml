@@ -291,6 +291,64 @@ services:
     networks:
       - appnet
 
+  kb-upload-worker:
+    build:
+      context: ./kb-admin-api
+      dockerfile: Dockerfile
+    container_name: kb-upload-worker
+    restart: unless-stopped
+    user: "${KB_ADMIN_UID:-1000}:${KB_ADMIN_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["python", "-m", "app.upload_worker"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      KB_ROOT: /knowledgebases
+      KB_STATE_PATH: /state/kb-sync-state.json
+      QDRANT_URL: http://qdrant:6333
+      OPENWEBUI_URL: http://open-webui:8080
+      KB_SYNC_URL: http://kb-sync:8093
+      DOCUMENT_WORKER_URL: http://document-worker:8090
+      DOCUMENT_WORKER_API_KEY: ${DOC_WORKER_API_KEY:?DOC_WORKER_API_KEY is required}
+      KB_CLAMAV_HOST: clamav
+      KB_CLAMAV_PORT: "3310"
+      IONOS_OPENAI_BASE_URL: ${IONOS_OPENAI_BASE_URL:-https://openai.inference.de-txl.ionos.com/v1}
+      IONOS_API_KEY: ${IONOS_API_TOKEN:-${IONOS_API_KEY:?IONOS_API_TOKEN or IONOS_API_KEY is required}}
+      IONOS_EMBEDDING_MODEL: ${IONOS_EMBEDDING_MODEL:-BAAI/bge-m3}
+      IONOS_CHAT_MODEL_DEFAULT: ${IONOS_CHAT_MODEL_DEFAULT:-mistralai/Mistral-Small-24B-Instruct}
+      KB_ADMIN_COLLECTIONS: kahleallgemein,kahlekontext,kahlerichtlinien
+      KB_ADMIN_MAX_UPLOAD_BYTES: "52428800"
+      KB_PORTAL_DB_PATH: /portal-data/wissensportal.sqlite3
+      KB_PORTAL_FILES_ROOT: /portal-data/files
+      KB_PORTAL_AUTO_ACTIVATION_ENABLED: "${KB_PORTAL_AUTO_ACTIVATION_ENABLED:-false}"
+      PORTAL_ALLOWED_EMAIL_DOMAINS: ${PORTAL_ALLOWED_EMAIL_DOMAINS:-kahle.de}
+      KB_ADMIN_TRASH_RETENTION_DAYS: "30"
+      KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      KB_ADMIN_UNLOCK_CODE_HASH: ${KB_ADMIN_UNLOCK_CODE_HASH:-}
+      KB_ADMIN_UNLOCK_SESSION_SECRET: ${KB_ADMIN_UNLOCK_SESSION_SECRET:-}
+      KB_ADMIN_UNLOCK_TTL_SECONDS: ${KB_ADMIN_UNLOCK_TTL_SECONDS:-28800}
+      KB_ADMIN_UNLOCK_MAX_ATTEMPTS: ${KB_ADMIN_UNLOCK_MAX_ATTEMPTS:-5}
+      KB_ADMIN_UNLOCK_BLOCK_SECONDS: ${KB_ADMIN_UNLOCK_BLOCK_SECONDS:-900}
+    volumes:
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/state:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-portal-data:/portal-data"
+    depends_on:
+      kb-admin-api:
+        condition: service_healthy
+      kb-sync:
+        condition: service_started
+      document-worker:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    networks:
+      - appnet
+
   kb-backup:
     profiles: ["operations"]
     build:

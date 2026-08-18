@@ -206,6 +206,10 @@ type UploadJob = {
   status: string;
   step: string;
   progress: number;
+  position?: number;
+  title?: string;
+  original_filename?: string;
+  created_at?: string;
   result?: UploadResult;
   error_code?: string;
 };
@@ -496,7 +500,32 @@ const statusText: Record<string, string> = {
   knowledgebase_archive: "Wissensbereich archiviert",
   knowledgebase_delete: "Wissensbereich gelöscht",
   clarification_requested: "Rückfrage zum Dokument",
+  queued: "Wartet auf Verarbeitung",
+  processing: "Wird verarbeitet",
+  completed: "Abgeschlossen",
+  failed: "Verarbeitung fehlgeschlagen",
+  error: "Technischer Fehler",
+  open: "Offen",
+  resolved: "Gelöst",
 };
+
+const notificationReasonText: Record<string, string> = {
+  upload_worker_interrupted:
+    "Die Verarbeitung wurde unterbrochen. Bitte lade das Dokument erneut hoch.",
+  document_conversion_unavailable:
+    "Das Dokument konnte technisch nicht vollständig aufbereitet werden.",
+  document_conversion_failed:
+    "Das Dokument konnte technisch nicht vollständig aufbereitet werden.",
+  required_check_unavailable:
+    "Eine erforderliche technische Prüfung war nicht verfügbar.",
+};
+
+function notificationReason(reason: string) {
+  const technicalCode = Object.keys(notificationReasonText).find((code) =>
+    reason.includes(code),
+  );
+  return technicalCode ? notificationReasonText[technicalCode] : reason;
+}
 
 const RUNNING_UPLOAD_JOB = "running-upload-job";
 
@@ -660,12 +689,20 @@ const errorText: Record<string, string> = {
 
 function friendlyError(cause: unknown, fallback: string) {
   const raw = cause instanceof Error ? cause.message : "";
+  if (raw === "delegate_approval_role_required")
+    return "Als Vertretung können nur Führungskräfte, Admins oder Portal-Admins ausgewählt werden.";
+  if (raw === "manager_cycle_not_allowed")
+    return "Diese Zuordnung würde einen Kreis zwischen Führungskräften erzeugen und kann nicht gespeichert werden.";
+  if (raw === "self_approval_not_allowed")
+    return "Ein eigener Upload darf auch im Vertretungsfall nicht selbst freigegeben werden.";
   if (raw === "embedded_executable_content_not_allowed")
     return "Die Datei enthält eingebettete ausführbare Inhalte oder aktive Anhänge und wurde aus Sicherheitsgründen blockiert. Bitte entferne diese Inhalte und lade eine bereinigte Datei erneut hoch.";
   if (raw === "pdf_page_limit_exceeded")
     return "Die PDF-Datei umfasst mehr als 1.000 Seiten. Bitte teile sie in mehrere fachlich sinnvolle Dokumente auf.";
   if (raw === "office_page_limit_exceeded")
     return "Die Office-Datei überschreitet die zulässige Aufbereitungsgröße. Bitte teile sie in mehrere fachlich sinnvolle Dokumente auf.";
+  if (/^document_conversion_unavailable:/.test(raw))
+    return "Das Dokument konnte nicht vollständig aufbereitet werden. Ein technischer Fall wurde automatisch angelegt. Bitte versuche es später erneut.";
   if (/^required_check_unavailable:/.test(raw))
     return "Die Datei wurde aufbereitet, aber die erforderliche Ähnlichkeitsanalyse war nicht erreichbar. Ein technischer Fall wurde automatisch angelegt. Bitte versuche es später erneut.";
   if (raw === "embedding_service_unavailable")
@@ -1080,7 +1117,7 @@ function Notifications({
                 {item.reason && (
                   <p>
                     <strong>{item.status === "clarification_requested" ? "Rückfrage:" : "Begründung:"}</strong>{" "}
-                    {item.reason}
+                    {notificationReason(item.reason)}
                   </p>
                 )}
                 <small>{new Date(item.created_at).toLocaleString("de-DE")}</small>
@@ -1278,6 +1315,7 @@ function Upload({
     [message, setMessage] = useState("");
   const [securityReviewAvailable, setSecurityReviewAvailable] = useState(false);
   const [job, setJob] = useState<UploadJob | null>(null);
+  const [activeJobs, setActiveJobs] = useState<UploadJob[]>([]);
   const [ownerCandidates, setOwnerCandidates] = useState<PortalUser[]>([]),
     [canProposeOwner, setCanProposeOwner] = useState(false),
     [ownerUserId, setOwnerUserId] = useState(session.user_id),
@@ -1328,6 +1366,18 @@ function Upload({
     const timer = window.setTimeout(() => void follow(running), 0);
     return () => window.clearTimeout(timer);
   }, [follow]);
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const items = await api<UploadJob[]>("/portal/upload-jobs");
+        if (active) setActiveJobs(items);
+      } catch { /* Die eigentliche Upload-Anzeige bleibt unabhängig verfügbar. */ }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   function chooseFile(next: File | null) {
     const allowedExtensions = ["pdf", "docx", "xlsx", "pptx", "txt", "md"];
     const extension = next?.name.split(".").pop()?.toLowerCase();
@@ -1464,6 +1514,21 @@ function Upload({
         title="Dokument bereitstellen"
         text="Du legst nur die Datei ab. Das Portal prüft Sicherheit, Aufbereitung und ähnliche Inhalte."
       />
+      {!!activeJobs.length && (
+        <div className="wp-alert" role="status">
+          <LoaderCircle className="spin" />
+          <div>
+            <strong>Meine laufenden Uploads</strong>
+            {activeJobs.map((item) => (
+              <span key={item.job_id}>
+                {item.title || item.original_filename || "Dokument"}: {item.status === "queued"
+                  ? `Warteschlange${item.position ? ` · Position ${item.position}` : ""}`
+                  : `${stepText[item.step] || "Verarbeitung"} · ${item.progress}%`}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       {!result ? (
         <div className="wp-form" data-visibility-policy="knowledgebase-rights">
           <label
@@ -1628,8 +1693,10 @@ function Upload({
               <div>
                 <strong>{stepText[job.step] || stepText.uploaded}</strong>
                 <span>
-                  {job.progress}% abgeschlossen – du kannst diese Seite
-                  verlassen, die Prüfung läuft weiter.
+                  {job.status === "queued"
+                    ? `Warteschlange${job.position ? ` · Position ${job.position}` : ""}`
+                    : `${job.progress}% abgeschlossen`} – du kannst diese Seite verlassen,
+                  die Prüfung läuft weiter.
                 </span>
               </div>
             </div>
@@ -2136,6 +2203,8 @@ function Tasks({
       .filter((base) => selectedTargetIds.includes(base.knowledgebase_id))
       .map((base) => base.label);
     const targetIsSaving = Boolean(targetBusy[task.case_id]);
+    const hasReviewDecision =
+      task.status.includes("approval") || task.status === "needs_correction";
     return (
       <article key={task.case_id}>
         <div className="wp-task-icon">
@@ -2290,7 +2359,7 @@ function Tasks({
             >
               Original und Markdown prüfen
             </button>
-            {!own && task.status.includes("approval") && (
+            {!own && hasReviewDecision && (
               <button
                 className="wp-secondary"
                 disabled={inquiryBusy}
@@ -2361,7 +2430,7 @@ function Tasks({
             </p>
           )}
         </div>
-        {!own && canDecide && task.status.includes("approval") && (
+        {!own && canDecide && hasReviewDecision && (
           <div className="wp-task-actions">
             <textarea
               placeholder="Begründung – nur bei Ablehnung oder Weiterleitung erforderlich"
@@ -2942,7 +3011,11 @@ function UserAdmin({
                     label="Zugeordnete Vertretung"
                     emptyLabel="Keine Vertretung"
                     value={delegateId}
-                    users={users.filter((user) => user.active && user.user_id !== current.user_id)}
+                    users={users.filter((user) =>
+                      user.active &&
+                      user.user_id !== current.user_id &&
+                      ["manager", "admin", "portal_admin"].includes(user.role)
+                    )}
                     onChange={(userId) => { setDelegateId(userId); setDirty(true); }}
                   />
                 )}
@@ -3067,7 +3140,10 @@ function UserAdmin({
               <option value="">Bitte wählen</option>
               {users
                 .filter(
-                  (user) => user.active && user.user_id !== absenceManager,
+                  (user) =>
+                    user.active &&
+                    user.user_id !== absenceManager &&
+                    ["manager", "admin", "portal_admin"].includes(user.role),
                 )
                 .map((user) => (
                   <option key={user.user_id} value={user.user_id}>
@@ -4589,6 +4665,8 @@ function technicalIncident(item: Pick<QualityRow, "summary" | "diagnostic_json">
   const reasons: Record<string, string> = {
     embedding_service_unavailable: "Der Dienst für die automatische Ähnlichkeitsanalyse war nicht erreichbar oder konnte das Dokument nicht verarbeiten.",
     RetrievalError: "Die Wissenssuche konnte eine Anfrage technisch nicht abschließen.",
+    document_conversion_failed: "Ein PDF-Block konnte nicht vollständig in Text umgewandelt werden.",
+    upload_worker_interrupted: "Die Verarbeitung wurde durch einen Neustart oder Abbruch des Upload-Dienstes unterbrochen.",
   };
   return { diagnostic, reason: reasons[code] || `Technischer Fehlercode: ${code}` };
 }
@@ -4675,6 +4753,12 @@ function QualityCasesView({ data, done }: { data: QualityCases; done: () => Prom
                     <span><strong>Was ist passiert:</strong> {technicalIncident(item).reason}</span>
                     {technicalIncident(item).diagnostic.title && <span><strong>Dokument:</strong> {String(technicalIncident(item).diagnostic.title)}</span>}
                     {technicalIncident(item).diagnostic.original_filename && <span><strong>Datei:</strong> {String(technicalIncident(item).diagnostic.original_filename)}</span>}
+                    {technicalIncident(item).diagnostic.uploaded_by_user_id && <span><strong>Hochgeladen von:</strong> {String(technicalIncident(item).diagnostic.uploaded_by_user_id)}</span>}
+                    {technicalIncident(item).diagnostic.intended_owner_user_id && <span><strong>Vorgesehener Owner:</strong> {String(technicalIncident(item).diagnostic.intended_owner_user_id)}</span>}
+                    {technicalIncident(item).diagnostic.knowledgebase_ids && <span><strong>Wissensbereiche:</strong> {(technicalIncident(item).diagnostic.knowledgebase_ids as unknown[]).join(", ")}</span>}
+                    {technicalIncident(item).diagnostic.file_size_bytes && <span><strong>Dateigröße:</strong> {(Number(technicalIncident(item).diagnostic.file_size_bytes) / 1048576).toLocaleString("de-DE", { maximumFractionDigits: 1 })} MB</span>}
+                    {technicalIncident(item).diagnostic.page_range && <span><strong>Betroffener Seitenbereich:</strong> {String(technicalIncident(item).diagnostic.page_range)}</span>}
+                    {technicalIncident(item).diagnostic.job_id && <span><strong>Auftrags-ID:</strong> {String(technicalIncident(item).diagnostic.job_id)}</span>}
                     <span>Dieser Fall wurde automatisch durch das System erzeugt.</span>
                   </>
                 )}

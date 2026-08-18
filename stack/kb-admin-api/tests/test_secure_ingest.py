@@ -3,7 +3,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 
 from app.secure_ingest import (
     ConversionQualityInspector,
@@ -160,6 +160,69 @@ def test_document_worker_retries_transient_outage_before_success(monkeypatch):
     markdown = DocumentWorkerAdapter("http://worker", retries=3).convert("test.docx", b"data", "Test")
     assert markdown.startswith("# Ergebnis")
     assert len(attempts) == 3
+
+
+def test_document_worker_converts_large_pdf_in_ordered_page_blocks(monkeypatch):
+    import app.secure_ingest as module
+
+    source = io.BytesIO()
+    writer = PdfWriter()
+    for _ in range(120):
+        writer.add_blank_page(width=200, height=200)
+    writer.write(source)
+
+    converted_ranges = []
+    class Response:
+        def __init__(self, markdown): self.content = markdown.encode()
+        def raise_for_status(self): return None
+
+    def post(*args, **kwargs):
+        filename, payload, _ = kwargs["files"]["files"]
+        pages = len(PdfReader(io.BytesIO(payload)).pages)
+        converted_ranges.append((filename, pages))
+        markdown = "\n".join(f"<!-- Seite {page} -->\nBlock {page}" for page in range(1, pages + 1))
+        return Response(markdown)
+
+    monkeypatch.setattr(module.requests, "post", post)
+    progress = []
+    markdown = DocumentWorkerAdapter(
+        "http://worker", retries=1, pdf_pages_per_chunk=50,
+    ).convert("handbuch.pdf", source.getvalue(), "Handbuch", lambda done, total: progress.append((done, total)))
+
+    assert [pages for _, pages in converted_ranges] == [50, 50, 20]
+    assert [item[0] for item in converted_ranges] == [
+        "handbuch__seiten_0001-0050.pdf", "handbuch__seiten_0051-0100.pdf", "handbuch__seiten_0101-0120.pdf",
+    ]
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+    assert [int(page) for page in __import__("re").findall(r"<!-- Seite (\d+) -->", markdown)] == list(range(1, 121))
+
+
+def test_document_worker_reports_the_failed_pdf_page_block(monkeypatch):
+    import app.secure_ingest as module
+
+    source = io.BytesIO()
+    writer = PdfWriter()
+    for _ in range(60):
+        writer.add_blank_page(width=200, height=200)
+    writer.write(source)
+
+    calls = []
+    class Response:
+        content = b"<!-- Seite 1 -->\nErfolg"
+        def raise_for_status(self): return None
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise module.requests.Timeout("block timeout")
+        return Response()
+
+    monkeypatch.setattr(module.requests, "post", post)
+    with pytest.raises(IngestError, match=r"document_conversion_failed:pages=51-60"):
+        DocumentWorkerAdapter("http://worker", retries=1, pdf_pages_per_chunk=50).convert(
+            "handbuch.pdf", source.getvalue(), "Handbuch",
+        )
+    assert len(calls) == 2
 
 
 def test_screenshot_inspector_trusts_content_not_the_filename():

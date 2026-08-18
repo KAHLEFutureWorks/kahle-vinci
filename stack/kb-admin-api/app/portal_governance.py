@@ -369,6 +369,17 @@ class PortalGovernance:
             if employee.role == "admin" and manager.role != "portal_admin":
                 raise GovernanceError("admin_portal_manager_required")
         with self.store.connect() as db:
+            next_manager_id = manager_user_id
+            seen_manager_ids: set[str] = set()
+            while next_manager_id:
+                if next_manager_id == employee_user_id or next_manager_id in seen_manager_ids:
+                    raise GovernanceError("manager_cycle_not_allowed")
+                seen_manager_ids.add(next_manager_id)
+                row = db.execute(
+                    "SELECT manager_user_id FROM portal_users WHERE user_id=?",
+                    (next_manager_id,),
+                ).fetchone()
+                next_manager_id = row["manager_user_id"] if row else None
             db.execute(
                 "UPDATE portal_users SET manager_user_id = ?, updated_at = ? WHERE user_id = ?",
                 (manager_user_id, self.now(), employee_user_id),
@@ -397,6 +408,8 @@ class PortalGovernance:
         delegate = self.identity(delegate_user_id)
         if manager.role not in {"manager", "admin", "portal_admin"} or not delegate.active:
             raise GovernanceError("invalid_delegate")
+        if delegate.role not in {"manager", "admin", "portal_admin"}:
+            raise GovernanceError("delegate_approval_role_required")
         if manager_user_id == delegate_user_id:
             raise GovernanceError("self_delegate_not_allowed")
         with self.store.connect() as db:
@@ -444,6 +457,8 @@ class PortalGovernance:
         actor = self.identity(actor_user_id)
         if actor.role in ADMIN_ROLES or actor_user_id == manager_user_id:
             return True
+        if actor.role != "manager":
+            return False
         today = self.now()[:10]
         with self.store.connect() as db:
             row = db.execute(
@@ -492,6 +507,8 @@ class PortalGovernance:
                     delegate = self.identity(delegate_user_id)
                     if not delegate.active or delegate_user_id == manager_user_id:
                         raise GovernanceError("invalid_delegate")
+                    if delegate.role not in {"manager", "admin", "portal_admin"}:
+                        raise GovernanceError("delegate_approval_role_required")
                     db.execute("DELETE FROM manager_delegates WHERE manager_user_id=?", (manager_user_id,))
                     db.execute(
                         "INSERT INTO manager_delegates(manager_user_id,delegate_user_id,valid_from,valid_until) VALUES (?,?,?,?)",
@@ -501,7 +518,10 @@ class PortalGovernance:
                                 {"delegate_user_id":delegate_user_id,"valid_from":start,"valid_until":end})
                 else:
                     existing = db.execute(
-                        "SELECT delegate_user_id FROM manager_delegates WHERE manager_user_id=? LIMIT 1",
+                        "SELECT md.delegate_user_id FROM manager_delegates md "
+                        "JOIN portal_users delegate ON delegate.user_id=md.delegate_user_id "
+                        "AND delegate.active=1 AND delegate.role IN ('manager','admin','portal_admin') "
+                        "WHERE md.manager_user_id=? LIMIT 1",
                         (manager_user_id,),
                     ).fetchone()
                     if not existing:
@@ -544,9 +564,12 @@ class PortalGovernance:
             if current and current["source"] == "manual":
                 return "manual_preserved"
             delegate = db.execute(
-                "SELECT delegate_user_id FROM manager_delegates WHERE manager_user_id=? "
+                "SELECT md.delegate_user_id FROM manager_delegates md "
+                "JOIN portal_users delegate ON delegate.user_id=md.delegate_user_id "
+                "AND delegate.active=1 AND delegate.role IN ('manager','admin','portal_admin') "
+                "WHERE md.manager_user_id=? "
                 "AND (valid_from IS NULL OR valid_from<=?) AND (valid_until IS NULL OR valid_until>=?) "
-                "ORDER BY delegate_user_id LIMIT 1",
+                "ORDER BY md.delegate_user_id LIMIT 1",
                 (manager_user_id, start, end),
             ).fetchone()
             if not delegate:

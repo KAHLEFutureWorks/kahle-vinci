@@ -7,8 +7,17 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
 
 from test_portal_api import identity, load_app
+
+
+def _pdf_bytes() -> bytes:
+    buffer = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    writer.write(buffer)
+    return buffer.getvalue()
 
 
 def test_clean_general_upload_uses_account_owner_and_is_activated_by_manager():
@@ -383,6 +392,30 @@ def test_required_scanner_outage_fails_closed_and_creates_admin_incident():
         assert module.QUALITY_CASES.open_cases()["incidents"][0]["step"]=="required_ingest_check"
 
 
+def test_conversion_failure_uses_a_document_specific_error_and_records_page_range():
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, knowledgebase_id = _upload_ready_client(directory)
+        pdf = io.BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.write(pdf)
+
+        class BrokenConverter:
+            def convert(self, filename, data, title):
+                raise module.IngestError("document_conversion_failed:pages=51-100")
+
+        module.SECURE_INGEST.converter = BrokenConverter()
+        response = client.post(
+            "/portal/documents",
+            data={"knowledgebase_id": knowledgebase_id, "title": "Handbuch", "valid_workdays": "30", "confidentiality": "internal"},
+            files={"file": ("handbuch.pdf", pdf.getvalue(), "application/pdf")},
+        )
+        assert response.status_code == 503
+        assert response.json()["detail"].startswith("document_conversion_unavailable:")
+        incident = module.QUALITY_CASES.open_cases()["incidents"][0]
+        assert '"page_range": "51-100"' in incident["diagnostic_json"]
+
+
 def _upload_ready_client(directory):
     """Portal client with an employee who may upload into one knowledgebase."""
     root = Path(directory)
@@ -478,7 +511,7 @@ def test_upload_job_accepts_workdays_alone():
     Geprueft wird deshalb das Jobergebnis.
     """
     with tempfile.TemporaryDirectory() as directory:
-        _, client, knowledgebase_id = _upload_ready_client(directory)
+        module, client, knowledgebase_id = _upload_ready_client(directory)
         response = client.post(
             "/portal/upload-jobs",
             data={
@@ -488,8 +521,146 @@ def test_upload_job_accepts_workdays_alone():
             files={"file": ("wissen.md", b"Original", "text/markdown")},
         )
         assert response.status_code == 202, response.text
+        assert module.drain_one_upload_job() is True
         job = client.get(f"/portal/upload-jobs/{response.json()['job_id']}").json()
         assert job["status"] == "completed", job.get("error_code")
+
+
+def test_upload_endpoint_only_enqueues_and_lists_active_job_without_converting():
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, knowledgebase_id = _upload_ready_client(directory)
+        calls = []
+
+        class RecordingConverter:
+            def convert(self, filename, data, title):
+                calls.append(filename)
+                return "# Wissen\n\nAufbereiteter Inhalt.\n"
+
+        module.SECURE_INGEST.converter = RecordingConverter()
+        response = client.post(
+            "/portal/upload-jobs",
+            data={"knowledgebase_id": knowledgebase_id, "title": "Wissen", "valid_workdays": "30",
+                  "confidentiality": "internal"},
+            files={"file": ("wissen.md", b"Original", "text/markdown")},
+        )
+
+        assert response.status_code == 202
+        assert response.json()["status"] == "queued"
+        assert response.json()["position"] == 1
+        assert calls == []
+        active = client.get("/portal/upload-jobs").json()["jobs"]
+        assert [(item["job_id"], item["title"], item["position"]) for item in active] == [
+            (response.json()["job_id"], "Wissen", 1),
+        ]
+
+
+def test_upload_worker_processes_jobs_in_fifo_order_and_continues_after_failure():
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, knowledgebase_id = _upload_ready_client(directory)
+        converted = []
+
+        class OrderedConverter:
+            def convert(self, filename, data, title):
+                converted.append(filename)
+                if filename == "first.md":
+                    raise module.IngestError("document_conversion_failed")
+                return "# Wissen\n\nVollständig aufbereiteter fachlicher Inhalt.\n"
+
+        module.SECURE_INGEST.converter = OrderedConverter()
+        job_ids = []
+        for filename in ("first.md", "second.md"):
+            response = client.post(
+                "/portal/upload-jobs",
+                data={"knowledgebase_id": knowledgebase_id, "title": filename, "valid_workdays": "30",
+                      "confidentiality": "internal"},
+                files={"file": (filename, b"Original", "text/markdown")},
+            )
+            job_ids.append(response.json()["job_id"])
+
+        assert module.drain_one_upload_job() is True
+        assert module.drain_one_upload_job() is True
+        assert converted == ["first.md", "second.md"]
+        assert client.get(f"/portal/upload-jobs/{job_ids[0]}").json()["status"] == "failed"
+        assert client.get(f"/portal/upload-jobs/{job_ids[1]}").json()["status"] == "completed"
+
+
+def test_upload_worker_reports_legacy_interruption_and_then_processes_next_job():
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, knowledgebase_id = _upload_ready_client(directory)
+
+        legacy_id = module.UPLOAD_JOBS.create("employee")
+        module.UPLOAD_JOBS.progress(legacy_id, "conversion", 45)
+        response = client.post(
+            "/portal/upload-jobs",
+            data={"knowledgebase_id": knowledgebase_id, "title": "Nächster Auftrag",
+                  "valid_workdays": "30", "confidentiality": "internal"},
+            files={"file": ("next.md", b"Original", "text/markdown")},
+        )
+        next_id = response.json()["job_id"]
+
+        assert module.drain_one_upload_job() is True
+
+        legacy = module.UPLOAD_JOBS.get(legacy_id, "employee")
+        assert legacy["error_code"] == "upload_worker_interrupted"
+        assert legacy["incident_id"]
+        assert module.UPLOAD_JOBS.get(next_id, "employee")["status"] == "completed"
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            notification = db.execute(
+                "SELECT recipient_user_id,status,subject_title,reason FROM portal_notifications "
+                "WHERE subject_type='upload_job' AND subject_id=?", (legacy_id,),
+            ).fetchone()
+            outbox = db.execute(
+                "SELECT recipient FROM notification_outbox WHERE kind='upload_failed'",
+            ).fetchone()
+        assert tuple(notification) == (
+            "employee", "failed", "Älterer unterbrochener Upload",
+            "Betroffenes Dokument: Älterer unterbrochener Upload. "
+            "Die Verarbeitung wurde unterbrochen. Bitte lade das Dokument erneut hoch.",
+        )
+        assert outbox[0] == "employee@kahle.de"
+
+
+def test_failed_upload_incident_contains_job_context_and_notifies_uploader_and_owner():
+    import json
+
+    with tempfile.TemporaryDirectory() as directory:
+        module, client, knowledgebase_id = _upload_ready_client(directory)
+        module.PORTAL_GOVERNANCE.sync_identity(
+            user_id="owner", email="owner@kahle.de", display_name="Dokument Owner",
+        )
+        module.OWNERSHIP.set_proposal_permission("portal", "employee", True)
+
+        class BrokenConverter:
+            def convert(self, filename, data, title):
+                raise module.IngestError("document_conversion_failed:pages=51-100")
+
+        module.SECURE_INGEST.converter = BrokenConverter()
+        response = client.post(
+            "/portal/upload-jobs",
+            data={"knowledgebase_id": knowledgebase_id, "title": "Diagnose-Handbuch",
+                  "valid_workdays": "30", "confidentiality": "internal", "owner_user_id": "owner"},
+            files={"file": ("diagnose-handbuch.pdf", _pdf_bytes(), "application/pdf")},
+        )
+        job_id = response.json()["job_id"]
+        assert module.drain_one_upload_job() is True
+
+        incident = module.QUALITY_CASES.open_cases()["incidents"][0]
+        diagnostic = json.loads(incident["diagnostic_json"])
+        assert diagnostic == {
+            "error_code": "document_conversion_failed", "file_size_bytes": len(_pdf_bytes()),
+            "intended_owner_user_id": "owner", "job_id": job_id,
+            "knowledgebase_ids": [knowledgebase_id], "original_filename": "diagnose-handbuch.pdf",
+            "page_range": "51-100", "title": "Diagnose-Handbuch", "uploaded_by_user_id": "employee",
+        }
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            recipients = [row[0] for row in db.execute(
+                "SELECT recipient_user_id FROM portal_notifications WHERE subject_type='upload_job' ORDER BY recipient_user_id"
+            ).fetchall()]
+            outbox = [row[0] for row in db.execute(
+                "SELECT recipient FROM notification_outbox WHERE kind='upload_failed' ORDER BY recipient"
+            ).fetchall()]
+        assert recipients == ["employee", "owner"]
+        assert outbox == ["employee@kahle.de", "owner@kahle.de"]
 
 
 def test_upload_job_accepts_multiple_knowledgebases():
@@ -512,6 +683,7 @@ def test_upload_job_accepts_multiple_knowledgebases():
             files={"file": ("wissen.md", b"Original", "text/markdown")},
         )
         assert response.status_code == 202, response.text
+        assert module.drain_one_upload_job() is True
         job = client.get(f"/portal/upload-jobs/{response.json()['job_id']}").json()
         assert job["status"] == "completed", job.get("error_code")
         case_id = job["result"]["case_id"]
@@ -530,7 +702,7 @@ def test_upload_job_accepts_a_date_alone():
     from document_lifecycle import add_workdays
 
     with tempfile.TemporaryDirectory() as directory:
-        _, client, knowledgebase_id = _upload_ready_client(directory)
+        module, client, knowledgebase_id = _upload_ready_client(directory)
         response = client.post(
             "/portal/upload-jobs",
             data={
@@ -541,6 +713,7 @@ def test_upload_job_accepts_a_date_alone():
             files={"file": ("wissen.md", b"Original", "text/markdown")},
         )
         assert response.status_code == 202, response.text
+        assert module.drain_one_upload_job() is True
         job = client.get(f"/portal/upload-jobs/{response.json()['job_id']}").json()
         assert job["status"] == "completed", job.get("error_code")
 

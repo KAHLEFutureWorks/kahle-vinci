@@ -32,6 +32,7 @@ def test_absence_saves_selected_delegate_in_one_atomic_workflow():
     with tempfile.TemporaryDirectory() as directory:
         governance, _, _ = setup(Path(directory))
         governance.sync_identity(user_id="delegate", email="delegate@kahle.de", display_name="Vertretung")
+        governance.set_role("portal", "delegate", "manager")
         governance.set_absence(
             "admin", "manager", "2026-08-10", "2026-08-20", "Urlaub", "delegate",
         )

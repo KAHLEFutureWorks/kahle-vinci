@@ -77,8 +77,16 @@ class QualityCaseService:
         ).hexdigest()
         stamp = self.now()
         with self.store.connect() as db:
-            existing = db.execute("SELECT incident_id FROM system_incidents WHERE fingerprint = ?", (fingerprint,)).fetchone()
+            existing = db.execute(
+                "SELECT incident_id, status FROM system_incidents WHERE fingerprint = ?", (fingerprint,)
+            ).fetchone()
             if existing:
+                if existing["status"] != "open":
+                    db.execute(
+                        "UPDATE system_incidents SET status='open', diagnostic_json=?, user_comment=NULL, updated_at=? "
+                        "WHERE incident_id=?",
+                        (json.dumps(safe_diagnostic, sort_keys=True), stamp, existing["incident_id"]),
+                    )
                 return existing["incident_id"]
             incident_id = self.identifier()
             db.execute(

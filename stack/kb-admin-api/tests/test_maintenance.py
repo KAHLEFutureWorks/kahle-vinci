@@ -103,6 +103,7 @@ def pending_case(governance, lifecycle, kb_id):
 def test_pending_approval_reminds_delegates_and_escalates_after_2_4_6_workdays(tmp_path: Path):
     governance, lifecycle, kb_id = setup(tmp_path)
     governance.sync_identity(user_id="delegate", email="delegate@kahle.de", display_name="Vertretung")
+    governance.set_role("portal", "delegate", "manager")
     governance.assign_delegate("admin", "manager", "delegate")
     case = pending_case(governance, lifecycle, kb_id)
     service = MaintenanceService(governance.store, today=lambda: date(2026, 8, 6))
@@ -125,7 +126,27 @@ def test_pending_approval_reminds_delegates_and_escalates_after_2_4_6_workdays(t
 def test_active_absence_routes_new_case_to_configured_delegate_immediately(tmp_path: Path):
     governance, lifecycle, kb_id = setup(tmp_path)
     governance.sync_identity(user_id="delegate", email="delegate@kahle.de", display_name="Vertretung")
+    governance.set_role("portal", "delegate", "manager")
     governance.assign_delegate("admin", "manager", "delegate")
     governance.set_absence("admin", "manager", "2026-08-01", "2026-08-10", "Urlaub")
     case = pending_case(governance, lifecycle, kb_id)
     assert lifecycle.tasks_for("delegate")[0].case_id == case.case_id
+
+
+def test_absent_delegate_routes_case_directly_to_admin(tmp_path: Path):
+    governance, lifecycle, kb_id = setup(tmp_path)
+    governance.sync_identity(user_id="delegate", email="delegate@kahle.de", display_name="Vertretung")
+    governance.set_role("portal", "delegate", "manager")
+    governance.assign_delegate("admin", "manager", "delegate")
+    governance.assign_delegate("admin", "delegate", "portal")
+    governance.set_absence("admin", "manager", "2026-08-01", "2026-08-10", "Urlaub")
+    governance.set_absence("admin", "delegate", "2026-08-01", "2026-08-10", "Urlaub")
+    case = pending_case(governance, lifecycle, kb_id)
+
+    service = MaintenanceService(governance.store, today=lambda: date(2026, 8, 6))
+    result = service.process_pending_approvals()
+
+    assert result["admin_fallback"]
+    assert lifecycle.submission(case.case_id).status == "pending_admin_approval"
+    assert lifecycle.version_record(case.version_id)["status"] == "pending_admin_approval"
+    assert case.case_id in {task.case_id for task in lifecycle.tasks_for("admin")}

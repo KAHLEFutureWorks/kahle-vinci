@@ -91,3 +91,40 @@ def test_ionos_embedding_adapter_retries_transient_outage(monkeypatch):
     monkeypatch.setattr(module.time,"sleep",lambda value:None)
     assert IonosEmbeddingProvider("https://ionos.test","token","model",retries=3).embed(["Text"]) == [[1.0,0.0]]
     assert len(attempts)==3
+
+
+def test_ionos_embedding_adapter_splits_large_corpus_requests(monkeypatch):
+    import app.global_analysis as module
+
+    batches = []
+
+    class Response:
+        def __init__(self, texts):
+            self.texts = texts
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"index": index, "embedding": [float(text.split("-")[-1]), 1.0]}
+                    for index, text in enumerate(self.texts)
+                ],
+            }
+
+    def post(*args, **kwargs):
+        texts = list(kwargs["json"]["input"])
+        batches.append(texts)
+        return Response(texts)
+
+    monkeypatch.setattr(module.requests, "post", post)
+    provider = IonosEmbeddingProvider(
+        "https://ionos.test", "token", "model", retries=1,
+        max_batch_texts=2, max_batch_characters=100,
+    )
+
+    vectors = provider.embed([f"document-{index}" for index in range(5)])
+
+    assert [len(batch) for batch in batches] == [2, 2, 1]
+    assert [vector[0] for vector in vectors] == [0.0, 1.0, 2.0, 3.0, 4.0]

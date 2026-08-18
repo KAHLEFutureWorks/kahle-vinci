@@ -16,6 +16,7 @@ def load_app(root: Path, env: dict[str, str] | None = None):
     os.environ["KB_ROOT"] = str(kb_root)
     os.environ["KB_STATE_PATH"] = str(root / "state.json")
     os.environ["KB_PORTAL_DB_PATH"] = str(root / "portal.sqlite3")
+    os.environ["KB_PORTAL_FILES_ROOT"] = str(root / "portal-files")
     os.environ["KB_ADMIN_DEV_AUTH_BYPASS"] = "false"
     # Zusaetzliche Variablen gelten nur fuer diesen Import und werden danach
     # zurueckgesetzt, damit sie nicht in andere Tests durchschlagen.
@@ -46,6 +47,12 @@ def identity(user_id: str, role: str = "user") -> dict[str, str]:
         "name": user_id.title(),
         "role": role,
     }
+
+
+def test_load_app_keeps_upload_spool_inside_the_test_storage_root(tmp_path):
+    module = load_app(tmp_path)
+
+    assert module.UPLOAD_SPOOL.root == (tmp_path / "portal-files" / ".upload-spool").resolve()
 
 
 def test_portal_http_contract_bootstraps_identity_and_enforces_roles():

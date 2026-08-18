@@ -610,9 +610,16 @@ class DocumentLifecycle:
         if case.status == "pending_manager_approval":
             is_portal_override = actor.role == "portal_admin"
             is_assigned_manager = actor_user_id == case.manager_user_id
-            is_routed_delegate = (
+            is_delegate_for_manager = (
                 not is_assigned_manager
                 and self.governance.may_approve_for_manager(actor_user_id, case.manager_user_id)
+            )
+            if is_delegate_for_manager and actor_user_id in {
+                case.uploaded_by_user_id, case.owner_user_id,
+            }:
+                raise LifecycleError("self_approval_not_allowed")
+            is_routed_delegate = (
+                is_delegate_for_manager
                 and any(task.case_id == case_id for task in self.tasks_for(actor_user_id))
             )
             if not is_portal_override and not is_assigned_manager and not is_routed_delegate:
@@ -620,6 +627,32 @@ class DocumentLifecycle:
             if decision == "approve":
                 next_status = (
                     "ready_to_activate" if is_portal_override or not case.requires_admin
+                    else "pending_admin_approval"
+                )
+            elif decision == "escalate":
+                next_status = "pending_admin_approval"
+            else:
+                next_status = "rejected"
+        elif case.status == "needs_correction":
+            is_admin = actor.role in {"admin", "portal_admin"}
+            is_assigned_manager = actor_user_id == case.manager_user_id
+            is_delegate_for_manager = (
+                not is_assigned_manager
+                and self.governance.may_approve_for_manager(actor_user_id, case.manager_user_id)
+            )
+            if is_delegate_for_manager and actor_user_id in {
+                case.uploaded_by_user_id, case.owner_user_id,
+            }:
+                raise LifecycleError("self_approval_not_allowed")
+            is_routed_delegate = (
+                is_delegate_for_manager
+                and any(task.case_id == case_id for task in self.tasks_for(actor_user_id))
+            )
+            if not is_admin and not is_assigned_manager and not is_routed_delegate:
+                raise LifecycleError("reviewer_required")
+            if decision == "approve":
+                next_status = (
+                    "ready_to_activate" if is_admin or not case.requires_admin
                     else "pending_admin_approval"
                 )
             elif decision == "escalate":
@@ -1031,11 +1064,17 @@ class DocumentLifecycle:
                     """SELECT case_id FROM document_cases
                        WHERE (uploaded_by_user_id = ? AND status IN ('pending_employee_decision','duplicate_blocked'))
                           OR (uploaded_by_user_id = ? AND status = 'needs_correction')
+                          OR (manager_user_id = ? AND status = 'needs_correction')
                           OR (manager_user_id = ? AND status IN ('pending_manager_approval','ready_to_activate'))
                        ORDER BY created_at, case_id""",
-                    (actor_user_id, actor_user_id, actor_user_id),
+                    (actor_user_id, actor_user_id, actor_user_id, actor_user_id),
                 ).fetchall()
-                delegated = db.execute(
+                actor_absent = bool(db.execute(
+                    "SELECT 1 FROM manager_absences WHERE manager_user_id=? "
+                    "AND absent_from<=? AND absent_until>=?",
+                    (actor_user_id, today, today),
+                ).fetchone())
+                delegated = [] if actor.role != "manager" or actor_absent else db.execute(
                     """SELECT manager_user_id FROM manager_delegates
                        WHERE delegate_user_id = ?
                          AND (valid_from IS NULL OR valid_from <= ?)
@@ -1046,9 +1085,11 @@ class DocumentLifecycle:
                 if manager_ids:
                     placeholders = ",".join("?" for _ in manager_ids)
                     candidates = db.execute(
-                        f"SELECT case_id, manager_user_id, created_at FROM document_cases "
-                        f"WHERE status = 'pending_manager_approval' AND manager_user_id IN ({placeholders}) "
-                        f"ORDER BY created_at, case_id", manager_ids,
+                        f"SELECT c.case_id, c.manager_user_id, c.created_at FROM document_cases c "
+                        f"JOIN canonical_documents d ON d.document_id=c.document_id "
+                        f"WHERE c.status = 'pending_manager_approval' AND c.manager_user_id IN ({placeholders}) "
+                        f"AND c.uploaded_by_user_id<>? AND d.owner_user_id<>? "
+                        f"ORDER BY c.created_at, c.case_id", (*manager_ids, actor_user_id, actor_user_id),
                     ).fetchall()
                     absent = {item["manager_user_id"] for item in db.execute(
                         f"SELECT manager_user_id FROM manager_absences WHERE manager_user_id IN ({placeholders}) "

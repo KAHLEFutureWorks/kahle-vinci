@@ -102,6 +102,68 @@ def test_standard_manager_flow_activates_with_60_workday_expiry():
         assert version["valid_until"] == "2026-10-29"
 
 
+def test_routed_delegate_cannot_review_own_upload():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, lifecycle, kb_id = setup(Path(directory))
+        governance.set_role("portal", "employee", "manager")
+        governance.assign_delegate("admin", "manager", "employee")
+        governance.set_absence("admin", "manager", "2026-08-01", "2026-08-10", "Urlaub")
+        case = submit(lifecycle, kb_id)
+        case = lifecycle.record_analysis(
+            case_id=case.case_id,
+            normalized_sha256=SHA_B,
+            markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(),
+        )
+
+        assert case.case_id not in {task.case_id for task in lifecycle.tasks_for("employee")}
+        try:
+            lifecycle.decide(
+                case_id=case.case_id,
+                actor_user_id="employee",
+                decision="approve",
+                reason="Eigener Upload",
+            )
+            raise AssertionError("a delegate must not approve their own upload")
+        except lifecycle_module.LifecycleError as exc:
+            assert str(exc) == "self_approval_not_allowed"
+
+
+def test_failed_preparation_can_be_forwarded_rejected_or_approved_by_reviewer():
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+
+        def failed_case(sha: str):
+            case = submit(lifecycle, kb_id, sha=sha)
+            return lifecycle.record_analysis(
+                case_id=case.case_id,
+                normalized_sha256=sha[::-1],
+                markdown_sha256=(sha[0].upper() * 64),
+                analysis=lifecycle_module.Analysis(conversion_quality="failed"),
+            )
+
+        forwarded = failed_case("d" * 64)
+        assert forwarded.status == "needs_correction"
+        assert forwarded.case_id in {task.case_id for task in lifecycle.tasks_for("manager")}
+        forwarded = lifecycle.decide(
+            case_id=forwarded.case_id, actor_user_id="manager",
+            decision="escalate", reason="Aufbereitung durch Admin prüfen",
+        )
+        assert forwarded.status == "pending_admin_approval"
+
+        rejected = lifecycle.decide(
+            case_id=failed_case("e" * 64).case_id, actor_user_id="manager",
+            decision="reject", reason="Aufbereitung fachlich nicht verwendbar",
+        )
+        assert rejected.status == "rejected"
+
+        approved = lifecycle.decide(
+            case_id=failed_case("f" * 64).case_id, actor_user_id="admin",
+            decision="approve", reason="Aufbereitung anhand des Originals geprüft",
+        )
+        assert approved.status == "ready_to_activate"
+
+
 def test_sanitized_security_review_is_routed_directly_to_admin():
     with tempfile.TemporaryDirectory() as directory:
         _, lifecycle, kb_id = setup(Path(directory))

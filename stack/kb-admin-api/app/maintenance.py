@@ -203,15 +203,18 @@ class MaintenanceService:
         """Apply the 2/4/6-workday reminder and escalation policy."""
         today = self.today()
         if not is_workday(today):
-            return {"reminders": [], "delegated": [], "escalated": []}
+            return {"reminders": [], "delegated": [], "escalated": [], "admin_fallback": []}
         reminders: list[str] = []
         delegated: list[str] = []
         escalated: list[str] = []
+        admin_fallback: list[str] = []
         with self.store.connect() as db:
             cases = db.execute(
                 """SELECT c.case_id, c.created_at, c.manager_user_id, c.requires_admin,
+                          c.version_id, c.uploaded_by_user_id, d.owner_user_id,
                           manager.email manager_email
                    FROM document_cases c
+                   JOIN canonical_documents d ON d.document_id=c.document_id
                    LEFT JOIN portal_users manager ON manager.user_id=c.manager_user_id
                    WHERE c.status='pending_manager_approval'"""
             ).fetchall()
@@ -226,17 +229,45 @@ class MaintenanceService:
                 ).fetchone())
                 delegates = [row["email"] for row in db.execute(
                     """SELECT user.email FROM manager_delegates md
-                       JOIN portal_users user ON user.user_id=md.delegate_user_id AND user.active=1
+                       JOIN portal_users user ON user.user_id=md.delegate_user_id
+                         AND user.active=1 AND user.role IN ('manager','admin','portal_admin')
                        WHERE md.manager_user_id=? AND (md.valid_from IS NULL OR md.valid_from<=?)
-                         AND (md.valid_until IS NULL OR md.valid_until>=?)""",
-                    (case["manager_user_id"], today.isoformat(), today.isoformat()),
+                         AND (md.valid_until IS NULL OR md.valid_until>=?)
+                         AND user.user_id<>? AND user.user_id<>?
+                         AND NOT EXISTS (
+                           SELECT 1 FROM manager_absences absence
+                           WHERE absence.manager_user_id=user.user_id
+                             AND absence.absent_from<=? AND absence.absent_until>=?
+                         )""",
+                    (case["manager_user_id"], today.isoformat(), today.isoformat(),
+                     case["uploaded_by_user_id"], case["owner_user_id"],
+                     today.isoformat(), today.isoformat()),
                 ).fetchall()]
                 if age == 2 and case["manager_email"]:
                     message = self._enqueue_db(db, case["manager_email"], f"approval_reminder:{case['case_id']}",
                                             today.isoformat(), "KAHLE-Vinci: Freigabe wartet",
                                             f"Der Vorgang {case['case_id']} wartet seit zwei Arbeitstagen. /wissen/?case={case['case_id']}")
                     if message: reminders.append(message.message_id)
-                if absent or age >= 4:
+                delegate_due = absent or age >= 4
+                if delegate_due and not delegates:
+                    db.execute(
+                        "UPDATE document_cases SET status='pending_admin_approval', requires_admin=1, updated_at=? WHERE case_id=?",
+                        (self.now(), case["case_id"]),
+                    )
+                    db.execute(
+                        "UPDATE document_versions SET status='pending_admin_approval' WHERE version_id=?",
+                        (case["version_id"],),
+                    )
+                    for recipient in admins:
+                        message = self._enqueue_db(
+                            db, recipient, f"approval_admin_fallback:{case['case_id']}",
+                            today.isoformat(), "KAHLE-Vinci: Vertretung nicht verfügbar",
+                            f"Für den Vorgang {case['case_id']} ist keine verfügbare Vertretung vorhanden. /wissen/?case={case['case_id']}",
+                        )
+                        if message:
+                            admin_fallback.append(message.message_id)
+                    continue
+                if delegate_due:
                     for recipient in delegates:
                         message = self._enqueue_db(db, recipient, f"approval_delegated:{case['case_id']}",
                                                 today.isoformat(), "KAHLE-Vinci: Vertretungsfall",
@@ -250,7 +281,8 @@ class MaintenanceService:
                         if message: escalated.append(message.message_id)
                     db.execute("UPDATE document_cases SET requires_admin=1, updated_at=? WHERE case_id=?",
                                (self.now(), case["case_id"]))
-        return {"reminders": reminders, "delegated": delegated, "escalated": escalated}
+        return {"reminders": reminders, "delegated": delegated, "escalated": escalated,
+                "admin_fallback": admin_fallback}
 
     def request_removal(self, document_id: str, actor_user_id: str, kind: str, reason: str) -> str:
         if kind not in {"deactivate", "delete"} or len(reason.strip()) < 3:

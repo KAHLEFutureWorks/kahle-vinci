@@ -16,6 +16,19 @@ def test_system_incidents_are_deduplicated_without_document_content():
         assert "secret" not in incident["diagnostic_json"]
 
 
+def test_resolved_system_incident_is_reopened_when_the_same_error_recurs():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, _, _ = setup(Path(directory))
+        service = QualityCaseService(governance.store, identifier=lambda: "incident-reopened")
+        incident_id = service.system_incident("required_ingest_check", {"error_code": "document_conversion_failed"})
+        service.resolve("incident", incident_id, "Vorheriger Versuch war erledigt.")
+
+        assert service.system_incident("required_ingest_check", {"error_code": "document_conversion_failed"}) == incident_id
+        incident = service.open_cases()["incidents"][0]
+        assert incident["status"] == "open"
+        assert incident["user_comment"] is None
+
+
 def test_permission_feedback_is_critical_and_captures_effective_rights():
     with tempfile.TemporaryDirectory() as directory:
         governance, _, kb_id = setup(Path(directory))

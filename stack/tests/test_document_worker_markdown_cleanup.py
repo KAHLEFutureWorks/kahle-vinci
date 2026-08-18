@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -206,6 +207,37 @@ def test_ocr_deduplicates_across_document_and_removes_dynamic_examples():
     second = HELPERS["_dedupe_ocr_lines"]("", ["Teileanforderung \u00f6ffnen"], document_seen)
     assert first == ["Teileanforderung \u00f6ffnen"]
     assert second == []
+
+
+def test_ocr_skips_an_image_with_unsupported_jbig2_filter(monkeypatch):
+    class Jbig2Images:
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            if index == 0:
+                raise NotImplementedError("Unsupported filter /JBIG2Decode")
+            raise IndexError(index)
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "pytesseract",
+        SimpleNamespace(Output=SimpleNamespace(DICT="dict")),
+    )
+    HELPERS.update({
+        "PDF_IMAGE_OCR": True,
+        "PDF_OCR_MIN_IMAGE_PIXELS": 150000,
+        "PDF_OCR_LANG": "deu+eng",
+        "PDF_OCR_MIN_CONFIDENCE": 45,
+        "PDF_OCR_MAX_CHARS_PER_PAGE": 5000,
+    })
+    page = SimpleNamespace(images=Jbig2Images())
+
+    image_ocr = HELPERS["_extract_page_image_ocr"](page, "Vorhandener Seitentext")
+
+    assert image_ocr == ""
+    assert "Vorhandener Seitentext" in HELPERS["_pdf_page_to_markdown"](
+        "Vorhandener Seitentext", 56, image_ocr,
+    )
 
 
 def test_tabular_pdf_page_preserves_column_alignment():

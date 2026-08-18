@@ -56,6 +56,11 @@ services:
     cpus: 0.5
     pids_limit: 128
 
+  kb-upload-worker:
+    mem_limit: 750m
+    cpus: 1.0
+    pids_limit: 192
+
   kb-backup:
     mem_limit: 512m
     cpus: 0.5

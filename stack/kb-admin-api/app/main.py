@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import contextvars
 import hashlib
 import hmac
 import io
@@ -26,6 +27,14 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPE
 from fastapi.responses import FileResponse, Response as FastAPIResponse
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
+
+
+UPLOAD_CONVERSION_PROGRESS: contextvars.ContextVar[Callable[[int, int], None] | None] = (
+    contextvars.ContextVar("upload_conversion_progress", default=None)
+)
+UPLOAD_JOB_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "upload_job_context", default=None,
+)
 
 
 try:
@@ -56,7 +65,7 @@ try:
     from .quality_dashboard import QualityDashboard
     from .document_changes import DocumentChangeError, DocumentChangeService
     from .ownership import OwnershipError, OwnershipService
-    from .upload_jobs import UploadJobError, UploadJobService
+    from .upload_jobs import UploadJobError, UploadJobService, UploadSpool
     from .decision_jobs import DecisionJobError, DecisionJobQueue
     from .document_authority import AuthorityError, DocumentAuthorityService
     from .rag_metadata import RAGMetadataWriter
@@ -79,7 +88,7 @@ except ImportError:  # pragma: no cover
     from quality_dashboard import QualityDashboard
     from document_changes import DocumentChangeError, DocumentChangeService
     from ownership import OwnershipError, OwnershipService
-    from upload_jobs import UploadJobError, UploadJobService
+    from upload_jobs import UploadJobError, UploadJobService, UploadSpool
     from decision_jobs import DecisionJobError, DecisionJobQueue
     from document_authority import AuthorityError, DocumentAuthorityService
     from rag_metadata import RAGMetadataWriter
@@ -159,7 +168,6 @@ QUALITY_CASES = QualityCaseService(PORTAL_GOVERNANCE.store)
 RESTRICTED_TERMS = RestrictedTermService(PORTAL_GOVERNANCE)
 DOCUMENT_CHANGES = DocumentChangeService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
 OWNERSHIP = OwnershipService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
-UPLOAD_JOBS = UploadJobService(PORTAL_GOVERNANCE.store)
 DECISION_JOBS = DecisionJobQueue(PORTAL_GOVERNANCE.store)
 DOCUMENT_AUTHORITY = DocumentAuthorityService(PORTAL_GOVERNANCE.store, PORTAL_GOVERNANCE)
 GLOBAL_CORPUS = GlobalCorpus(PORTAL_GOVERNANCE.store)
@@ -168,6 +176,8 @@ GLOBAL_ANALYZER = GlobalDocumentAnalyzer(
     IonosEmbeddingProvider(IONOS_BASE_URL, IONOS_API_KEY, EMBEDDING_MODEL) if IONOS_API_KEY else None,
 )
 PORTAL_FILES_ROOT = Path(os.getenv("KB_PORTAL_FILES_ROOT", "/portal-data/files"))
+UPLOAD_JOBS = UploadJobService(PORTAL_GOVERNANCE.store)
+UPLOAD_SPOOL = UploadSpool(PORTAL_FILES_ROOT / ".upload-spool")
 RAG_METADATA = RAGMetadataWriter(PORTAL_GOVERNANCE.store, PORTAL_FILES_ROOT)
 CONFIDENTIALITY_CLASSIFIER = ContentConfidentialityClassifier()
 SECURE_INGEST = SecureIngestPipeline(
@@ -1445,7 +1455,10 @@ async def portal_upload_document(
             valid_workdays=valid_workdays, confidentiality=confidentiality, document_id=document_id,
             target_knowledgebase_ids=knowledgebase_ids,
         )
-        result = SECURE_INGEST.ingest(submission.document_id, submission.version_id, filename, data, title)
+        result = SECURE_INGEST.ingest(
+            submission.document_id, submission.version_id, filename, data, title,
+            conversion_progress=UPLOAD_CONVERSION_PROGRESS.get(),
+        )
         markdown = result.markdown_path.read_text(encoding="utf-8")
         confidentiality_suggestion = CONFIDENTIALITY_CLASSIFIER.classify(markdown)
         restricted_terms = RESTRICTED_TERMS.matches(markdown)
@@ -1529,10 +1542,23 @@ async def portal_upload_document(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except IngestError as exc:
         code = str(exc)
-        if code in {"malware_scanner_unavailable", "malware_scan_failed",
-                    "document_conversion_failed", "document_conversion_empty"}:
-            incident_id = _notify_system_error("required_ingest_check", {"error_code": code})
+        if code in {"malware_scanner_unavailable", "malware_scan_failed", "document_conversion_empty"}:
+            diagnostic = _upload_job_diagnostic(code)
+            incident_id = _notify_system_error(
+                "required_ingest_check", diagnostic,
+                fingerprint=_upload_job_fingerprint(code),
+            )
             raise HTTPException(status_code=503, detail=f"required_check_unavailable:{incident_id}") from exc
+        if code.startswith("document_conversion_failed"):
+            page_range = code.partition(":pages=")[2] or None
+            diagnostic = _upload_job_diagnostic(
+                "document_conversion_failed", page_range=page_range,
+            )
+            incident_id = _notify_system_error(
+                "required_ingest_check", diagnostic,
+                fingerprint=_upload_job_fingerprint("document_conversion_failed"),
+            )
+            raise HTTPException(status_code=503, detail=f"document_conversion_unavailable:{incident_id}") from exc
         raise HTTPException(status_code=422, detail=code) from exc
     except GlobalAnalysisError as exc:
         incident_id = _notify_system_error("global_document_analysis", {
@@ -1542,7 +1568,7 @@ async def portal_upload_document(
             "title": title,
             "original_filename": filename,
             "uploaded_by_user_id": identity["user_id"],
-            "file_size_bytes": len(content),
+            "file_size_bytes": len(data),
         })
         raise HTTPException(status_code=503, detail=f"required_check_unavailable:{incident_id}") from exc
     except Exception as exc:
@@ -1584,33 +1610,112 @@ def _run_portal_upload_job(
     identity: dict[str, Any], security_review_requested: bool = False,
 ) -> None:
     try:
-        UPLOAD_JOBS.progress(job_id, "security", 20)
-        UPLOAD_JOBS.progress(job_id, "conversion", 45)
+        UPLOAD_JOBS.heartbeat(job_id, "security", 20)
+        UPLOAD_JOBS.heartbeat(job_id, "conversion", 30)
+        def conversion_progress(completed_chunks: int, total_chunks: int) -> None:
+            # 30-75% is reserved for conversion. This makes long PDFs visibly
+            # advance while every block is processed independently.
+            progress = 30 + round(45 * completed_chunks / max(1, total_chunks))
+            UPLOAD_JOBS.heartbeat(job_id, "conversion", progress)
         upload = UploadFile(file=io.BytesIO(data), filename=filename)
-        result = asyncio.run(portal_upload_document(
-            file=upload, knowledgebase_id=knowledgebase_ids[0],
-            knowledgebase_ids_json=json.dumps(knowledgebase_ids), title=title,
-            # Die Gueltigkeit ist beim Anlegen des Jobs bereits in Arbeitstage
-            # aufgeloest. valid_until muss trotzdem ausdruecklich None sein:
-            # Beim direkten Funktionsaufruf greift sonst der Form(None)-Default,
-            # und das ist ein FieldInfo-Objekt, nicht None.
-            valid_workdays=valid_workdays, valid_until=None,
-            confidentiality=confidentiality,
-            owner_user_id=owner_user_id, identity=identity,
-            security_review_requested=security_review_requested,
-        ))
-        UPLOAD_JOBS.progress(job_id, "comparison", 90)
+        progress_token = UPLOAD_CONVERSION_PROGRESS.set(conversion_progress)
+        try:
+            result = asyncio.run(portal_upload_document(
+                file=upload, knowledgebase_id=knowledgebase_ids[0],
+                knowledgebase_ids_json=json.dumps(knowledgebase_ids), title=title,
+                # Die Gueltigkeit ist beim Anlegen des Jobs bereits in Arbeitstage
+                # aufgeloest. valid_until muss trotzdem ausdruecklich None sein:
+                # Beim direkten Funktionsaufruf greift sonst der Form(None)-Default,
+                # und das ist ein FieldInfo-Objekt, nicht None.
+                valid_workdays=valid_workdays, valid_until=None,
+                confidentiality=confidentiality,
+                owner_user_id=owner_user_id, identity=identity,
+                security_review_requested=security_review_requested,
+            ))
+        finally:
+            UPLOAD_CONVERSION_PROGRESS.reset(progress_token)
+        UPLOAD_JOBS.heartbeat(job_id, "comparison", 90)
         UPLOAD_JOBS.complete(job_id, result.model_dump())
     except HTTPException as exc:
+        incident_id = str(exc.detail).rsplit(":", 1)[-1] if ":" in str(exc.detail) else None
+        if incident_id:
+            UPLOAD_JOBS.set_incident(job_id, incident_id)
         UPLOAD_JOBS.fail(job_id, str(exc.detail))
+        _notify_upload_failure(UPLOAD_JOB_CONTEXT.get(), incident_id, str(exc.detail).split(":", 1)[0])
     except Exception as exc:  # pragma: no cover - final fail-safe for worker failures
-        incident_id = _notify_system_error("portal_upload_job", {"error_type": type(exc).__name__})
+        diagnostic = _upload_job_diagnostic("system_error", error_type=type(exc).__name__)
+        incident_id = _notify_system_error(
+            "portal_upload_job", diagnostic, fingerprint=_upload_job_fingerprint("system_error"),
+        )
+        UPLOAD_JOBS.set_incident(job_id, incident_id)
         UPLOAD_JOBS.fail(job_id, f"system_error:{incident_id}")
+        _notify_upload_failure(UPLOAD_JOB_CONTEXT.get(), incident_id, "system_error")
+
+
+def drain_one_upload_job() -> bool:
+    job, interrupted = UPLOAD_JOBS.recover_and_claim_next()
+    _finalize_interrupted_upload_jobs(interrupted)
+    if not job:
+        return False
+    context_token = UPLOAD_JOB_CONTEXT.set(job)
+    try:
+        account = PORTAL_GOVERNANCE.identity(job["user_id"])
+        identity = {
+            "user_id": account.user_id, "email": account.email,
+            "display_name": account.display_name, "role": account.role,
+        }
+        _run_portal_upload_job(
+            job["job_id"], UPLOAD_SPOOL.read(job["job_id"]), job["original_filename"],
+            tuple(job["knowledgebase_ids"]), job["title"], int(job["valid_workdays"]),
+            job["confidentiality"], job["owner_user_id"], identity,
+            bool(job["security_review_requested"]),
+        )
+    except Exception as exc:
+        diagnostic = _upload_job_diagnostic("system_error", error_type=type(exc).__name__)
+        incident_id = _notify_system_error(
+            "portal_upload_job", diagnostic, fingerprint=_upload_job_fingerprint("system_error"),
+        )
+        UPLOAD_JOBS.set_incident(job["job_id"], incident_id)
+        UPLOAD_JOBS.fail(job["job_id"], f"system_error:{incident_id}")
+        _notify_upload_failure(job, incident_id, "system_error")
+    finally:
+        terminal = UPLOAD_JOBS.get(job["job_id"], job["user_id"], is_admin=True)["status"]
+        if terminal in {"completed", "failed"}:
+            UPLOAD_SPOOL.remove(job["job_id"])
+        UPLOAD_JOB_CONTEXT.reset(context_token)
+    return True
+
+
+def recover_interrupted_upload_jobs() -> list[dict[str, Any]]:
+    expired = UPLOAD_JOBS.expire_interrupted()
+    _finalize_interrupted_upload_jobs(expired)
+    return expired
+
+
+def _finalize_interrupted_upload_jobs(expired: list[dict[str, Any]]) -> None:
+    for job in expired:
+        context_token = UPLOAD_JOB_CONTEXT.set(job)
+        try:
+            try:
+                incident_id = _notify_system_error(
+                    "portal_upload_job", _upload_job_diagnostic("upload_worker_interrupted"),
+                    fingerprint=_upload_job_fingerprint("upload_worker_interrupted"),
+                )
+                UPLOAD_JOBS.set_incident(job["job_id"], incident_id)
+                _notify_upload_failure(job, incident_id, "upload_worker_interrupted")
+            except Exception as exc:
+                print(
+                    f"upload_interruption_notification_failed job={job['job_id']} "
+                    f"error={type(exc).__name__}", flush=True,
+                )
+            finally:
+                UPLOAD_SPOOL.remove(job["job_id"])
+        finally:
+            UPLOAD_JOB_CONTEXT.reset(context_token)
 
 
 @app.post("/portal/upload-jobs", status_code=202)
 async def portal_create_upload_job(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...), knowledgebase_id: str = Form(...),
     knowledgebase_ids_json: str = Form(""),
     title: str = Form(..., min_length=2, max_length=300),
@@ -1631,13 +1736,29 @@ async def portal_create_upload_job(
             PORTAL_GOVERNANCE.require_access(identity["user_id"], selected_id, "upload")
     except GovernanceError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    job_id = UPLOAD_JOBS.create(identity["user_id"])
-    background_tasks.add_task(
-        _run_portal_upload_job, job_id, data, file.filename or "", knowledgebase_ids,
-        title, valid_workdays, confidentiality, owner_user_id, identity,
-        security_review_requested,
-    )
-    return {"job_id": job_id, "status": "queued", "step": "uploaded", "progress": 5}
+    job_id = str(uuid.uuid4())
+    intended_owner_user_id = owner_user_id or identity["user_id"]
+    UPLOAD_SPOOL.stage(job_id, data)
+    try:
+        return UPLOAD_JOBS.enqueue(
+            job_id=job_id, user_id=identity["user_id"], original_filename=file.filename or "",
+            title=title, knowledgebase_ids=knowledgebase_ids, valid_workdays=valid_workdays,
+            confidentiality=confidentiality, owner_user_id=intended_owner_user_id,
+            security_review_requested=security_review_requested, staged_path=f"{job_id}.upload",
+            file_size_bytes=len(data),
+        )
+    except Exception:
+        UPLOAD_SPOOL.remove(job_id)
+        raise
+
+
+@app.get("/portal/upload-jobs")
+def portal_active_upload_jobs(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    return {"jobs": UPLOAD_JOBS.list_active(
+        identity["user_id"], identity["role"] in {"admin", "portal_admin"},
+    )}
 
 
 @app.get("/portal/upload-jobs/{job_id}")
@@ -2643,8 +2764,76 @@ def _refresh_global_corpus_version(version_id: str, status: str) -> None:
         GLOBAL_CORPUS.set_status(version_id, status)
 
 
-def _notify_system_error(step: str, diagnostic: dict[str, Any]) -> str:
-    incident_id = QUALITY_CASES.system_incident(step, diagnostic)
+def _upload_job_diagnostic(error_code: str, **extra: Any) -> dict[str, Any]:
+    job = UPLOAD_JOB_CONTEXT.get()
+    diagnostic: dict[str, Any] = {"error_code": error_code}
+    if job:
+        diagnostic.update({
+            "file_size_bytes": job["file_size_bytes"],
+            "intended_owner_user_id": job.get("owner_user_id"),
+            "job_id": job["job_id"],
+            "knowledgebase_ids": job["knowledgebase_ids"],
+            "original_filename": job["original_filename"],
+            "title": job["title"],
+            "uploaded_by_user_id": job["user_id"],
+        })
+    diagnostic.update(extra)
+    return diagnostic
+
+
+def _upload_job_fingerprint(error_code: str) -> str | None:
+    job = UPLOAD_JOB_CONTEXT.get()
+    return f"upload_job:{job['job_id']}:{error_code}" if job else None
+
+
+def _notify_upload_failure(
+    job: dict[str, Any] | None, incident_id: str | None, error_code: str,
+) -> None:
+    if not job:
+        return
+    recipient_ids = {job["user_id"]}
+    if job.get("owner_user_id"):
+        recipient_ids.add(job["owner_user_id"])
+    stamp = datetime.now().astimezone().isoformat()
+    for recipient_id in sorted(recipient_ids):
+        try:
+            recipient = PORTAL_GOVERNANCE.identity(recipient_id)
+        except GovernanceError:
+            continue
+        if not recipient.active:
+            continue
+        notification_id = hashlib.sha256(
+            f"upload_failed:{job['job_id']}:{recipient_id}".encode("utf-8")
+        ).hexdigest()
+        subject_title = job.get("title") or job.get("original_filename") or "Älterer unterbrochener Upload"
+        reason_text = {
+            "upload_worker_interrupted": "Die Verarbeitung wurde unterbrochen. Bitte lade das Dokument erneut hoch.",
+            "document_conversion_unavailable": "Das Dokument konnte technisch nicht vollständig aufbereitet werden.",
+            "required_check_unavailable": "Eine erforderliche technische Prüfung war nicht verfügbar.",
+            "system_error": "Bei der Verarbeitung ist ein technischer Fehler aufgetreten.",
+        }.get(error_code, "Das Dokument konnte nicht vollständig verarbeitet werden.")
+        user_reason = f"Betroffenes Dokument: {subject_title}. {reason_text}"
+        with PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO portal_notifications "
+                "(notification_id,recipient_user_id,subject_type,subject_id,subject_title,status,message,reason,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (notification_id, recipient_id, "upload_job", job["job_id"], subject_title,
+                 "failed", "Das Dokument konnte nicht vollständig aufbereitet werden.",
+                 user_reason, stamp),
+            )
+        MAINTENANCE.enqueue_notification(
+            recipient.email, "upload_failed", "KAHLE-Vinci: Dokument konnte nicht verarbeitet werden",
+            f"Das Dokument „{subject_title}“ konnte nicht vollständig aufbereitet werden. "
+            f"{reason_text}\n\nIm Wissensportal öffnen: /wissen/?notifications=1",
+            dedupe_key=notification_id,
+        )
+
+
+def _notify_system_error(
+    step: str, diagnostic: dict[str, Any], *, fingerprint: str | None = None,
+) -> str:
+    incident_id = QUALITY_CASES.system_incident(step, diagnostic, fingerprint=fingerprint)
     for recipient in _admin_emails():
         MAINTENANCE.enqueue_notification(
             recipient, "system_error", "KAHLE-Vinci: Systemfehler",

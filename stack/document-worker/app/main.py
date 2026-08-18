@@ -540,8 +540,13 @@ def _extract_page_image_ocr(page: Any, page_text: str, document_seen: Optional[s
         return ""
 
     lines: List[str] = []
-    for image_file in list(page.images)[:6]:
+    images = page.images
+    for image_index in range(min(len(images), 6)):
         try:
+            # pypdf decodes an image while it is indexed. A single unsupported
+            # stream filter (for example JBIG2Decode) must not abort OCR for
+            # the whole page or discard text that was already extracted.
+            image_file = images[image_index]
             image = image_file.image
             width, height = image.size
             if width * height < PDF_OCR_MIN_IMAGE_PIXELS or min(width, height) < 80:
