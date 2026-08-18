@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
-from .learningsuite import ProvisioningError
+from .learningsuite import ProvisioningError, ProvisioningSkip
 from .models import EligibleUser, InvalidUser
 
 
@@ -42,11 +42,15 @@ class WelcomeMailer(Protocol):
 class ProvisioningState(Protocol):
     def was_completed(self, user_id: str) -> bool: ...
 
+    def was_handled(self, user_id: str) -> bool: ...
+
     def last_error(self, user_id: str) -> str | None: ...
 
     def record_completed(self, user_id: str, member_id: str, *, now_epoch: int) -> None: ...
 
     def record_failure(self, user_id: str, error_code: str, *, now_epoch: int) -> None: ...
+
+    def record_skipped(self, user_id: str, reason: str, *, now_epoch: int) -> None: ...
 
     def welcome_was_sent(self, email: str) -> bool: ...
 
@@ -119,7 +123,7 @@ class AcademyProvisioner:
             result["skipped"] += len(users) - len(allowed_users)
             users = allowed_users
 
-        pending_users = [user for user in users if not self.state.was_completed(user.openwebui_id)]
+        pending_users = [user for user in users if not self.state.was_handled(user.openwebui_id)]
         pending_users.sort(
             key=lambda user: (self.state.last_error(user.openwebui_id) is not None, user.openwebui_id)
         )
@@ -140,6 +144,9 @@ class AcademyProvisioner:
                     self.client.grant_course_access(member_id, course_id)
                 self.state.record_completed(user.openwebui_id, member_id, now_epoch=self._now())
                 result["completed"] += 1
+            except ProvisioningSkip as exc:
+                self.state.record_skipped(user.openwebui_id, exc.code, now_epoch=self._now())
+                result["skipped"] += 1
             except ProvisioningError as exc:
                 self.state.record_failure(user.openwebui_id, exc.code, now_epoch=self._now())
                 result["failed"] += 1

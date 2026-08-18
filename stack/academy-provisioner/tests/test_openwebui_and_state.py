@@ -90,6 +90,7 @@ def test_state_records_completion_failure_and_heartbeat(tmp_path: Path) -> None:
 
     state.record_completed("user-1", "member-1", now_epoch=100)
     state.record_failure("user-2", "invalid_name", now_epoch=101)
+    state.record_skipped("user-3", "learningsuite_team_member", now_epoch=101)
     state.record_welcome_sent("AMAL@KAHLE.DE", now_epoch=101)
     state.record_pending_notice_sent("pending-1", "ADMIN@KAHLE.DE", now_epoch=101)
     state.record_heartbeat(102)
@@ -97,6 +98,8 @@ def test_state_records_completion_failure_and_heartbeat(tmp_path: Path) -> None:
     assert state.was_completed("user-1") is True
     assert state.member_id("user-1") == "member-1"
     assert state.last_error("user-2") == "invalid_name"
+    assert state.was_handled("user-3") is True
+    assert state.skipped_reason("user-3") == "learningsuite_team_member"
     assert state.welcome_was_sent("amal@kahle.de") is True
     assert state.pending_notice_was_sent("pending-1", "admin@kahle.de") is True
     assert state.heartbeat_epoch() == 102

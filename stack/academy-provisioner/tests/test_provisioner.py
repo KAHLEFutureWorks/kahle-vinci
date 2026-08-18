@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.learningsuite import ProvisioningError
+from app.learningsuite import ProvisioningError, ProvisioningSkip
 from app.models import EligibleUser, InvalidUser
 from app.provisioner import AcademyProvisioner
 
@@ -37,11 +37,17 @@ class FakeState:
     def __init__(self) -> None:
         self.completed: list[tuple[str, str]] = []
         self.failures: list[tuple[str, str]] = []
+        self.skips: list[tuple[str, str]] = []
         self.welcome_sent: set[str] = set()
         self.pending_notices: set[tuple[str, str]] = set()
 
     def was_completed(self, user_id: str) -> bool:
         return any(completed_user_id == user_id for completed_user_id, _ in self.completed)
+
+    def was_handled(self, user_id: str) -> bool:
+        return self.was_completed(user_id) or any(
+            skipped_user_id == user_id for skipped_user_id, _ in self.skips
+        )
 
     def last_error(self, user_id: str) -> str | None:
         for failed_user_id, error_code in reversed(self.failures):
@@ -54,6 +60,9 @@ class FakeState:
 
     def record_failure(self, user_id: str, error_code: str, *, now_epoch: int) -> None:
         self.failures.append((user_id, error_code))
+
+    def record_skipped(self, user_id: str, reason: str, *, now_epoch: int) -> None:
+        self.skips.append((user_id, reason))
 
     def welcome_was_sent(self, email: str) -> bool:
         return email in self.welcome_sent
@@ -222,6 +231,29 @@ def test_failure_for_one_user_does_not_block_next_user() -> None:
     assert state.failures == [("user-1", "member_create_failed")]
     assert state.completed == [("user-2", "member-user-2")]
     assert client.grants == [("member-user-2", "course-1")]
+
+
+def test_team_member_is_persistently_skipped_without_retries() -> None:
+    class TeamMemberClient(FakeClient):
+        def find_or_create_member(self, user: EligibleUser) -> str:
+            self.created.append(user.openwebui_id)
+            raise ProvisioningSkip("learningsuite_team_member")
+
+    user = EligibleUser("user-1", "team@kahle.de", "Team", "Member", "user")
+    client = TeamMemberClient()
+    state = FakeState()
+    provisioner = AcademyProvisioner(
+        FakeReader([user]), client, state, "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None, now_epoch=lambda: 100
+    )
+
+    first = provisioner.run_once()
+    second = provisioner.run_once()
+
+    assert first == {"completed": 0, "failed": 0, "skipped": 1, "pending_notified": 0, "pending_failed": 0}
+    assert second == {"completed": 0, "failed": 0, "skipped": 1, "pending_notified": 0, "pending_failed": 0}
+    assert state.skips == [("user-1", "learningsuite_team_member")]
+    assert client.created == ["user-1"]
 
 
 def test_invalid_openwebui_identity_is_recorded_without_calling_learningsuite() -> None:

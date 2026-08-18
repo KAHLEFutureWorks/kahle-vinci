@@ -18,6 +18,22 @@ class SQLiteProvisioningStateStore:
             ).fetchone()
         return bool(row and row["completed_at"] is not None)
 
+    def was_handled(self, openwebui_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT completed_at, skipped_reason FROM provisioning_state WHERE openwebui_id = ?",
+                (openwebui_id,),
+            ).fetchone()
+        return bool(row and (row["completed_at"] is not None or row["skipped_reason"]))
+
+    def skipped_reason(self, openwebui_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT skipped_reason FROM provisioning_state WHERE openwebui_id = ?",
+                (openwebui_id,),
+            ).fetchone()
+        return str(row["skipped_reason"]) if row and row["skipped_reason"] else None
+
     def member_id(self, openwebui_id: str) -> str | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -38,12 +54,13 @@ class SQLiteProvisioningStateStore:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO provisioning_state(openwebui_id, member_id, completed_at, last_error, updated_at)
-                VALUES (?, ?, ?, NULL, ?)
+                INSERT INTO provisioning_state(openwebui_id, member_id, completed_at, last_error, updated_at, skipped_reason)
+                VALUES (?, ?, ?, NULL, ?, NULL)
                 ON CONFLICT(openwebui_id) DO UPDATE SET
                     member_id=excluded.member_id,
                     completed_at=excluded.completed_at,
                     last_error=NULL,
+                    skipped_reason=NULL,
                     updated_at=excluded.updated_at
                 """,
                 (openwebui_id, member_id, now_epoch, now_epoch),
@@ -60,6 +77,21 @@ class SQLiteProvisioningStateStore:
                     updated_at=excluded.updated_at
                 """,
                 (openwebui_id, error_code, now_epoch),
+            )
+
+    def record_skipped(self, openwebui_id: str, reason: str, *, now_epoch: int) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO provisioning_state(
+                    openwebui_id, member_id, completed_at, last_error, updated_at, skipped_reason
+                ) VALUES (?, NULL, NULL, NULL, ?, ?)
+                ON CONFLICT(openwebui_id) DO UPDATE SET
+                    last_error=NULL,
+                    skipped_reason=excluded.skipped_reason,
+                    updated_at=excluded.updated_at
+                """,
+                (openwebui_id, now_epoch, reason),
             )
 
     def record_heartbeat(self, epoch_seconds: int) -> None:
@@ -130,10 +162,19 @@ class SQLiteProvisioningStateStore:
                     member_id TEXT,
                     completed_at INTEGER,
                     last_error TEXT,
-                    updated_at INTEGER NOT NULL
+                    updated_at INTEGER NOT NULL,
+                    skipped_reason TEXT
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(provisioning_state)")
+            }
+            if "skipped_reason" not in columns:
+                connection.execute(
+                    "ALTER TABLE provisioning_state ADD COLUMN skipped_reason TEXT"
+                )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS worker_state (

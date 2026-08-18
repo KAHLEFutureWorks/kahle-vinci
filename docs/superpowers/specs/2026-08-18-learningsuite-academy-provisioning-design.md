@@ -79,6 +79,7 @@ Logs enthalten nur eine technische Ereigniskennung, die OpenWebUI-`user_id`, den
 - Bei Netzwerk-, 429- oder 5xx-Fehlern bleibt der Nutzer offen. Der nächste Intervalllauf versucht es erneut.
 - Bei fachlichen Fehlern wie ungültiger E-Mail, unvollständigem Namen oder nicht eindeutigem Kursnamen wird kein Zugang vergeben. Der Fehler bleibt im Statusspeicher sichtbar und wird bei jeder Änderung beziehungsweise bei späteren Läufen erneut geprüft.
 - Ein Fehler eines Nutzers blockiert nie die Provisionierung weiterer Nutzer.
+- Ist eine E-Mail bereits als LearningSuite-Teammitglied angelegt, wird sie nicht als normales Mitglied neu angelegt. Der Nutzer wird einmalig mit `learningsuite_team_member` als dauerhaft übersprungen gespeichert und danach nicht erneut angefragt.
 - Der Dienst schreibt bei jedem erfolgreich abgeschlossenen Lauf eine Herzschlagdatei in sein eigenes Statusvolume. Ein Docker-Healthcheck überwacht diese Datei.
 
 ## Tests und Abnahme
@@ -95,7 +96,8 @@ Pflichtfälle:
 6. Kein oder mehrere Kurse mit exakt gleichem Namen verhindern die Provisionierung.
 7. Ungültige E-Mail oder unvollständiger Name werden sicher zurückgestellt.
 8. Ein temporärer API-Fehler eines Nutzers blockiert andere Nutzer nicht und wird später erneut versucht.
-9. Der Compose-Vertrag prüft Read-only-Mount, fehlende Portfreigabe, Pflichtvariablen und die Geheimnisbehandlung.
+9. Ein vorhandenes LearningSuite-Teammitglied wird dauerhaft übersprungen und erzeugt in Folgeläufen weder Fehler noch weitere API-Aufrufe.
+10. Der Compose-Vertrag prüft Read-only-Mount, fehlende Portfreigabe, Pflichtvariablen und die Geheimnisbehandlung.
 
 Die produktive Abnahme erfolgt danach mit einem eigens angelegten Testnutzer: zunächst `pending`, dann Umstellung auf `user`, Prüfung der einzelnen Kurszugangs-E-Mail und Sichtprüfung des Kurses in der KAHLE Academy. Anschließend wird der Dienst mit einem bereits erfolgreich provisionierten Nutzer erneut ausgeführt. Es darf keine zweite E-Mail entstehen.
 

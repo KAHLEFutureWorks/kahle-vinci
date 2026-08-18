@@ -13,6 +13,12 @@ class ProvisioningError(RuntimeError):
         self.code = code
 
 
+class ProvisioningSkip(RuntimeError):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 class RequestsLearningSuiteClient:
     def __init__(
         self,
@@ -52,6 +58,14 @@ class RequestsLearningSuiteClient:
             return self._member_id(self._json(response, "member_lookup_failed"))
         if response.status_code != 404:
             self._json(response, "member_lookup_failed")
+
+        response = self._request(
+            "get", "/team-members/by-email", params={"email": user.email}
+        )
+        if response.status_code == 200:
+            raise ProvisioningSkip("learningsuite_team_member")
+        if response.status_code != 404:
+            self._json(response, "team_member_lookup_failed")
 
         response = self._request(
             "post",

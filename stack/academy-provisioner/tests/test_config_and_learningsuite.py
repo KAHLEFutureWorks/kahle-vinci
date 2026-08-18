@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from app.config import ConfigError, ProvisioningConfig
-from app.learningsuite import ProvisioningError, RequestsLearningSuiteClient
+from app.learningsuite import ProvisioningError, ProvisioningSkip, RequestsLearningSuiteClient
 from app.models import EligibleUser
 
 
@@ -74,6 +74,7 @@ def test_new_member_receives_only_course_access_email() -> None:
     session = Mock()
     session.get.side_effect = [
         Response(404, {"error": "not found"}),
+        Response(404, {"error": "not found"}),
         Response(200, []),
     ]
     session.post.return_value = Response(200, {"id": "member-1"})
@@ -99,6 +100,23 @@ def test_new_member_receives_only_course_access_email() -> None:
         "disableAccessNotificationEmail": False,
         "sendLoginLinkInCourseEmail": True,
     }
+
+
+def test_existing_team_member_is_identified_without_member_creation() -> None:
+    session = Mock()
+    session.get.side_effect = [
+        Response(404, {"error": "not found"}),
+        Response(200, {"id": "team-member-1"}),
+    ]
+    client = RequestsLearningSuiteClient("https://api.test/api/v1", "secret", session)
+
+    with pytest.raises(ProvisioningSkip, match="learningsuite_team_member"):
+        client.find_or_create_member(
+            EligibleUser("user-1", "amal@kahle.de", "Amal", "Remo", "user")
+        )
+
+    assert session.get.call_args_list[1].args[0].endswith("/team-members/by-email")
+    assert session.post.call_count == 0
 
 
 def test_transport_errors_are_exposed_as_sanitized_provisioning_errors() -> None:
