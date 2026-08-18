@@ -30,6 +30,8 @@ class LearningSuiteClient(Protocol):
 class ProvisioningState(Protocol):
     def was_completed(self, user_id: str) -> bool: ...
 
+    def last_error(self, user_id: str) -> str | None: ...
+
     def record_completed(self, user_id: str, member_id: str, *, now_epoch: int) -> None: ...
 
     def record_failure(self, user_id: str, error_code: str, *, now_epoch: int) -> None: ...
@@ -59,6 +61,9 @@ class AcademyProvisioner:
             result["failed"] += 1
 
         pending_users = [user for user in users if not self.state.was_completed(user.openwebui_id)]
+        pending_users.sort(
+            key=lambda user: (self.state.last_error(user.openwebui_id) is not None, user.openwebui_id)
+        )
         result["skipped"] += len(users) - len(pending_users)
         users_to_provision = pending_users[:MAX_NEW_USERS_PER_CYCLE]
         result["skipped"] += len(pending_users) - len(users_to_provision)

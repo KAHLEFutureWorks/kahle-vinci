@@ -25,6 +25,12 @@ class FakeState:
     def was_completed(self, user_id: str) -> bool:
         return any(completed_user_id == user_id for completed_user_id, _ in self.completed)
 
+    def last_error(self, user_id: str) -> str | None:
+        for failed_user_id, error_code in reversed(self.failures):
+            if failed_user_id == user_id:
+                return error_code
+        return None
+
     def record_completed(self, user_id: str, member_id: str, *, now_epoch: int) -> None:
         self.completed.append((user_id, member_id))
 
@@ -159,3 +165,27 @@ def test_transport_failure_for_one_user_does_not_block_next_user() -> None:
     assert result == {"completed": 1, "failed": 1, "skipped": 0}
     assert state.failures == [("user-1", "learningsuite_request_failed")]
     assert state.completed == [("user-2", "member-user-2")]
+
+
+def test_new_user_is_not_starved_by_a_full_batch_of_retries() -> None:
+    class AlwaysFailingClient(FakeClient):
+        def find_or_create_member(self, user: EligibleUser) -> str:
+            if user.openwebui_id != "user-21":
+                raise ProvisioningError("member_create_failed")
+            return super().find_or_create_member(user)
+
+    users = [
+        EligibleUser(f"user-{number:02}", f"user-{number}@kahle.de", "Test", str(number), "user")
+        for number in range(1, 22)
+    ]
+    client = AlwaysFailingClient()
+    state = FakeState()
+    provisioner = AcademyProvisioner(
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+    )
+
+    provisioner.run_once()
+    result = provisioner.run_once()
+
+    assert result["completed"] == 1
+    assert ("user-21", "member-user-21") in state.completed
