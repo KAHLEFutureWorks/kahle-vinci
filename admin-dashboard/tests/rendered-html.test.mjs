@@ -24,7 +24,7 @@ test("renders the role-based KAHLE-Vinci knowledge portal", async () => {
   assert.doesNotMatch(portal, /portal\/auth\/step-up\/start/);
   assert.match(portal, /credentials: "include"/);
   assert.match(portal, /\/wissen\/api/);
-  assert.match(portal, /<a className="wp-back-link" href="\/" aria-label="Zurück zu KAHLE-Vinci"/);
+  assert.match(portal, /<Link className="wp-back-link" href="\/" aria-label="Zurück zu KAHLE-Vinci"/);
   assert.match(portal, /<ArrowLeft size=\{17\} \/>/);
   assert.match(headerStyles, /\.wp-back-link\s*\{/);
   assert.match(layout, /icon: "\/wissen\/favicon\.svg"/);

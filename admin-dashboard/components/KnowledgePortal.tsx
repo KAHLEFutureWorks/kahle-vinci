@@ -976,10 +976,10 @@ function KnowledgePortalContent() {
           <small>Wissensportal</small>
         </div>
         <div className="wp-header-actions">
-          <a className="wp-back-link" href="/" aria-label="Zurück zu KAHLE-Vinci">
+          <Link className="wp-back-link" href="/" aria-label="Zurück zu KAHLE-Vinci">
             <ArrowLeft size={17} />
             <span>Zurück zu KAHLE-Vinci</span>
-          </a>
+          </Link>
           <div className="wp-user">
             <span>{session.display_name}</span>
             <small>
