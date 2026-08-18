@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.learningsuite import ProvisioningError
 from app.models import EligibleUser, InvalidUser
 from app.provisioner import AcademyProvisioner
@@ -64,7 +66,8 @@ def test_existing_course_access_never_sends_another_course_email() -> None:
     state = FakeState()
 
     result = AcademyProvisioner(
-        FakeReader([user]), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+        FakeReader([user]), client, state, "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
     assert result == {"completed": 1, "failed": 0, "skipped": 0}
@@ -87,7 +90,8 @@ def test_failure_for_one_user_does_not_block_next_user() -> None:
     state = FakeState()
 
     result = AcademyProvisioner(
-        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
     assert result == {"completed": 1, "failed": 1, "skipped": 0}
@@ -105,6 +109,7 @@ def test_invalid_openwebui_identity_is_recorded_without_calling_learningsuite() 
         client,
         state,
         "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None,
         now_epoch=lambda: 100,
     ).run_once()
 
@@ -120,7 +125,8 @@ def test_completed_user_is_skipped_without_any_learningsuite_request() -> None:
     state.record_completed("user-1", "member-user-1", now_epoch=90)
 
     result = AcademyProvisioner(
-        FakeReader([user]), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+        FakeReader([user]), client, state, "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
     assert result == {"completed": 0, "failed": 0, "skipped": 1}
@@ -137,7 +143,8 @@ def test_new_users_are_bounded_to_a_rate_safe_batch() -> None:
     state = FakeState()
 
     result = AcademyProvisioner(
-        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
     assert result == {"completed": 20, "failed": 0, "skipped": 1}
@@ -159,7 +166,8 @@ def test_transport_failure_for_one_user_does_not_block_next_user() -> None:
     state = FakeState()
 
     result = AcademyProvisioner(
-        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None, now_epoch=lambda: 100
     ).run_once()
 
     assert result == {"completed": 1, "failed": 1, "skipped": 0}
@@ -181,7 +189,8 @@ def test_new_user_is_not_starved_by_a_full_batch_of_retries() -> None:
     client = AlwaysFailingClient()
     state = FakeState()
     provisioner = AcademyProvisioner(
-        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung", now_epoch=lambda: 100
+        FakeReader(users), client, state, "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=None, now_epoch=lambda: 100
     )
 
     provisioner.run_once()
@@ -210,3 +219,13 @@ def test_allowlist_processes_only_matching_email() -> None:
 
     assert result == {"completed": 1, "failed": 0, "skipped": 1}
     assert client.created == ["user-1"]
+
+
+def test_allowlist_decision_is_required_for_every_provisioner() -> None:
+    with pytest.raises(TypeError):
+        AcademyProvisioner(
+            FakeReader([]),
+            FakeClient(),
+            FakeState(),
+            "Einführung in die KAHLE-Vinci Nutzung",
+        )

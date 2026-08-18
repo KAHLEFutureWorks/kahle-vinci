@@ -45,7 +45,7 @@ class AcademyProvisioner:
         state: ProvisioningState,
         course_name: str,
         *,
-        allowed_emails: frozenset[str] | None = None,
+        allowed_emails: frozenset[str] | None,
         now_epoch: Callable[[], float] = time.time,
     ) -> None:
         self.reader = reader
