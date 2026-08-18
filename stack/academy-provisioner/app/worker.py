@@ -67,6 +67,7 @@ def main() -> int:
         RequestsLearningSuiteClient(config.api_base_url, config.api_key),
         state,
         config.course_name,
+        allowed_emails=config.allowed_emails,
     )
     run_forever(provisioner, state, interval_seconds=config.interval_seconds)
     return 0

@@ -26,6 +26,35 @@ def test_config_rejects_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None
         ProvisioningConfig.from_env()
 
 
+def test_config_rejects_missing_allowed_emails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LEARNINGSUITE_API_KEY", "secret")
+    monkeypatch.delenv("LEARNINGSUITE_ALLOWED_EMAILS", raising=False)
+
+    with pytest.raises(ConfigError, match="learningsuite_allowed_emails_required"):
+        ProvisioningConfig.from_env()
+
+
+def test_config_normalizes_allowed_emails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LEARNINGSUITE_API_KEY", "secret")
+    monkeypatch.setenv(
+        "LEARNINGSUITE_ALLOWED_EMAILS",
+        " JANSSEN@KAHLE.DE, test.user@kahle.de ",
+    )
+
+    config = ProvisioningConfig.from_env()
+
+    assert config.allowed_emails == frozenset({"janssen@kahle.de", "test.user@kahle.de"})
+
+
+def test_config_uses_none_for_explicit_all_users_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LEARNINGSUITE_API_KEY", "secret")
+    monkeypatch.setenv("LEARNINGSUITE_ALLOWED_EMAILS", "*")
+
+    assert ProvisioningConfig.from_env().allowed_emails is None
+
+
 def test_resolve_course_id_rejects_duplicate_exact_title() -> None:
     session = Mock()
     session.get.return_value = Response(

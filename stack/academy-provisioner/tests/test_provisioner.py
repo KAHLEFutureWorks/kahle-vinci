@@ -189,3 +189,24 @@ def test_new_user_is_not_starved_by_a_full_batch_of_retries() -> None:
 
     assert result["completed"] == 1
     assert ("user-21", "member-user-21") in state.completed
+
+
+def test_allowlist_processes_only_matching_email() -> None:
+    users = [
+        EligibleUser("user-1", "janssen@kahle.de", "Jan", "Janssen", "user"),
+        EligibleUser("user-2", "another.user@kahle.de", "Another", "User", "admin"),
+    ]
+    client = FakeClient()
+    state = FakeState()
+
+    result = AcademyProvisioner(
+        FakeReader(users),
+        client,
+        state,
+        "Einführung in die KAHLE-Vinci Nutzung",
+        allowed_emails=frozenset({"janssen@kahle.de"}),
+        now_epoch=lambda: 100,
+    ).run_once()
+
+    assert result == {"completed": 1, "failed": 0, "skipped": 1}
+    assert client.created == ["user-1"]

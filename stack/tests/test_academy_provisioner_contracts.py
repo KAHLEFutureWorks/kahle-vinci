@@ -29,8 +29,13 @@ def test_academy_provisioner_requires_key_and_uses_exact_course_name() -> None:
     environment = (STACK_ROOT / "env.production.template").read_text(encoding="utf-8")
 
     assert "LEARNINGSUITE_API_KEY: ${LEARNINGSUITE_API_KEY:?LEARNINGSUITE_API_KEY is required}" in compose
+    assert (
+        "LEARNINGSUITE_ALLOWED_EMAILS: "
+        "${LEARNINGSUITE_ALLOWED_EMAILS:?LEARNINGSUITE_ALLOWED_EMAILS is required}"
+    ) in compose
     assert "Einführung in die KAHLE-Vinci Nutzung" in compose
     assert "LEARNINGSUITE_API_KEY=<secret>" in environment
+    assert "LEARNINGSUITE_ALLOWED_EMAILS=<test-email>@kahle.de" in environment
 
 
 def test_production_limits_are_defined_for_academy_provisioner() -> None:

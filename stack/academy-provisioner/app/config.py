@@ -14,6 +14,7 @@ class ProvisioningConfig:
     api_base_url: str
     course_name: str
     interval_seconds: int
+    allowed_emails: frozenset[str] | None
 
     @classmethod
     def from_env(cls) -> "ProvisioningConfig":
@@ -26,6 +27,20 @@ class ProvisioningConfig:
         ).strip()
         if not course_name:
             raise ConfigError("learningsuite_course_name_required")
+
+        allowed_emails_value = os.getenv("LEARNINGSUITE_ALLOWED_EMAILS", "").strip()
+        if not allowed_emails_value:
+            raise ConfigError("learningsuite_allowed_emails_required")
+        if allowed_emails_value == "*":
+            allowed_emails = None
+        else:
+            allowed_emails = frozenset(
+                email.strip().lower()
+                for email in allowed_emails_value.replace(";", ",").split(",")
+                if email.strip()
+            )
+            if not allowed_emails or "*" in allowed_emails:
+                raise ConfigError("learningsuite_allowed_emails_invalid")
 
         try:
             interval_seconds = int(
@@ -41,4 +56,5 @@ class ProvisioningConfig:
             ).rstrip("/"),
             course_name=course_name,
             interval_seconds=max(60, interval_seconds),
+            allowed_emails=allowed_emails,
         )

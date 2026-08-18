@@ -15,6 +15,7 @@ Bei der Anlage wird keine allgemeine LearningSuite-Anmelde-E-Mail versendet. Die
    LEARNINGSUITE_API_BASE_URL=https://api.learningsuite.io/api/v1
    LEARNINGSUITE_COURSE_NAME=Einführung in die KAHLE-Vinci Nutzung
    LEARNINGSUITE_PROVISION_INTERVAL_SECONDS=60
+   LEARNINGSUITE_ALLOWED_EMAILS=janssen@kahle.de
    ```
 
 2. Der API-Key bleibt ausschließlich in dieser nicht versionierten Serverdatei. Er darf weder in Logs noch in Tickets oder im Git-Repository stehen.
@@ -42,5 +43,7 @@ Der Container besitzt keine veröffentlichten Ports. Er erhält die OpenWebUI-Da
 3. Prüfen, ob der LearningSuite-Account mit Microsoft-E-Mail, Vor- und Nachnamen existiert und der Kurs freigeschaltet ist.
 4. Prüfen, ob genau eine Kursfreischaltungs-E-Mail mit Login-Link angekommen ist.
 5. Den Worker noch einmal laufen lassen. Es darf keine zweite E-Mail versendet werden.
+
+Während der Abnahme verarbeitet `LEARNINGSUITE_ALLOWED_EMAILS` ausschließlich die dort aufgeführten, komma- oder semikolongetrennten E-Mail-Adressen. Eine fehlende oder leere Einstellung stoppt den Dienst sicher. Nach erfolgreicher Abnahme wird die Variable einmalig auf `*` gesetzt. Ab diesem Zeitpunkt werden alle freigegebenen Nutzer mit der Rolle `user` oder `admin` automatisch verarbeitet.
 
 Fehler einzelner Nutzer werden im Statusspeicher festgehalten und beim nächsten Durchlauf erneut versucht. Pro Durchlauf werden höchstens 20 noch nicht abgeschlossene Nutzer verarbeitet. Damit bleibt der Dienst auch bei einer Erstfreischaltung klar unter dem LearningSuite-Limit von 120 API-Aufrufen pro Minute. Ein nicht gefundener oder mehrfach gefundener Kursname stoppt den Durchlauf ohne eine Teilfreischaltung. Deaktivierungen, Löschungen und nachträgliche Profiländerungen werden bewusst noch nicht synchronisiert.

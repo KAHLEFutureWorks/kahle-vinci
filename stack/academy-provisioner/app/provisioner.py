@@ -45,12 +45,14 @@ class AcademyProvisioner:
         state: ProvisioningState,
         course_name: str,
         *,
+        allowed_emails: frozenset[str] | None = None,
         now_epoch: Callable[[], float] = time.time,
     ) -> None:
         self.reader = reader
         self.client = client
         self.state = state
         self.course_name = course_name
+        self.allowed_emails = allowed_emails
         self.now_epoch = now_epoch
 
     def run_once(self) -> dict[str, int]:
@@ -59,6 +61,11 @@ class AcademyProvisioner:
         for user in self.reader.invalid_users():
             self.state.record_failure(user.openwebui_id, user.error_code, now_epoch=self._now())
             result["failed"] += 1
+
+        if self.allowed_emails is not None:
+            allowed_users = [user for user in users if user.email in self.allowed_emails]
+            result["skipped"] += len(users) - len(allowed_users)
+            users = allowed_users
 
         pending_users = [user for user in users if not self.state.was_completed(user.openwebui_id)]
         pending_users.sort(
