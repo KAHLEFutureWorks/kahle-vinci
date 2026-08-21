@@ -1,4 +1,6 @@
 import importlib.util
+import ast
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -12,6 +14,130 @@ module = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = module
 SPEC.loader.exec_module(module)
+
+
+def load_tool_helpers(*names):
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "open-webui-tools"
+        / "rag_chat_hybrid_tool.py"
+    )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    nodes = [
+        item
+        for item in tree.body
+        if isinstance(item, ast.FunctionDef) and item.name in set(names)
+    ]
+    namespace = {"re": re}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source_path), "exec"), namespace)
+    return tuple(namespace[name] for name in names)
+
+
+def test_rag_query_sanitizer_removes_forwarded_openwebui_context_prompt():
+    (sanitize,) = load_tool_helpers("_sanitize_rag_query")
+    contaminated = (
+        "### Task: Respond using context. <context><source id=\"1\">"
+        "KAHLE_RAG_RESULT\nFOUND: false</source></context> query Wer ist Engin Bayir?"
+    )
+
+    assert sanitize(contaminated) == "Wer ist Engin Bayir?"
+    assert sanitize("Wie plane ich einen Termin im WPS?") == (
+        "Wie plane ich einen Termin im WPS?"
+    )
+
+
+def test_generic_opening_hours_query_requires_location_clarification():
+    (clarification,) = load_tool_helpers("_clarification_for_query")
+
+    assert clarification("Wie sind unsere Öffnungszeiten?") == (
+        "Für welchen Standort und welchen Bereich (Verkauf, Service oder "
+        "Teiledienst) brauchst du die Öffnungszeiten?"
+    )
+    assert clarification("Wie sind die Öffnungszeiten in Hannover?") == ""
+
+
+def test_ambiguous_customer_lock_query_requires_purpose_clarification():
+    clarification, guided = load_tool_helpers(
+        "_clarification_for_query", "_guided_response_for_query",
+    )
+
+    assert clarification("Wie sperre ich einen Kunden in Vaudis?") == (
+        "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
+        "oder um eine allgemeine Kundensperre in Vaudis?"
+    )
+    assert guided("Wie sperre ich einen Kunden in Vaudis?") == ""
+
+
+def test_explicit_marketing_opt_out_uses_rag_without_clarification():
+    clarification, guided = load_tool_helpers(
+        "_clarification_for_query", "_guided_response_for_query",
+    )
+
+    query = "Wie sperre ich einen Kunden, wenn er keine Werbung mehr bekommen soll?"
+
+    assert clarification(query) == ""
+    assert guided(query) == ""
+
+
+def test_marketing_opt_out_instruction_blocks_unrelated_vaudis_fields():
+    (instruction,) = load_tool_helpers("_rag_answer_instruction")
+
+    value = instruction(
+        "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
+        "in Vaudis über die DSE-Kontaktfreigaben?"
+    )
+
+    assert "Werbewiderspruch" in value
+    assert "besondere Merkmale" in value
+    assert "Finanzdaten" in value
+    assert "nicht" in value
+
+
+def test_general_customer_lock_routes_to_data_protection_with_minimal_fields():
+    clarification, guided = load_tool_helpers(
+        "_clarification_for_query", "_guided_response_for_query",
+    )
+
+    query = "Es geht um eine allgemeine Kundensperre in Vaudis."
+    answer = guided(query)
+
+    assert clarification(query) == ""
+    assert "datenschutz@kahle.de" in answer
+    assert "Kundennummer" in answer
+    assert "Grund der gewünschten Sperre" in answer
+    assert "mailto:datenschutz@kahle.de" in answer
+
+
+def test_kahle_abbreviations_are_expanded_before_opening_hours_clarification():
+    expand, clarification = load_tool_helpers(
+        "_expand_kahle_query_aliases", "_clarification_for_query",
+    )
+
+    expanded = expand("Wie sind unsere TD Öffnungszeiten in NIE?")
+
+    assert expanded == "Wie sind unsere Teiledienst Öffnungszeiten in Nienburg?"
+    assert clarification(expanded) == ""
+
+
+def test_sales_and_stadthagen_abbreviations_are_expanded_before_clarification():
+    expand, clarification = load_tool_helpers(
+        "_expand_kahle_query_aliases", "_clarification_for_query",
+    )
+
+    expanded = expand("Wie sind unsere VK Öffnungszeiten in SHG?")
+
+    assert expanded == "Wie sind unsere Verkauf Öffnungszeiten in Stadthagen?"
+    assert clarification(expanded) == ""
+
+
+def test_all_supported_location_codes_expand_as_standalone_tokens_only():
+    (expand,) = load_tool_helpers("_expand_kahle_query_aliases")
+
+    assert expand("HAN WUN WED WAL NEU NIE STA SHG") == (
+        "Hannover Wunstorf Wedemark Walsrode Neustadt am Rübenberge "
+        "Nienburg Stadthagen Stadthagen"
+    )
+    assert expand("STATUS und NEUigkeit") == "STATUS und NEUigkeit"
 
 
 def test_acl_filter_is_mandatory_and_covers_rights_status_publication_and_validity():
@@ -204,6 +330,125 @@ def test_broad_results_first_cover_different_documents_before_filling_remaining_
     assert [index for index, _score in selected] == [0, 1, 3, 4, 5]
 
 
+def test_all_location_opening_hours_selects_one_result_per_location():
+    locations = (
+        "Hannover", "Wunstorf", "Wedemark", "Walsrode",
+        "Neustadt am Rübenberge", "Nienburg", "Stadthagen",
+    )
+    candidates = [
+        {
+            "payload": {
+                "document_id": "master-context",
+                "title": f"Standort {location}",
+                "parent_content": (
+                    f"{location}\nÖffnungszeiten: Service Mo-Fr 07:00-18:00"
+                ),
+            }
+        }
+        for location in locations
+    ]
+    candidates.insert(0, {
+        "payload": {
+            "document_id": "navigation",
+            "title": "Navigation und Verknüpfungen",
+            "heading_path": ["Navigation"],
+            "parent_content": (
+                "Öffnungszeiten der Standorte Hannover, Wunstorf, Wedemark, "
+                "Walsrode, Neustadt am Rübenberge, Nienburg und Stadthagen"
+            ),
+        }
+    })
+    # A second, highly ranked Stadthagen chunk must not displace Walsrode.
+    candidates.insert(1, {
+        "payload": {
+            "document_id": "stadthagen-extra",
+            "title": "Standort Stadthagen Zusatz",
+            "parent_content": "Stadthagen Öffnungszeiten: Verkauf Mo-Fr 09:00-18:00",
+        }
+    })
+    reranked = [(index, 1.0 - index / 100) for index in range(len(candidates))]
+
+    selected = module.diversify_opening_hours_locations(
+        reranked, candidates, result_limit=8,
+    )
+    selected_text = "\n".join(
+        candidates[index]["payload"]["parent_content"] for index, _score in selected
+    )
+
+    assert len(selected) == 7
+    for location in locations:
+        assert selected_text.casefold().count(location.casefold()) == 1
+
+
+def test_all_location_opening_hours_never_focuses_one_location_document():
+    candidates = [{
+        "payload": {
+            "document_id": "neustadt",
+            "title": "Standort Neustadt am Rübenberge",
+            "parent_content": "Öffnungszeiten Neustadt am Rübenberge",
+        },
+    }]
+    broad_query = (
+        "Öffnungszeiten Verkauf Service Teiledienst alle Standorte Hannover "
+        "Wunstorf Wedemark Walsrode Neustadt am Rübenberge Nienburg Stadthagen"
+    )
+
+    assert module.focused_document_ids_for_query(broad_query, candidates) == set()
+    assert module.focused_document_ids_for_query(
+        "Öffnungszeiten Standort Neustadt am Rübenberge", candidates,
+    ) == {"neustadt"}
+
+
+def test_all_location_opening_hours_reranks_the_complete_candidate_pool():
+    broad_query = (
+        "Öffnungszeiten Verkauf Service Teiledienst alle Standorte Hannover "
+        "Wunstorf Wedemark Walsrode Neustadt am Rübenberge Nienburg Stadthagen"
+    )
+
+    assert module.rerank_candidate_count(broad_query, 50, result_limit=8) == 50
+    assert module.rerank_candidate_count("Öffnungszeiten Hannover", 50, result_limit=8) == 24
+
+
+def test_all_location_opening_hours_detects_only_truly_missing_location_passages():
+    candidates = [{
+        "id": "wunstorf-hours",
+        "payload": {
+            "title": "KB-KAHLE | Standort Wunstorf (LOC-WUN)",
+            "heading_path": ["Standort Wunstorf", "Öffnungszeiten"],
+            "parent_content": "Service Mo-Fr 07:00-18:00",
+        },
+    }, {
+        "id": "navigation",
+        "payload": {
+            "title": "Navigation",
+            "heading_path": ["Verknüpfungen"],
+            "parent_content": "Hannover, Wedemark, Walsrode und Stadthagen",
+        },
+    }]
+
+    missing = module.missing_opening_hours_locations(candidates)
+
+    assert ("wunstorf",) not in missing
+    assert ("hannover",) in missing
+    assert ("stadthagen",) in missing
+
+
+def test_all_location_opening_hours_keeps_exact_location_evidence_below_global_threshold():
+    candidates = [{
+        "payload": {
+            "title": "KB-KAHLE | Standort Stadthagen (LOC-STA)",
+            "heading_path": ["Standort Stadthagen", "Öffnungszeiten"],
+            "parent_content": "Service Mo-Fr 07:00-18:00",
+        },
+    }]
+
+    selected = module.diversify_opening_hours_locations(
+        [(0, 0.12)], candidates, result_limit=8,
+    )
+
+    assert selected == [(0, 0.12)]
+
+
 def test_named_document_overview_returns_every_main_chapter_and_no_frontmatter(monkeypatch):
     requests_seen = []
     def point(identifier, heading, content, order):
@@ -388,6 +633,24 @@ def test_short_person_query_focuses_document_by_exact_content_terms():
     assert module.focused_document_ids("Was weißt du über Thomas Keller?", candidates) == {"contacts"}
 
 
+def test_wer_ist_person_query_focuses_exact_contact_document():
+    candidates = [{
+        "payload": {
+            "document_id": "contacts",
+            "title": "KAHLE Wichtige Kontakte Rollen",
+            "parent_content": "Geschäftsführer: Thomas Keller (keller@kahle.de)",
+        },
+    }, {
+        "payload": {
+            "document_id": "other",
+            "title": "Service Richtlinie",
+            "parent_content": "Allgemeine Informationen zum Service.",
+        },
+    }]
+
+    assert module.focused_document_ids("Wer ist Thomas Keller?", candidates) == {"contacts"}
+
+
 def test_named_entity_uses_acl_filtered_hybrid_order_when_reranker_is_unavailable(monkeypatch):
     points = [{
         "id": "p1", "score": .9,
@@ -424,6 +687,53 @@ def test_named_entity_uses_acl_filtered_hybrid_order_when_reranker_is_unavailabl
     )
 
     assert [chunk.document_id for chunk in chunks] == ["contacts"]
+
+
+def test_sparse_encoder_outage_falls_back_to_acl_filtered_dense_search(monkeypatch):
+    captured = {"bodies": []}
+    points = [{
+        "id": "p1", "score": .88,
+        "payload": {
+            "document_id": "contacts", "version_id": "v1",
+            "title": "KAHLE Wichtige Kontakte Rollen",
+            "content": "Engin Bayir ist als Führungskraft hinterlegt.",
+            "parent_content": "Engin Bayir ist als Führungskraft hinterlegt.",
+            "knowledgebase_ids": ["allgemein"], "status": "active", "published": True,
+            "source_id": "s", "source_url": "/s", "valid_until": "2026-11-01",
+        },
+    }]
+
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"result": {"points": points}}
+
+    def fake_post(url, **kwargs):
+        captured["bodies"].append(kwargs["json"])
+        return Response()
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    class SparseUnavailable:
+        def encode_query(self, query):
+            raise module.RetrievalError("sparse_encoder_unavailable")
+
+    class Reranker:
+        def rerank(self, query, documents, top_n):
+            return [(0, .91)]
+
+    chunks = module.QdrantHybridRetriever(
+        "http://qdrant", "vinci_knowledge", SparseUnavailable(), Reranker(),
+    ).retrieve(
+        "Wer ist Engin Bayir?", [1.0],
+        module.RetrievalScope("u", ("allgemein",), ("v1",)),
+        today=date(2026, 8, 19),
+    )
+
+    assert [chunk.document_id for chunk in chunks] == ["contacts"]
+    search_body = captured["bodies"][0]
+    assert search_body["using"] == "dense"
+    assert search_body["query"] == [1.0]
+    assert "filter" in search_body
 
 
 def test_ionos_reranker_reads_the_documented_response_shape():

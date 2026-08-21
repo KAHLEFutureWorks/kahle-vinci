@@ -50,3 +50,31 @@ def test_production_limits_are_defined_for_academy_provisioner() -> None:
     assert "mem_limit: 256m" in block
     assert "cpus: 0.5" in block
     assert "pids_limit: 128" in block
+
+
+def test_local_stack_disables_academy_provisioning_and_resolves_required_placeholders() -> None:
+    local_compose = (STACK_ROOT / "docker-compose.local-edge.yml").read_text(encoding="utf-8")
+    local_start = (STACK_ROOT.parent / "scripts" / "start-stack.ps1").read_text(encoding="utf-8")
+
+    local_block = local_compose.split("  academy-provisioner:\n", 1)[1].split(
+        "\n  caddy-local:\n", 1
+    )[0]
+    assert 'profiles: ["production-only"]' in local_block
+    for variable in (
+        "LEARNINGSUITE_API_KEY",
+        "LEARNINGSUITE_ALLOWED_EMAILS",
+        "MICROSOFT_CLIENT_TENANT_ID",
+        "MICROSOFT_CLIENT_ID",
+        "MICROSOFT_CLIENT_SECRET",
+    ):
+        assert f'{variable} = "local-disabled"' in local_start
+    assert 'if ([Environment]::GetEnvironmentVariable($name) -eq "local-disabled")' in local_start
+    assert 'Remove-Item -Path "Env:$name"' in local_start
+
+
+def test_local_stack_imports_the_current_user_ionos_token() -> None:
+    local_start = (STACK_ROOT.parent / "scripts" / "start-stack.ps1").read_text(encoding="utf-8")
+
+    assert "GetEnvironmentVariable(\"IONOS_API_TOKEN\", \"User\")" in local_start
+    assert 'Set-Item -Path "Env:IONOS_API_TOKEN"' in local_start
+    assert "$importedIonosApiToken" in local_start

@@ -87,7 +87,7 @@ _TITLE_STOPWORDS = {
     "am", "an", "auf", "aus", "das", "der", "die", "ein", "eine", "einer",
     "fur", "im", "in", "mit", "oder", "steht", "und", "unser", "unsere",
     "unserer", "von", "was", "wer", "zu", "kahle", "gruppe", "dokument", "datei",
-    "du", "uber", "weisst", "weiss", "weit", "kennt", "kennst",
+    "du", "uber", "weisst", "weiss", "weit", "kennt", "kennst", "ist", "sind",
 }
 def _title_terms(value: str) -> set[str]:
     normalized = unicodedata.normalize("NFKD", value or "")
@@ -159,6 +159,79 @@ def diversify_reranked(
             continue
         selected.append((index, score))
         selected_indices.add(index)
+        if len(selected) >= result_limit:
+            break
+    return selected
+_OPENING_HOURS_LOCATIONS = (
+    ("hannover",),
+    ("wunstorf",),
+    ("wedemark",),
+    ("walsrode",),
+    ("neustadt", "rubenberge"),
+    ("nienburg",),
+    ("stadthagen",),
+)
+def opening_hours_all_locations_intent(query: str) -> bool:
+    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
+    if not ("offnungszeiten" in folded or "oeffnungszeiten" in folded):
+        return False
+    location_hits = sum(all(token in folded for token in location) for location in _OPENING_HOURS_LOCATIONS)
+    return any(token in folded for token in ("alle standorte", "allgemein", "alles")) or location_hits >= 4
+def focused_document_ids_for_query(
+    query: str, candidates: list[dict[str, Any]],
+) -> set[str]:
+    if opening_hours_all_locations_intent(query):
+        return set()
+    return focused_document_ids(query, candidates)
+def rerank_candidate_count(query: str, candidate_count: int, *, result_limit: int) -> int:
+    if opening_hours_all_locations_intent(query):
+        return min(candidate_count, 50)
+    return min(candidate_count, result_limit * 3)
+def _opening_hours_location_matches(
+    point: dict[str, Any], location: tuple[str, ...],
+) -> bool:
+    payload = point.get("payload") or {}
+    identity = "\n".join((
+        str(payload.get("title") or ""),
+        " > ".join(str(item) for item in (payload.get("heading_path") or ())),
+    ))
+    text = "\n".join((
+        identity,
+        str(payload.get("parent_content") or payload.get("content") or ""),
+    ))
+    folded_identity = (
+        unicodedata.normalize("NFKD", identity)
+        .encode("ascii", "ignore").decode().casefold()
+    )
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
+    has_hours = (
+        "offnungszeiten" in folded
+        or "oeffnungszeiten" in folded
+        or bool(re.search(r"\bmo\s*[-–]\s*fr\b", folded))
+    )
+    return has_hours and all(token in folded_identity for token in location)
+def missing_opening_hours_locations(
+    candidates: list[dict[str, Any]],
+) -> list[tuple[str, ...]]:
+    return [
+        location for location in _OPENING_HOURS_LOCATIONS
+        if not any(_opening_hours_location_matches(point, location) for point in candidates)
+    ]
+def diversify_opening_hours_locations(
+    reranked: list[tuple[int, float]], candidates: list[dict[str, Any]],
+    *, result_limit: int,
+) -> list[tuple[int, float]]:
+    """Return at most one opening-hours passage for each known location."""
+    selected: list[tuple[int, float]] = []
+    selected_indices: set[int] = set()
+    for location in _OPENING_HOURS_LOCATIONS:
+        for index, score in reranked:
+            if index < 0 or index >= len(candidates) or index in selected_indices:
+                continue
+            if _opening_hours_location_matches(candidates[index], location):
+                selected.append((index, score))
+                selected_indices.add(index)
+                break
         if len(selected) >= result_limit:
             break
     return selected
@@ -369,20 +442,39 @@ class QdrantHybridRetriever:
         if not 30 <= candidate_limit <= 50 or not 5 <= result_limit <= 8:
             raise RetrievalError("retrieval_limits_out_of_policy")
         acl = mandatory_acl_filter(scope, today)
-        sparse = self.sparse_encoder.encode_query(query)
-        build_id = str(sparse.pop("build_id", ""))
-        if not build_id:
-            raise RetrievalError("sparse_build_id_missing")
-        acl["must"].append({"key": "build_id", "match": {"value": build_id}})
-        body = {
-            "prefetch": [
-                {"query": dense_vector, "using": "dense", "filter": acl, "limit": candidate_limit},
-                {"query": sparse, "using": "bm25", "filter": acl, "limit": candidate_limit},
-            ],
-            "query": {"fusion": "rrf"},
-            "limit": candidate_limit,
-            "with_payload": True,
-        }
+        try:
+            sparse = self.sparse_encoder.encode_query(query)
+            build_id = str(sparse.pop("build_id", ""))
+            if not build_id:
+                raise RetrievalError("sparse_build_id_missing")
+        except RetrievalError as exc:
+            if not str(exc).startswith("sparse_"):
+                raise
+            sparse = None
+            build_id = ""
+        if build_id:
+            acl["must"].append({"key": "build_id", "match": {"value": build_id}})
+        if sparse is None:
+            # Dense retrieval remains ACL-filtered and is still checked by the
+            # external reranker. A temporary sparse encoder outage must not
+            # make valid internal knowledge disappear completely.
+            body = {
+                "query": dense_vector,
+                "using": "dense",
+                "filter": acl,
+                "limit": candidate_limit,
+                "with_payload": True,
+            }
+        else:
+            body = {
+                "prefetch": [
+                    {"query": dense_vector, "using": "dense", "filter": acl, "limit": candidate_limit},
+                    {"query": sparse, "using": "bm25", "filter": acl, "limit": candidate_limit},
+                ],
+                "query": {"fusion": "rrf"},
+                "limit": candidate_limit,
+                "with_payload": True,
+            }
         try:
             response = requests.post(
                 f"{self.qdrant_url}/collections/{self.alias}/points/query",
@@ -396,6 +488,8 @@ class QdrantHybridRetriever:
             point for point in self._parent_centered(points, candidate_limit)
             if not _metadata_only(point)
         ]
+        if opening_hours_all_locations_intent(query):
+            candidates = self._complete_opening_hours_locations(candidates, acl)
         identifiers = explicit_source_identifiers(query)
         if identifiers:
             candidates = [
@@ -409,7 +503,7 @@ class QdrantHybridRetriever:
             ]
             if not candidates:
                 return []
-        focused_ids = focused_document_ids(query, candidates) if not identifiers else set()
+        focused_ids = focused_document_ids_for_query(query, candidates) if not identifiers else set()
         if focused_ids:
             candidates = [
                 point for point in candidates
@@ -431,7 +525,7 @@ class QdrantHybridRetriever:
         try:
             reranked = self.reranker.rerank(
                 query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
-                min(len(candidates), result_limit * 3),
+                rerank_candidate_count(query, len(candidates), result_limit=result_limit),
             )
         except RetrievalError as exc:
             # A named person, e-mail address or an otherwise unambiguous document
@@ -464,6 +558,10 @@ class QdrantHybridRetriever:
         )
         if overview_selection:
             candidates, ranked_selection = merge_overview_chapters(candidates, overview_selection)
+        elif opening_hours_all_locations_intent(query):
+            ranked_selection = diversify_opening_hours_locations(
+                reranked, candidates, result_limit=result_limit,
+            )
         elif identifiers or focused_ids:
             ranked_selection = eligible_reranked[:result_limit]
         else:
@@ -490,6 +588,53 @@ class QdrantHybridRetriever:
                 retrieval_score=float(point.get("score") or 0), rerank_score=float(score),
             ))
         return selected
+
+    def _complete_opening_hours_locations(
+        self, candidates: list[dict[str, Any]], acl: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Recover location passages omitted from the broad top-50 fusion pool.
+
+        This remains one user-visible tool call. Only missing, known locations
+        receive a narrow BM25 lookup and every recovered point still carries
+        the same mandatory ACL filter.
+        """
+        result = list(candidates)
+        seen = {
+            str((point.get("payload") or {}).get("parent_id") or point.get("id") or "")
+            for point in result
+        }
+        for location in missing_opening_hours_locations(result):
+            try:
+                sparse = self.sparse_encoder.encode_query(
+                    "Öffnungszeiten Standort " + " ".join(location)
+                    + " Verkauf Service Teiledienst"
+                )
+                sparse.pop("build_id", None)
+                response = requests.post(
+                    f"{self.qdrant_url}/collections/{self.alias}/points/query",
+                    json={
+                        "query": sparse,
+                        "using": "bm25",
+                        "filter": acl,
+                        "limit": 8,
+                        "with_payload": True,
+                    },
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                points = response.json()["result"]["points"]
+            except (RetrievalError, requests.RequestException, KeyError, TypeError, ValueError):
+                continue
+            for point in self._parent_centered(points, 8):
+                identity = str(
+                    (point.get("payload") or {}).get("parent_id") or point.get("id") or ""
+                )
+                if identity in seen or _metadata_only(point):
+                    continue
+                if _opening_hours_location_matches(point, location):
+                    result.append(point)
+                    seen.add(identity)
+        return result
 
     def _document_points(
         self, document_ids: set[str], acl: dict[str, Any],
@@ -586,6 +731,19 @@ def _feedback_link(chat_id, message_id):
         "[Wissensfehler melden]"
         f"(/wissen/?feedback=1&chat_id={chat_id}&message_id={message_id})"
     )
+def _missing_rag_result(query, chat_id, message_id):
+    evidence = _evidence_bundle(
+        query,
+        missing_information=[
+            "Für die konkrete Anfrage liegt keine ausreichende freigegebene Evidenz vor."
+        ],
+    )
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: false\n"
+        f"{_evidence_bundle_line(evidence)}\n"
+        "ANSWER: Dazu habe ich keine verlässliche freigegebene Information.\n"
+        f"FEEDBACK_LINK: {_feedback_link(chat_id, message_id)}"
+    )
 def _hybrid_setting(primary, fallback=""):
     return os.environ.get(primary) or fallback
 def _hybrid_embed(base_url, api_key, model, query, timeout):
@@ -603,6 +761,205 @@ def _hybrid_user_id(user):
     if not isinstance(user, dict):
         return ""
     return str(user.get("id") or (user.get("user") or {}).get("id") or "").strip()
+def _sanitize_rag_query(query):
+    """Remove an OpenWebUI answer prompt accidentally forwarded as query.
+
+    Some native tool-capable models may repeat the complete synthesis prompt,
+    including a previous ``<context>`` block, when they invoke rag_chat again.
+    Retrieval must only see the user's actual question at the end. Normal
+    queries are returned unchanged.
+    """
+    value = str(query or "").strip()
+    if "KAHLE_RAG_RESULT" not in value or "</context>" not in value.lower():
+        return value
+    value = re.split(r"</context>", value, flags=re.IGNORECASE)[-1].strip()
+    return re.sub(r"^query\s*[:=-]?\s*", "", value, flags=re.IGNORECASE).strip()
+def _expand_kahle_query_aliases(query):
+    """Expand unambiguous internal shorthand before every retrieval stage.
+
+    Location codes intentionally remain case-sensitive: lowercase ``nie`` and
+    ``neu`` are normal German words. This keeps natural questions unchanged
+    while supporting the uppercase codes employees use in daily work.
+    """
+    value = str(query or "").strip()
+    aliases = (
+        ("TD", "Teiledienst"),
+        ("VK", "Verkauf"),
+        ("HAN", "Hannover"),
+        ("WUN", "Wunstorf"),
+        ("WED", "Wedemark"),
+        ("WAL", "Walsrode"),
+        ("NEU", "Neustadt am Rübenberge"),
+        ("NIE", "Nienburg"),
+        ("STA", "Stadthagen"),
+        ("SHG", "Stadthagen"),
+    )
+    for alias, canonical in aliases:
+        value = re.sub(
+            rf"(?<![A-Za-z0-9])(?:LOC-)?{re.escape(alias)}(?![A-Za-z0-9])",
+            canonical,
+            value,
+        )
+    return value
+def _clarification_for_query(query):
+    """Ask for the required scope instead of returning an arbitrary long list."""
+    value = str(query or "").strip().casefold()
+    customer_lock = (
+        re.search(r"\b(?:kunde|kunden)(?:\b|(?=sperr|entsperr))", value)
+        and re.search(r"(?:\b(?:sperr|entsperr)\w*|\bkunden(?:sperr|entsperr)\w*)", value)
+        and re.search(r"\b(?:vaudis|vaudisx|dse)\b", value)
+    )
+    marketing_scope = re.search(
+        r"\b(?:werbung|werbewiderspruch|befragung(?:en)?|kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
+        value,
+    )
+    general_scope = re.search(
+        r"\b(?:allgemein(?:e|en|er)?|vollstaendig(?:e|en|er)?|vollständig(?:e|en|er)?|"
+        r"verkaufssperre|auftragssperre|finanzsperre)\b",
+        value,
+    )
+    if customer_lock and not marketing_scope and not general_scope:
+        return (
+            "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
+            "oder um eine allgemeine Kundensperre in Vaudis?"
+        )
+    if not re.search(r"\b(?:öffnungszeiten|oeffnungszeiten|öffnungszeit|oeffnungszeit)\b", value):
+        return ""
+    locations = (
+        "hannover", "wunstorf", "neustadt", "rübenberge", "ruebenberge",
+        "wedemark", "walsrode", "nienburg", "stadthagen",
+    )
+    if any(location in value for location in locations):
+        return ""
+    return (
+        "Für welchen Standort und welchen Bereich (Verkauf, Service oder "
+        "Teiledienst) brauchst du die Öffnungszeiten?"
+    )
+def _guided_response_for_query(query):
+    """Return deterministic next steps for clarified high-risk internal intents.
+
+    The actual marketing opt-out process remains source-driven through RAG.
+    A general customer lock has deliberately no operational how-to in Vinci;
+    the user must contact data protection with the two required facts.
+    """
+    value = str(query or "").strip().casefold()
+    customer_lock = (
+        re.search(r"\b(?:kunde|kunden)(?:\b|(?=sperr|entsperr))", value)
+        and re.search(r"(?:\b(?:sperr|entsperr)\w*|\bkunden(?:sperr|entsperr)\w*)", value)
+        and re.search(r"\b(?:vaudis|vaudisx|dse)\b", value)
+    )
+    general_scope = re.search(
+        r"\b(?:allgemein(?:e|en|er)?|vollstaendig(?:e|en|er)?|vollständig(?:e|en|er)?|"
+        r"verkaufssperre|auftragssperre|finanzsperre)\b",
+        value,
+    )
+    if not customer_lock or not general_scope:
+        return ""
+    return (
+        "Bitte wende dich mit der Kundennummer und dem Grund der gewünschten "
+        "Sperre an [datenschutz@kahle.de](mailto:datenschutz@kahle.de?"
+        "subject=Allgemeine%20Kundensperre%20in%20Vaudis&"
+        "body=Kundennummer%3A%20%0AGrund%20der%20gew%C3%BCnschten%20Sperre%3A%20)."
+    )
+def _rag_answer_instruction(query):
+    """Return query-specific grounding rules without replacing retrieval."""
+    value = str(query or "").strip().casefold()
+    marketing_scope = re.search(
+        r"\b(?:werbung|werbesperre|werbewiderspruch|befragung(?:en)?|"
+        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
+        value,
+    )
+    instruction = (
+        "Antworte nur aus CONTEXT. Belege jede konkrete interne Aussage mit [Quelle N]. "
+        "Bei Konflikt nicht stillschweigend entscheiden. "
+    )
+    if marketing_scope:
+        instruction += (
+            "Nutze ausschließlich einschlägige Textstellen zu Werbewiderspruch, Werbung, "
+            "automatisierten Befragungen, DSE-Kontaktfreigaben und Sperrliste. "
+            "Leite keine allgemeine Kundensperre und keine Felder, Register oder Datenkategorien "
+            "aus anderen Vaudis-Handbuchtreffern ab. Nenne insbesondere besondere Merkmale oder "
+            "Finanzdaten nur, wenn die einschlägige Quelle zum Werbewiderspruch dies ausdrücklich verlangt. "
+        )
+    return instruction
+def _fold_evidence_text(value):
+    return (
+        str(value or "").casefold()
+        .replace("ä", "ae").replace("ö", "oe")
+        .replace("ü", "ue").replace("ß", "ss")
+    )
+def _procedural_evidence_intent(query):
+    value = _fold_evidence_text(query)
+    value = re.sub(
+        r"\b(?:kein(?:e|en|er|es)?|ohne)\s+"
+        r"(?:\w+\s+){0,2}"
+        r"(?:anleitung|schritte?|ablaufschritte?|vorgehen|ablauf)\w*",
+        "",
+        value,
+    )
+    if any(marker in value for marker in ("anleitung", "schritt", "vorgehen", "ablauf")):
+        return True
+    return bool(
+        re.search(
+            r"\bwie\s+(?:"
+            r"kann|muss|soll|darf|gehe|verfahre|funktioniert|laeuft|"
+            r"bedien|nutz|verwend|richt|beantrag|aender|pfleg|meld|"
+            r"fuehr|oeffn|waehl|trag|gib|erfass|speicher|bestaetig|"
+            r"erstell|plan|buch|sperr"
+            r")\w*\b",
+            value,
+        )
+    )
+def _context_has_procedure(context):
+    value = _fold_evidence_text(context)
+    patterns = (
+        r"\bo?ffn\w*", r"\bnavigier\w*", r"\bklick\w*",
+        r"\bwaehl\w*", r"\b(?:eingeb\w*|gib)\b", r"\berfass\w*",
+        r"\bspeicher\w*", r"\bbestaetig\w*", r"\berstell\w*",
+    )
+    return sum(bool(re.search(pattern, value)) for pattern in patterns) >= 3
+def _evidence_bundle(query, context="", sources=None, missing_information=None):
+    source_items = list(sources or [])
+    missing = list(missing_information or [])
+    claims = []
+    for source in source_items:
+        number = source.get("number")
+        claim = str(source.get("evidence_text") or "").strip()
+        if number and claim:
+            claims.append({"source_id": f"#{number}", "text": claim[:1000]})
+    clean_sources = [
+        {key: value for key, value in source.items() if key != "evidence_text"}
+        for source in source_items
+    ]
+    conflicts = [
+        f"#{source['number']}"
+        for source in source_items
+        if source.get("number") and source.get("conflict")
+    ]
+    if not source_items:
+        status = "unsupported"
+    else:
+        status = "supported"
+        if conflicts:
+            status = "partially_supported"
+            missing.append(
+                "Die Quellen enthalten einen gekennzeichneten inhaltlichen Konflikt."
+            )
+        if _procedural_evidence_intent(query) and not _context_has_procedure(context):
+            status = "partially_supported"
+            missing.append(
+                "Die Quellen bestätigen das Thema, enthalten aber keine ausreichende Anleitung."
+            )
+    return {
+        "schema_version": "kahle.evidence-bundle.v1",
+        "status": status,
+        "supported_claims": claims,
+        "missing_information": missing,
+        "conflicts": conflicts,
+        "sources": clean_sources,
+    }
+def _evidence_bundle_line(bundle):
+    return "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
 def _hybrid_record_event(portal_url, internal_key, user_id, query, found,
                          source_count, started_at, error_code=None):
     """Best-effort Betriebsmetrik ohne Fragetext oder Dokumentinhalt."""
@@ -641,7 +998,7 @@ class Tools:
 
     async def rag_chat(self, query: str = "", __user__: dict | None = None, __chat_id__: str = "", __message_id__: str = "") -> str:
         """Durchsucht ausschließlich freigegebenes Wissen, das der angemeldete Nutzer lesen darf."""
-        query = str(query or "").strip()
+        query = _expand_kahle_query_aliases(_sanitize_rag_query(query))
         started_at = time.monotonic()
         user_id = _hybrid_user_id(__user__)
         internal_key = self.valves.INTERNAL_API_KEY or _hybrid_setting("KB_ADMIN_MAINTENANCE_API_KEY")
@@ -650,8 +1007,33 @@ class Tools:
             "RAG_OPENAI_API_BASE_URL", _hybrid_setting("OPENAI_API_BASE_URL", "https://openai.inference.de-txl.ionos.com/v1")
         )
         model = self.valves.IONOS_EMBEDDING_MODEL or _hybrid_setting("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")
+        clarification = _clarification_for_query(query)
+        if clarification:
+            evidence = _evidence_bundle(query, missing_information=[clarification])
+            return (
+                "KAHLE_RAG_RESULT\nFOUND: false\n"
+                "CLARIFICATION_REQUIRED: true\n"
+                f"{_evidence_bundle_line(evidence)}\n"
+                f"ANSWER: {clarification}\n"
+                f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}"
+            )
+        guided_response = _guided_response_for_query(query)
+        if guided_response:
+            evidence = _evidence_bundle(
+                query,
+                missing_information=[
+                    "Für eine operative Anleitung liegt keine freigegebene Evidenz vor."
+                ],
+            )
+            return (
+                "KAHLE_RAG_RESULT\nFOUND: true\n"
+                "GUIDED_RESPONSE: true\n"
+                f"{_evidence_bundle_line(evidence)}\n"
+                f"ANSWER: {guided_response}\n"
+                f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}"
+            )
         if not query or not user_id or not internal_key or not api_key:
-            return "KAHLE_RAG_RESULT\nFOUND: false\nANSWER: Dazu habe ich keine verlässliche freigegebene Information."
+            return _missing_rag_result(query, __chat_id__, __message_id__)
         try:
             scope = PortalScopeClient(self.valves.PORTAL_API_URL, internal_key).resolve(user_id)
             dense = _hybrid_embed(base_url, api_key, model, query, int(self.valves.TIMEOUT_S))
@@ -672,13 +1054,15 @@ class Tools:
                                  False, 0, started_at, error_code)
             return (
                 "KAHLE_RAG_RESULT\nFOUND: false\n"
+                f"{_evidence_bundle_line(_evidence_bundle(query, missing_information=[error_code]))}\n"
                 "ANSWER: Dazu habe ich keine verlässliche freigegebene Information.\n"
-                f"ERROR_CODE: {error_code}"
+                f"ERROR_CODE: {error_code}\n"
+                f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}"
             )
         if not chunks:
             _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
                                  False, 0, started_at)
-            return "KAHLE_RAG_RESULT\nFOUND: false\nANSWER: Dazu habe ich keine verlässliche freigegebene Information."
+            return _missing_rag_result(query, __chat_id__, __message_id__)
         context, sources = [], []
         for index, chunk in enumerate(chunks, 1):
             heading = " > ".join(chunk.heading_path)
@@ -688,14 +1072,16 @@ class Tools:
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
                 "knowledgebase_ids": list(chunk.knowledgebase_ids),
+                "evidence_text": chunk.parent_content,
             })
         joined_context = "\n\n".join(context)
+        evidence = _evidence_bundle(query, joined_context, sources)
         _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
                              True, len(sources), started_at)
         return (
             "KAHLE_RAG_RESULT\nFOUND: true\n"
-            "INSTRUCTION: Antworte nur aus CONTEXT. Belege jede konkrete interne Aussage mit [Quelle N]. "
-            "Bei Konflikt nicht stillschweigend entscheiden.\n"
+            f"{_evidence_bundle_line(evidence)}\n"
+            f"INSTRUCTION: {_rag_answer_instruction(query)}\n"
             f"CONTEXT:\n{joined_context}\n"
             f"SOURCES_JSON: {json.dumps(sources, ensure_ascii=False)}\n"
             f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}"

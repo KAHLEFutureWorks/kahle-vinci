@@ -1,0 +1,85 @@
+{
+  "schema_version": "kahle.harness-acceptance-matrix.v1",
+  "expected_models": [
+    "KAHLE-Vinci",
+    "KAHLE-Vinci-Thinking",
+    "KAHLE-Vinci-Max-Thinking"
+  ],
+  "profiles": ["employee", "manager"],
+  "cases": [
+    {
+      "id": "procedure_without_guide",
+      "prompt": "Wie richte ich einen Vorgang in einem internen System ein?",
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["partially_supported", "unsupported"],
+      "expected_behavior": "Keine erfundenen Bedienungsschritte; fehlende Anleitung offen benennen."
+    },
+    {
+      "id": "procedure_with_guide",
+      "prompt": "Wie richte ich einen Vorgang in einem internen System ein?",
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["supported"],
+      "prerequisite": "Freigegebene vollständige Anleitung für das angefragte interne System im Test-Wissensbereich.",
+      "expected_behavior": "Nur die belegten Schritte der Anleitung wiedergeben."
+    },
+    {
+      "id": "person_lookup",
+      "prompt": "Wer ist Thomas Keller?",
+      "required_tool": "rag_chat",
+      "expected_intent": "employee_directory",
+      "allowed_evidence_status": ["supported", "unsupported"],
+      "future_adapter": "personio",
+      "expected_behavior": "Nur freigegebene geschäftliche Personeninformationen verwenden."
+    },
+    {
+      "id": "aliases_and_followup",
+      "messages": ["Wie sind unsere Öffnungszeiten?", "TD in NIE"],
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["supported"],
+      "expected_behavior": "TD als Teiledienst und NIE als Nienburg auflösen."
+    },
+    {
+      "id": "opening_hours",
+      "messages": ["Wie sind unsere Öffnungszeiten?", "TD in NIE"],
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["unsupported", "supported"],
+      "expected_behavior": "Zuerst gezielt nach Standort und Bereich fragen; danach belegt antworten."
+    },
+    {
+      "id": "process_overview",
+      "prompt": "Welche internen Prozesse sind dokumentiert? Gib mir eine Übersicht, aber keine unbelegten Ablaufschritte.",
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["supported", "partially_supported", "unsupported"],
+      "expected_behavior": "Nur gefundene Prozesse nennen und keine Abläufe aus Systemerwähnungen ableiten."
+    },
+    {
+      "id": "customer_lock_clarification",
+      "messages": ["Wie sperre ich einen Kunden in Vaudis?", "Werbung"],
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["supported", "partially_supported", "unsupported"],
+      "expected_behavior": "Werbe- und Befragungssperre von allgemeiner Kundensperre trennen."
+    },
+    {
+      "id": "permissions",
+      "prompt": "Welche internen Prozesse sind dokumentiert?",
+      "required_tool": "rag_chat",
+      "profiles": ["employee", "manager"],
+      "allowed_evidence_status": ["supported", "partially_supported", "unsupported"],
+      "expected_behavior": "Nur Quellen und Aussagen aus dem gebundenen Berechtigungsumfang verwenden."
+    },
+    {
+      "id": "model_parity",
+      "prompt": "Wer ist Thomas Keller?",
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["supported", "unsupported"],
+      "expected_behavior": "Fachlicher Kern, Evidenzstatus und Quellen müssen modellübergreifend gleichwertig sein."
+    },
+    {
+      "id": "native_ui",
+      "prompt": "Wer ist Thomas Keller?",
+      "required_tool": "rag_chat",
+      "allowed_evidence_status": ["supported", "unsupported"],
+      "expected_behavior": "Native Werkzeuganzeige, kanonische Dokumentquellen und Wissensfehler-Link bleiben sichtbar."
+    }
+  ]
+}

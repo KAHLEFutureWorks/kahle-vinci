@@ -17,6 +17,18 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
 $secretsModule = Join-Path $PSScriptRoot "secrets\KvCredentialManager.psm1"
 Import-Module $secretsModule -Force
 
+# A user-scoped token added after Codex/PowerShell was started is not present in
+# the inherited process environment. Import it explicitly so Compose can prefer
+# the current token over the legacy IONOS_API_KEY credential.
+$importedIonosApiToken = $false
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("IONOS_API_TOKEN"))) {
+  $userIonosApiToken = [Environment]::GetEnvironmentVariable("IONOS_API_TOKEN", "User")
+  if (-not [string]::IsNullOrWhiteSpace($userIonosApiToken)) {
+    Set-Item -Path "Env:IONOS_API_TOKEN" -Value $userIonosApiToken
+    $importedIonosApiToken = $true
+  }
+}
+
 $requiredSecrets = @(
   "IONOS_API_KEY",
   "WEBUI_SECRET_KEY",
@@ -45,6 +57,14 @@ $defaults = @{
   PUBLIC_BASE_URL = "http://localhost:8091"
   N8N_SAFE_WEBSEARCH_WEBHOOK_URL = "http://n8n:5678/webhook/safe-websearch/h576htdr-5b9t-89r8-61wx-8a50bh988m6a"
   N8N_SAFE_WEBSEARCH_TIMEOUT = "50"
+  # Compose interpoliert auch Dienste, die lokal ueber ein Profil deaktiviert
+  # sind. Diese Werte verhindern lokale Produktionszugriffe und werden vom
+  # Academy-Provisioner nicht verwendet.
+  LEARNINGSUITE_API_KEY = "local-disabled"
+  LEARNINGSUITE_ALLOWED_EMAILS = "local-disabled"
+  MICROSOFT_CLIENT_TENANT_ID = "local-disabled"
+  MICROSOFT_CLIENT_ID = "local-disabled"
+  MICROSOFT_CLIENT_SECRET = "local-disabled"
 }
 
 foreach ($item in $defaults.GetEnumerator()) {
@@ -93,5 +113,19 @@ try {
 } finally {
   foreach ($name in $requiredSecrets) {
     Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+  }
+  foreach ($name in @(
+    "LEARNINGSUITE_API_KEY",
+    "LEARNINGSUITE_ALLOWED_EMAILS",
+    "MICROSOFT_CLIENT_TENANT_ID",
+    "MICROSOFT_CLIENT_ID",
+    "MICROSOFT_CLIENT_SECRET"
+  )) {
+    if ([Environment]::GetEnvironmentVariable($name) -eq "local-disabled") {
+      Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+    }
+  }
+  if ($importedIonosApiToken) {
+    Remove-Item -Path "Env:IONOS_API_TOKEN" -ErrorAction SilentlyContinue
   }
 }

@@ -3,6 +3,7 @@ from pathlib import Path
 
 STACK = Path(__file__).resolve().parents[1]
 PATCH = STACK / "open-webui-custom" / "sidebar-wissensportal.patch"
+BRANDING_PATCH = STACK / "open-webui-custom" / "patch_branding.py"
 DOCKERFILE = STACK / "open-webui-custom" / "Dockerfile"
 COMPOSE = STACK / "docker-compose.kahle-ui.yml"
 ROLLOUT = STACK.parent / "deploy" / "activate-kahle-open-webui-wissensportal-20260813.sh"
@@ -25,8 +26,22 @@ def test_custom_image_is_pinned_to_production_open_webui_revision():
     assert "FROM ghcr.io/open-webui/open-webui:v0.11.0" in dockerfile
     assert revision in dockerfile
     assert 'test "$(git rev-parse HEAD)" = "${OPEN_WEBUI_REVISION}"' in dockerfile
-    assert "image: kahle-open-webui:v0.11.0-kahle.1" in compose
+    assert "image: kahle-open-webui:v0.11.0-kahle.2" in compose
     assert revision in compose
+
+
+def test_custom_image_uses_exact_kahle_name_and_real_favicon():
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    compose = COMPOSE.read_text(encoding="utf-8")
+    branding_patch = BRANDING_PATCH.read_text(encoding="utf-8")
+
+    assert "WEBUI_NAME: KAHLE-Vinci" in compose
+    assert 'ENV WEBUI_NAME="KAHLE-Vinci"' in dockerfile
+    assert "public/logo/KAHLE-Vinci-Logo.png /app/build/static/favicon.png" in dockerfile
+    assert "public/logo/KAHLE-Vinci-Logo.png /app/build/static/favicon-96x96.png" in dockerfile
+    assert "public/logo/KAHLE-Vinci-Logo.png /app/build/static/apple-touch-icon.png" in dockerfile
+    assert "WEBUI_NAME += ' (Open WebUI)'" in branding_patch
+    assert 'href=\"/static/favicon.png\"' in branding_patch
 
 
 def test_rollout_checks_running_revision_and_uses_existing_image_switch():

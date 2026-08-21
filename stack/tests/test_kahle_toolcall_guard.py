@@ -23,6 +23,25 @@ def load_module():
     return module
 
 
+def test_guard_expands_short_marketing_reply_from_customer_lock_clarification():
+    module = load_module()
+    messages = [
+        {"role": "user", "content": "Wie sperre ich einen Kunden in Vaudis?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
+                "oder um eine allgemeine Kundensperre in Vaudis?"
+            ),
+        },
+    ]
+
+    assert module._expand_customer_lock_followup("Werbung", messages) == (
+        "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
+        "in Vaudis über die DSE-Kontaktfreigaben?"
+    )
+
+
 def test_visible_workflow_pseudo_call_is_replaced_with_download_metadata():
     module = load_module()
     original_create = module._create_file
@@ -243,6 +262,525 @@ def test_successful_rag_source_replaces_false_no_internal_knowledge_answer():
         module._synthesize_rag_answer = original_synthesize
 
 
+def test_negative_rag_source_replaces_thinking_model_hallucination():
+    module = load_module()
+    rag_text = (
+        "KAHLE_RAG_RESULT\n"
+        "FOUND: false\n"
+        "ANSWER: Dazu habe ich keine verlässliche freigegebene Information."
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "Wie plane ich einen Termin im WPS?"},
+            {
+                "role": "assistant",
+                "content": (
+                    "Öffne im WPS den Werkstatt-Kalender, wähle Ressourcen aus "
+                    "und versende anschließend automatisch eine SMS."
+                ),
+                "sources": [
+                    {
+                        "source": {"name": "rag_chat/rag_chat"},
+                        "document": [rag_text],
+                        "tool_result": True,
+                    }
+                ],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+
+    assert result["messages"][-1]["content"] == "Dazu habe ich kein internes Wissen."
+
+
+def test_successful_but_unanswerable_rag_context_stays_fail_closed():
+    module = load_module()
+    original_synthesize = module._synthesize_rag_answer
+    try:
+        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
+            "Dazu habe ich kein internes Wissen."
+        )
+        rag_text = (
+            "KAHLE_RAG_RESULT\nFOUND: true\n"
+            "KONTEXT (zitierbar mit [#]):\n"
+            "[#1 | allgemein | Standortregeln.md | chunk 1 | score 0.71]\n"
+            "Bei zeitkritischen Informationen muss der Stand genannt werden."
+        )
+
+        answer = module._rag_answer_text(
+            "Wie sind unsere Öffnungszeiten?", rag_text
+        )
+
+        assert answer == "Dazu habe ich kein internes Wissen."
+        assert "Standortregeln" not in answer
+    finally:
+        module._synthesize_rag_answer = original_synthesize
+
+
+def test_current_raw_rag_context_is_parsed_and_always_regrounded():
+    module = load_module()
+    original_synthesize = module._synthesize_rag_answer
+    try:
+        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
+            "Dazu habe ich kein internes Wissen."
+        )
+        rag_text = (
+            "KAHLE_RAG_RESULT\nFOUND: true\n"
+            "INSTRUCTION: Antworte nur aus CONTEXT.\n"
+            "CONTEXT:\n"
+            "[Quelle 1] KAHLE Systemlandkarte | System-Landkarte\n"
+            "WPS/DA ist ein Werkstatt- und Termin-System.\n"
+            "SOURCES_JSON: []\n"
+            "FEEDBACK_LINK: [Wissensfehler melden](/wissen/)"
+        )
+        body = {
+            "messages": [
+                {"role": "user", "content": "Wie plane ich einen Termin im WPS?"},
+                {
+                    "role": "assistant",
+                    "content": "Öffne den Kalender und aktiviere automatische SMS.",
+                    "sources": [{
+                        "source": {"name": "rag_chat/rag_chat"},
+                        "document": [rag_text],
+                        "tool_result": True,
+                    }],
+                },
+            ]
+        }
+
+        assert "WPS/DA ist" in module._rag_context_text(rag_text)
+        result = module.Filter().outlet(body)
+        assert result["messages"][-1]["content"] == "Dazu habe ich kein internes Wissen."
+    finally:
+        module._synthesize_rag_answer = original_synthesize
+
+
+def test_synthesized_internal_answer_without_source_marks_is_rejected():
+    module = load_module()
+    original_synthesize = module._synthesize_rag_answer
+    try:
+        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
+            "Öffne das WPS, klicke in den Kalender und sende anschließend eine SMS."
+        )
+        rag_text = (
+            "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
+            "[Quelle 1] Systemlandkarte | Überblick\n"
+            "WPS ist ein Terminplanungssystem.\nSOURCES_JSON: []"
+        )
+
+        assert module._rag_answer_text("Wie plane ich einen Termin?", rag_text) == (
+            "Dazu habe ich kein internes Wissen."
+        )
+    finally:
+        module._synthesize_rag_answer = original_synthesize
+
+
+def test_valid_rag_answer_accepts_quelle_mark_and_keeps_feedback_link():
+    module = load_module()
+    original_synthesize = module._synthesize_rag_answer
+    try:
+        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
+            "Der Teiledienst in Nienburg ist Montag bis Freitag von "
+            "07:30 bis 17:00 Uhr geöffnet. [Quelle 1]"
+        )
+        rag_text = (
+            "KAHLE_RAG_RESULT\nFOUND: true\n"
+            "CONTEXT:\n"
+            "[Quelle 1] Standort Nienburg > Öffnungszeiten\n"
+            "Teiledienst: Mo-Fr 07:30-17:00.\n"
+            "SOURCES_JSON: []\n"
+            "FEEDBACK_LINK: [Wissensfehler melden]"
+            "(/wissen/?feedback=1&chat_id=chat-1&message_id=message-1)"
+        )
+
+        answer = module._rag_answer_text(
+            "Wie sind die TD Öffnungszeiten in NIE?", rag_text,
+        )
+
+        assert "Mo-Fr 07:30-17:00" in answer
+        assert "[#1]" in answer
+        assert "[Quelle 1]" not in answer
+        assert answer.endswith(
+            "[Wissensfehler melden]"
+            "(/wissen/?feedback=1&chat_id=chat-1&message_id=message-1)"
+        )
+    finally:
+        module._synthesize_rag_answer = original_synthesize
+
+
+def test_opening_hours_answer_is_deterministic_and_skips_second_model_call():
+    module = load_module()
+    original_synthesize = module._synthesize_rag_answer
+    try:
+        module._synthesize_rag_answer = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("opening hours must not use a second model call")
+        )
+        rag_text = (
+            "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
+            "[Quelle 1] MasterKontext KAHLE v1.6 > Standort Nienburg\n"
+            "- **Öffnungszeiten:** Service: Mo-Fr 07:30-18:00 · Sa 09:00-13:00 | "
+            "Teiledienst: Mo-Fr 07:30-17:00 · Samstag nicht eindeutig ausgewiesen | "
+            "Verkauf: Mo-Fr 09:00-18:00 · Sa 09:00-13:00\n"
+            "SOURCES_JSON: []\n"
+            "FEEDBACK_LINK: [Wissensfehler melden]"
+            "(/wissen/?feedback=1&chat_id=chat-1&message_id=message-1)"
+        )
+
+        answer = module._rag_answer_text(
+            "Wie sind unsere TD Öffnungszeiten in NIE?", rag_text,
+        )
+
+        assert answer.startswith(
+            "Teiledienst in Nienburg: Mo-Fr 07:30-17:00 · "
+            "Samstag nicht eindeutig ausgewiesen [#1]"
+        )
+        assert "Wissensfehler melden" in answer
+    finally:
+        module._synthesize_rag_answer = original_synthesize
+
+
+def test_opening_hours_supports_vk_shg_and_location_without_department():
+    module = load_module()
+    context = (
+        "[Quelle 2] Standort Stadthagen > Öffnungszeiten\n"
+        "Öffnungszeiten: Service: Mo-Fr 07:00-18:00 | "
+        "Teiledienst: Mo-Fr 07:30-17:30 | Verkauf: Mo-Fr 09:00-18:00"
+    )
+
+    sales = module._deterministic_opening_hours_answer(
+        "Wie sind unsere VK Öffnungszeiten in SHG?", context,
+    )
+    all_departments = module._deterministic_opening_hours_answer(
+        "Wie sind unsere Stadthagener Öffnungszeiten?", context,
+    )
+
+    assert sales == "Verkauf in Stadthagen: Mo-Fr 09:00-18:00 [#2]"
+    assert "Service: Mo-Fr 07:00-18:00 [#2]" in all_departments
+    assert "Teiledienst: Mo-Fr 07:30-17:30 [#2]" in all_departments
+    assert "Verkauf: Mo-Fr 09:00-18:00 [#2]" in all_departments
+
+
+def test_existing_grounded_rag_answer_is_kept_without_second_synthesis():
+    module = load_module()
+    original_synthesize = module._synthesize_rag_answer
+    try:
+        module._synthesize_rag_answer = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an already grounded answer must not be synthesized again")
+        )
+        rag_text = (
+            "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
+            "[Quelle 1] Prozesshandbuch\nServiceprozesse reichen von der Terminierung "
+            "bis zur Zufriedenheitsabfrage.\n"
+            "[Quelle 2] Auditregel\nInterne Audits werden dokumentiert.\n"
+            "SOURCES_JSON: []\n"
+            "FEEDBACK_LINK: [Wissensfehler melden]"
+            "(/wissen/?feedback=1&chat_id=chat-3&message_id=message-3)"
+        )
+        candidate = (
+            "Ich kenne folgende Prozesse bei der KAHLE Gruppe:\n\n"
+            "1. Serviceprozesse von der Terminierung bis zur "
+            "Zufriedenheitsabfrage.\n"
+            "2. Interne Audits und deren Dokumentation."
+        )
+
+        answer = module._rag_answer_text(
+            "Welche Prozesse bei uns kennst du?", rag_text,
+            candidate_answer=candidate,
+        )
+
+        assert "Serviceprozesse" in answer
+        assert "Interne Audits" in answer
+        assert "Dazu habe ich kein internes Wissen" not in answer
+        assert "[#1]" in answer and "[#2]" in answer
+    finally:
+        module._synthesize_rag_answer = original_synthesize
+
+
+def test_partially_grounded_answer_keeps_cited_lines_and_removes_uncited_claims():
+    module = load_module()
+    answer = (
+        "Ich kenne folgende Prozesse:\n\n"
+        "1. Serviceprozesse reichen bis zur Zufriedenheitsabfrage [#1].\n"
+        "2. Im WPS werden Kunden automatisch per SMS informiert.\n"
+        "3. Interne Audits werden dokumentiert [#2]."
+    )
+
+    retained = module._retain_grounded_answer(answer)
+
+    assert "Serviceprozesse" in retained
+    assert "Interne Audits" in retained
+    assert "automatisch per SMS" not in retained
+
+
+def test_answer_without_any_source_mark_is_not_treated_as_grounded():
+    module = load_module()
+
+    assert module._retain_grounded_answer(
+        "Serviceprozesse umfassen Terminierung und Werkstattplanung."
+    ) == ""
+
+
+def test_source_chip_answer_is_grounded_against_context_line_by_line():
+    module = load_module()
+    context = (
+        "[Quelle 3] Service-Prozesskette\n"
+        "Terminierung, Werkstattplanung, Fahrzeugannahme, Diagnose und "
+        "Zufriedenheitsabfrage.\n"
+        "[Quelle 4] Auditregeln\nInterne Audits werden dokumentiert."
+    )
+    candidate = (
+        "Ich kenne folgende Prozesse:\n"
+        "- Terminierung und Werkstattplanung.\n"
+        "- Interne Audits werden dokumentiert.\n"
+        "- Kunden erhalten automatisch eine SMS nach jedem Arbeitsschritt."
+    )
+
+    retained = module._retain_context_supported_answer(candidate, context)
+
+    assert "Terminierung und Werkstattplanung [#3]" in retained
+    assert "Interne Audits werden dokumentiert [#4]" in retained
+    assert "automatisch eine SMS" not in retained
+
+
+def test_negative_rag_result_keeps_feedback_link_after_guard_replacement():
+    module = load_module()
+    rag_text = (
+        "KAHLE_RAG_RESULT\nFOUND: false\n"
+        "ANSWER: Dazu habe ich keine verlässliche freigegebene Information.\n"
+        "FEEDBACK_LINK: [Wissensfehler melden]"
+        "(/wissen/?feedback=1&chat_id=chat-2&message_id=message-2)"
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "Wie läuft der unbekannte Prozess?"},
+            {
+                "role": "assistant",
+                "content": "Eine unbelegte Antwort.",
+                "sources": [{
+                    "source": {"name": "rag_chat/rag_chat"},
+                    "document": [rag_text],
+                    "tool_result": True,
+                }],
+            },
+        ],
+    }
+
+    answer = module.Filter().outlet(body)["messages"][-1]["content"]
+
+    assert answer.startswith("Dazu habe ich kein internes Wissen.")
+    assert answer.endswith(
+        "[Wissensfehler melden]"
+        "(/wissen/?feedback=1&chat_id=chat-2&message_id=message-2)"
+    )
+
+
+def test_wps_system_overview_does_not_answer_procedural_question():
+    module = load_module()
+    context = (
+        "[#1] KAHLE Systemlandkarte\n"
+        "WPS/DA ist ein Werkstatt- und Terminplanungssystem. "
+        "Catch ist ein CRM-System."
+    )
+
+    assert module._rag_context_supports_request(
+        "Wie plane ich einen Termin im WPS?", context
+    ) is False
+
+
+def test_real_wps_instructions_answer_procedural_question():
+    module = load_module()
+    context = (
+        "[#1] WPS Anleitung\n"
+        "Öffne im WPS die Terminplanung. Wähle den gewünschten Zeitraum aus. "
+        "Gib Kunde und Fahrzeug ein und speichere anschließend den Termin."
+    )
+
+    assert module._rag_context_supports_request(
+        "Wie plane ich einen Termin im WPS?", context
+    ) is True
+
+
+def test_every_procedural_answer_step_needs_a_source_mark():
+    module = load_module()
+    partially_cited = (
+        "1. Öffne die Terminplanung [#1].\n"
+        "2. Wähle den Kunden aus.\n"
+        "3. Speichere den Termin [#1]."
+    )
+    fully_cited = (
+        "1. Öffne die Terminplanung [#1].\n"
+        "2. Wähle den Kunden aus [#1].\n"
+        "3. Speichere den Termin [#1]."
+    )
+
+    assert module._grounded_answer_has_source_marks(partially_cited) is False
+    assert module._grounded_answer_has_source_marks(fully_cited) is True
+
+
+def test_rag_clarification_replaces_model_answer():
+    module = load_module()
+    rag_text = (
+        "KAHLE_RAG_RESULT\nFOUND: false\n"
+        "CLARIFICATION_REQUIRED: true\n"
+        "ANSWER: Für welchen Standort und welchen Bereich brauchst du die Öffnungszeiten?"
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "Wie sind unsere Öffnungszeiten?"},
+            {
+                "role": "assistant",
+                "content": "Hier ist die vollständige Liste aller Standorte.",
+                "sources": [{
+                    "source": {"name": "rag_chat/rag_chat"},
+                    "document": [rag_text],
+                    "tool_result": True,
+                }],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    assert result["messages"][-1]["content"] == (
+        "Für welchen Standort und welchen Bereich brauchst du die Öffnungszeiten?"
+    )
+
+
+def test_rag_guided_response_replaces_model_answer():
+    module = load_module()
+    guided_answer = (
+        "Bitte wende dich mit der Kundennummer und dem Grund der gewünschten Sperre "
+        "an [datenschutz@kahle.de](mailto:datenschutz@kahle.de)."
+    )
+    rag_text = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "GUIDED_RESPONSE: true\n"
+        f"ANSWER: {guided_answer}"
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "Wie sperre ich einen Kunden allgemein in Vaudis?"},
+            {
+                "role": "assistant",
+                "content": "Öffne die Kundenverwaltung und ändere den Status.",
+                "sources": [{
+                    "source": {"name": "rag_chat/rag_chat"},
+                    "document": [rag_text],
+                    "tool_result": True,
+                }],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(body)
+    assert result["messages"][-1]["content"] == guided_answer
+
+
+def test_active_harness_keeps_completed_rag_answer_unchanged():
+    module = load_module()
+    answer = (
+        "WPS ist als Terminplanungssystem dokumentiert [#1].\n\n"
+        "Eine belastbare Schritt-für-Schritt-Anleitung ist in den Quellen nicht enthalten."
+    )
+    rag_text = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"partially_supported\",\"supported_claims\":[],"
+        "\"missing_information\":[\"Anleitung fehlt.\"],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1}]}\n"
+        "CONTEXT:\n[Quelle 1] Systemlandkarte\n"
+        "WPS ist ein Terminplanungssystem."
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "Wie plane ich einen Termin im WPS?"},
+            {
+                "role": "assistant",
+                "content": answer,
+                "sources": [{
+                    "source": {"name": "rag_chat/rag_chat"},
+                    "document": [rag_text],
+                    "tool_result": True,
+                }],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(
+        body,
+        __metadata__={"kahle_knowledge_harness_active": True},
+    )
+
+    assert result["messages"][-1]["content"] == answer
+
+
+def test_active_harness_does_not_disable_technical_pseudo_toolcall_guard():
+    module = load_module()
+    rag_text = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":[],"
+        "\"missing_information\":[],\"conflicts\":[],\"sources\":[]}\n"
+        "CONTEXT:\n[Quelle 1] Prozess\nEin belegter interner Prozess."
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "Erkläre den internen Prozess."},
+            {
+                "role": "assistant",
+                "content": (
+                    '[TOOL_CALLS]time_and_calculation'
+                    '{"action":"get_current_date_and_time","timezone":"Europe/Berlin"}'
+                ),
+                "sources": [{
+                    "source": {"name": "rag_chat/rag_chat"},
+                    "document": [rag_text],
+                    "tool_result": True,
+                }],
+            },
+        ]
+    }
+
+    result = module.Filter().outlet(
+        body,
+        __metadata__={"kahle_knowledge_harness_active": True},
+    )
+
+    assert result["messages"][-1]["content"].startswith("Tool-Fehler:")
+
+
+def test_guard_rag_refresh_calls_current_tool_signature_with_user():
+    module = load_module()
+    with tempfile.TemporaryDirectory() as directory:
+        db_path = Path(directory) / "webui.db"
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE tool (id TEXT PRIMARY KEY, content TEXT)")
+        db.execute(
+            "INSERT INTO tool VALUES (?, ?)",
+            (
+                "rag_chat",
+                """
+class Tools:
+    async def rag_chat(self, query='', __user__=None, __chat_id__='', __message_id__=''):
+        return f'{query}|{(__user__ or {}).get("id", "")}'
+""",
+            ),
+        )
+        db.commit()
+        db.close()
+        previous = os.environ.get("WEBUI_DB_PATH")
+        os.environ["WEBUI_DB_PATH"] = str(db_path)
+        try:
+            assert module._call_rag_chat_tool(
+                "Wer ist Thomas Keller?", [], {"id": "user-1"}
+            ) == "Wer ist Thomas Keller?|user-1"
+        finally:
+            if previous is None:
+                os.environ.pop("WEBUI_DB_PATH", None)
+            else:
+                os.environ["WEBUI_DB_PATH"] = previous
+
+
 
 
 def test_internal_followup_without_toolcall_is_refreshed_from_rag():
@@ -264,9 +802,10 @@ def test_internal_followup_without_toolcall_is_refreshed_from_rag():
         "5. Dokumentation & Incident"
     )
     try:
-        def fake_call(query, messages):
+        def fake_call(query, messages, user=None):
             captured["query"] = query
             captured["messages"] = messages
+            captured["user"] = user
             return rag_text
 
         module._call_rag_chat_tool = fake_call

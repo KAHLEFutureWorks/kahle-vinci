@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 import asyncio
 import ast
 from datetime import datetime, timedelta, timezone
@@ -463,15 +464,119 @@ def _extract_successful_rag_source(
     return ""
 
 
+def _extract_rag_source_outcome(
+    message: dict[str, Any], metadata: dict[str, Any] | None = None
+) -> str:
+    sources = message.get("sources") if isinstance(message.get("sources"), list) else []
+    metadata_sources = metadata.get("kahle_tool_sources") if isinstance(metadata, dict) else []
+    if isinstance(metadata_sources, list):
+        sources = [*sources, *metadata_sources]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_name = str((source.get("source") or {}).get("name") or "").lower()
+        if "rag_chat" not in source_name:
+            continue
+        documents = source.get("document") if isinstance(source.get("document"), list) else []
+        text = "\n".join(str(document or "") for document in documents)
+        if re.search(r"^CLARIFICATION_REQUIRED:\s*true\s*$", text, re.IGNORECASE | re.MULTILINE):
+            return "clarification"
+        if re.search(r"^GUIDED_RESPONSE:\s*true\s*$", text, re.IGNORECASE | re.MULTILINE):
+            return "guided"
+        if re.search(r"^FOUND:\s*true\s*$", text, re.IGNORECASE | re.MULTILINE):
+            return "found"
+        if re.search(r"^FOUND:\s*false\s*$", text, re.IGNORECASE | re.MULTILINE):
+            return "missing"
+    return ""
+
+
+def _extract_rag_clarification(
+    message: dict[str, Any], metadata: dict[str, Any] | None = None
+) -> str:
+    sources = message.get("sources") if isinstance(message.get("sources"), list) else []
+    metadata_sources = metadata.get("kahle_tool_sources") if isinstance(metadata, dict) else []
+    if isinstance(metadata_sources, list):
+        sources = [*sources, *metadata_sources]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_name = str((source.get("source") or {}).get("name") or "").lower()
+        if "rag_chat" not in source_name:
+            continue
+        text = "\n".join(str(item or "") for item in source.get("document") or [])
+        if not re.search(r"^CLARIFICATION_REQUIRED:\s*true\s*$", text, re.IGNORECASE | re.MULTILINE):
+            continue
+        answer = re.search(r"^ANSWER:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
+        if answer:
+            return answer.group(1).strip()
+    return ""
+
+
+def _extract_rag_guided_response(
+    message: dict[str, Any], metadata: dict[str, Any] | None = None
+) -> str:
+    sources = message.get("sources") if isinstance(message.get("sources"), list) else []
+    metadata_sources = metadata.get("kahle_tool_sources") if isinstance(metadata, dict) else []
+    if isinstance(metadata_sources, list):
+        sources = [*sources, *metadata_sources]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_name = str((source.get("source") or {}).get("name") or "").lower()
+        if "rag_chat" not in source_name:
+            continue
+        text = "\n".join(str(item or "") for item in source.get("document") or [])
+        if not re.search(r"^GUIDED_RESPONSE:\s*true\s*$", text, re.IGNORECASE | re.MULTILINE):
+            continue
+        answer = re.search(r"^ANSWER:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
+        if answer:
+            return answer.group(1).strip()
+    return ""
+
+
+def _extract_rag_feedback_from_message(
+    message: dict[str, Any], metadata: dict[str, Any] | None = None,
+) -> str:
+    sources = message.get("sources") if isinstance(message.get("sources"), list) else []
+    metadata_sources = metadata.get("kahle_tool_sources") if isinstance(metadata, dict) else []
+    if isinstance(metadata_sources, list):
+        sources = [*sources, *metadata_sources]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_name = str((source.get("source") or {}).get("name") or "").lower()
+        if "rag_chat" not in source_name:
+            continue
+        text = "\n".join(str(item or "") for item in source.get("document") or [])
+        link = _rag_feedback_link(text)
+        if link:
+            return link
+    return ""
+
+
 def _rag_context_text(rag_text: str) -> str:
+    value = str(rag_text or "")
     marker = re.search(
         r"^KONTEXT\s*\(zitierbar\s+mit\s+\[#\]\):\s*$",
-        str(rag_text or ""),
+        value,
         re.IGNORECASE | re.MULTILINE,
     )
+    raw_context = False
+    if not marker:
+        marker = re.search(r"^CONTEXT:\s*$", value, re.IGNORECASE | re.MULTILINE)
+        raw_context = bool(marker)
     if not marker:
         return ""
-    return str(rag_text or "")[marker.end() :].strip()
+    context = value[marker.end() :].strip()
+    if raw_context:
+        context = re.split(
+            r"^(?:SOURCES_JSON|FEEDBACK_LINK):",
+            context,
+            maxsplit=1,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )[0].strip()
+        context = re.sub(r"\[Quelle\s+(\d+)\]", r"[#\1]", context, flags=re.IGNORECASE)
+    return context
 
 
 def _looks_like_failed_rag_answer(content: str) -> bool:
@@ -492,6 +597,348 @@ def _format_rag_context_for_user(rag_text: str) -> str:
     return f"## Interne Informationen\n\n{context}".strip()
 
 
+def _fold_rag_text(value: str) -> str:
+    return (
+        unicodedata.normalize("NFKD", str(value or ""))
+        .encode("ascii", "ignore")
+        .decode()
+        .casefold()
+    )
+
+
+def _is_procedural_request(request_text: str) -> bool:
+    folded = _fold_rag_text(request_text)
+    if not folded:
+        return False
+    process_terms = (
+        "wie plane", "wie buche", "wie erstelle", "wie lege", "wie gehe",
+        "wie kann ich", "anleitung", "schritt", "vorgehen", "ablauf",
+    )
+    action_objects = (
+        "termin", "auftrag", "vorgang", "prozess", "wps", "vaudis",
+        "catch", "system", "portal", "dokument",
+    )
+    return any(term in folded for term in process_terms) and any(
+        term in folded for term in action_objects
+    )
+
+
+def _rag_context_supports_request(request_text: str, context: str) -> bool:
+    """Reject overview-only hits for questions that ask for a procedure.
+
+    A system description such as "WPS is an appointment system" proves what
+    the product is, but not how a user performs a task in it. Real procedural
+    documents contain several distinct, actionable operations. Keeping this
+    check independent from product names means a future WPS instruction is
+    accepted without another code change.
+    """
+    if not _is_procedural_request(request_text):
+        return True
+    folded = _fold_rag_text(context)
+    action_patterns = (
+        r"\bo?ffn\w*", r"\banmeld\w*", r"\bnavigier\w*", r"\bklick\w*",
+        r"\bw(?:ae|a)hl\w*", r"\bausw(?:ae|a)hl\w*", r"\b(?:eingeb\w*|gib)\b", r"\berfass\w*",
+        r"\bspeicher\w*", r"\bbest(?:ae|a)tig\w*", r"\banleg\w*", r"\berstell\w*",
+    )
+    distinct_actions = sum(bool(re.search(pattern, folded)) for pattern in action_patterns)
+    return distinct_actions >= 3
+
+
+def _grounded_answer_has_source_marks(answer: str) -> bool:
+    """Require a source mark on every visible factual or procedural line."""
+    text = str(answer or "").strip()
+    if not text:
+        return False
+    claim_lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or re.fullmatch(r"#{1,6}\s+.+", line):
+            continue
+        # A short Markdown heading ending in ':' contains no factual claim.
+        if line.endswith(":") and len(line.split()) <= 8:
+            continue
+        if re.search(r"[A-Za-zÄÖÜäöüß]", line):
+            claim_lines.append(line)
+    return bool(claim_lines) and all(
+        re.search(r"\[(?:#\s*|Quelle\s+)\d+\]", line, re.IGNORECASE)
+        for line in claim_lines
+    )
+
+
+def _normalize_grounded_source_marks(answer: str) -> str:
+    return re.sub(
+        r"\[Quelle\s+(\d+)\]",
+        r"[#\1]",
+        str(answer or ""),
+        flags=re.IGNORECASE,
+    )
+
+
+def _retain_grounded_answer(answer: str) -> str:
+    """Keep cited claims and discard only unsupported visible claims.
+
+    A short introductory sentence or heading may describe the following cited
+    list without needing its own marker. Concrete prose and list entries still
+    require a source marker. This avoids turning a mostly grounded answer into
+    a false no-knowledge response because of one unsupported line.
+    """
+    text = _normalize_grounded_source_marks(answer).strip()
+    if not re.search(r"\[#\s*\d+\]", text):
+        return ""
+
+    retained = []
+    seen_cited_claim = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if retained and retained[-1] != "":
+                retained.append("")
+            continue
+        cited = bool(re.search(r"\[#\s*\d+\]", line))
+        if cited:
+            retained.append(raw_line.strip())
+            seen_cited_claim = True
+            continue
+        is_heading = bool(re.fullmatch(r"#{1,6}\s+.+", line))
+        is_short_intro = (
+            not seen_cited_claim
+            and not re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)", line)
+            and len(line.split()) <= 14
+            and (line.endswith(":") or line.casefold().startswith("ich kenne "))
+        )
+        if is_heading or is_short_intro:
+            retained.append(line)
+
+    while retained and retained[-1] == "":
+        retained.pop()
+    result = "\n".join(retained).strip()
+    return result if re.search(r"\[#\s*\d+\]", result) else ""
+
+
+def _rag_numbered_source_blocks(context: str) -> list[tuple[str, str]]:
+    marker = re.compile(
+        r"(?m)^\[(?:#\s*|Quelle\s+)(?P<number>\d+)[^\n]*$",
+        re.IGNORECASE,
+    )
+    matches = list(marker.finditer(str(context or "")))
+    blocks = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(context)
+        blocks.append((match.group("number"), context[match.start():end].strip()))
+    return blocks
+
+
+def _rag_claim_terms(value: str) -> list[str]:
+    stopwords = {
+        "aber", "alle", "auch", "dass", "deren", "diese", "dieser", "einem",
+        "einen", "einer", "eine", "folgende", "fuer", "gruppe", "haben", "hier",
+        "ihren", "ihrem", "immer", "kahle", "kenne", "kennen", "kann", "kannst",
+        "nach", "nicht", "oder", "sind", "sowie", "unsere", "unserer", "verschiedene",
+        "werden", "wird", "wurde", "wurden", "zwischen",
+    }
+    folded = _fold_rag_text(re.sub(r"\[(?:#\s*|Quelle\s+)\d+\]", "", value))
+    return [
+        token for token in re.findall(r"[a-z0-9]+", folded)
+        if len(token) >= 4 and token not in stopwords
+    ]
+
+
+def _rag_terms_supported(terms: list[str], source_terms: list[str]) -> int:
+    def related(left: str, right: str) -> bool:
+        if left == right:
+            return True
+        if min(len(left), len(right)) < 6:
+            return False
+        return left[:6] == right[:6]
+
+    return sum(any(related(term, source) for source in source_terms) for term in terms)
+
+
+def _retain_context_supported_answer(answer: str, context: str) -> str:
+    """Ground source-chip answers against the retrieved text itself.
+
+    OpenWebUI sometimes renders citations as UI chips instead of textual [#N]
+    markers. For those responses, match every visible claim against the actual
+    numbered RAG blocks, attach the best source number and discard only claims
+    without sufficient lexical support.
+    """
+    blocks = [
+        (number, block, _rag_claim_terms(block))
+        for number, block in _rag_numbered_source_blocks(context)
+    ]
+    if not blocks:
+        return ""
+
+    retained = []
+    kept_claim = False
+    for raw_line in str(answer or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            if retained and retained[-1] != "":
+                retained.append("")
+            continue
+        if re.fullmatch(r"#{1,6}\s+.+", line):
+            retained.append(line)
+            continue
+        is_intro = (
+            not kept_claim
+            and not re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)", line)
+            and len(line.split()) <= 16
+            and (line.endswith(":") or line.casefold().startswith("ich kenne "))
+        )
+        if is_intro:
+            retained.append(line)
+            continue
+
+        terms = _rag_claim_terms(line)
+        if not terms:
+            continue
+        ranked = sorted(
+            (
+                (_rag_terms_supported(terms, source_terms), number)
+                for number, _block, source_terms in blocks
+            ),
+            reverse=True,
+        )
+        score, number = ranked[0]
+        required = 1 if len(terms) == 1 else max(2, (len(terms) + 2) // 3)
+        if score < required:
+            continue
+        clean = re.sub(r"\s*\[(?:#\s*|Quelle\s+)\d+\]\s*", "", line).strip()
+        punctuation = clean[-1] if clean[-1:] in ".!?" else ""
+        clean = clean[:-1].rstrip() if punctuation else clean
+        retained.append(f"{clean} [#{number}]{punctuation}")
+        kept_claim = True
+
+    while retained and retained[-1] == "":
+        retained.pop()
+    result = "\n".join(retained).strip()
+    return result if kept_claim else ""
+
+
+def _rag_feedback_link(rag_text: str) -> str:
+    match = re.search(
+        r"^FEEDBACK_LINK:\s*(\[Wissensfehler melden\]\(/wissen/\?[^\s)]+\))\s*$",
+        str(rag_text or ""),
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    return match.group(1) if match else ""
+
+
+def _with_rag_feedback_link(answer: str, rag_text: str) -> str:
+    text = re.sub(
+        r"(?im)^\s*(?:\[Wissensfehler melden\]\([^)]+\)|Wissensfehler melden)\s*$",
+        "",
+        str(answer or ""),
+    ).strip()
+    link = _rag_feedback_link(rag_text)
+    return f"{text}\n\n{link}" if link else text
+
+
+def _deterministic_opening_hours_answer(request_text: str, context: str) -> str:
+    """Answer a scoped opening-hours request without another model call.
+
+    Opening hours are structured, time-critical data. Once retrieval found the
+    requested location, extracting the matching department verbatim is both
+    safer and deterministic. It also prevents a second model call from
+    occasionally rejecting the same valid context.
+    """
+    request = str(request_text or "").strip()
+    folded_request = _fold_rag_text(request)
+    if not re.search(r"\boffnungszeiten?\b", folded_request):
+        return ""
+
+    alias_pairs = (
+        ("TD", "Teiledienst"), ("VK", "Verkauf"),
+        ("HAN", "Hannover"), ("WUN", "Wunstorf"),
+        ("WED", "Wedemark"), ("WAL", "Walsrode"),
+        ("NEU", "Neustadt am Rübenberge"), ("NIE", "Nienburg"),
+        ("STA", "Stadthagen"), ("SHG", "Stadthagen"),
+    )
+    for alias, canonical in alias_pairs:
+        request = re.sub(
+            rf"(?<![A-Za-z0-9])(?:LOC-)?{re.escape(alias)}(?![A-Za-z0-9])",
+            canonical,
+            request,
+        )
+    folded_request = _fold_rag_text(request)
+
+    locations = (
+        ("Hannover", ("hannover", "hannoverer")),
+        ("Wunstorf", ("wunstorf", "wunstorfer")),
+        ("Wedemark", ("wedemark", "wedemarker")),
+        ("Walsrode", ("walsrode", "walsroder")),
+        ("Neustadt am Rübenberge", ("neustadt am rubenberge", "neustadt", "neustadter")),
+        ("Nienburg", ("nienburg", "nienburger")),
+        ("Stadthagen", ("stadthagen", "stadthagener")),
+    )
+    location = next(
+        (name for name, variants in locations if any(
+            re.search(rf"\b{re.escape(variant)}\b", folded_request)
+            for variant in variants
+        )),
+        "",
+    )
+    if not location:
+        return ""
+
+    departments = (
+        ("Teiledienst", ("teiledienst",)),
+        ("Verkauf", ("verkauf",)),
+        ("Service", ("service",)),
+    )
+    department = next(
+        (name for name, variants in departments if any(
+            re.search(rf"\b{re.escape(variant)}\b", folded_request)
+            for variant in variants
+        )),
+        "",
+    )
+
+    source_re = re.compile(
+        r"(?m)^\[(?:#\s*|Quelle\s+)(?P<number>\d+)[^\n]*$",
+        re.IGNORECASE,
+    )
+    matches = list(source_re.finditer(str(context or "")))
+    blocks = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(context)
+        blocks.append((match.group("number"), context[match.start():end].strip()))
+
+    folded_location = _fold_rag_text(location)
+    candidates = [block for block in blocks if folded_location in _fold_rag_text(block[1])]
+    if not candidates:
+        return ""
+    # Prefer a source whose heading names the location over an aggregated source.
+    number, block = max(
+        candidates,
+        key=lambda item: folded_location in _fold_rag_text(item[1].splitlines()[0]),
+    )
+
+    def extract(name: str) -> str:
+        match = re.search(
+            rf"(?:^|\||(?:Ö|Oe)ffnungszeiten(?:\*\*)?\s*:\s*)\s*"
+            rf"(?:[-*]\s*)?(?:\*\*)?{re.escape(name)}(?:\*\*)?\s*:\s*"
+            rf"(?P<value>[^|\n]+)",
+            block,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        return re.sub(r"\s+", " ", match.group("value")).strip(" .") if match else ""
+
+    if department:
+        value = extract(department)
+        return f"{department} in {location}: {value} [#{number}]" if value else ""
+
+    rows = []
+    for name, _variants in departments:
+        value = extract(name)
+        if value:
+            rows.append(f"- {name}: {value} [#{number}]")
+    if not rows:
+        return ""
+    return f"Öffnungszeiten in {location}:\n\n" + "\n".join(rows)
+
+
 def _synthesize_rag_answer(request_text: str, rag_text: str, user_name: str = "") -> str:
     if requests is None:
         return ""
@@ -510,8 +957,12 @@ def _synthesize_rag_answer(request_text: str, rag_text: str, user_name: str = ""
     system = (
         "Du bist KAHLE-Vinci, interner Assistent der Autohaus KAHLE Gruppe. "
         "Beantworte die Nutzerfrage ausschliesslich aus dem bereitgestellten internen Kontext. "
-        "Jede Tatsachenaussage muss die passende Quellenmarke [#] tragen. "
+        "Jeder Satz und jeder Listenpunkt mit einer Tatsachen- oder Handlungsangabe muss am Ende "
+        "mindestens eine passende Quellenmarke [#N] tragen. "
+        "Eine reine Systembeschreibung belegt keine Bedienungsanleitung. Leite deshalb keine "
+        "Schritte, Schaltflaechen, Felder oder Funktionen aus allgemeinem Produktwissen ab. "
         "Erfinde nichts, widersprich dem Kontext nicht und gib keine Tool-Syntax oder technischen Metadaten aus. "
+        "Wenn der Kontext die konkrete Frage nicht beantwortet, antworte exakt: Dazu habe ich kein internes Wissen. "
         "Wenn der Kontext mehrere Punkte enthaelt, antworte kurz strukturiert auf Deutsch."
     )
     user = f"Frage: {str(request_text or '').strip()}\n\nInterner Kontext:\n{context}"
@@ -542,11 +993,34 @@ def _synthesize_rag_answer(request_text: str, rag_text: str, user_name: str = ""
         return ""
 
 
-def _rag_answer_text(request_text: str, rag_text: str, user_name: str = "") -> str:
+def _rag_answer_text(
+    request_text: str,
+    rag_text: str,
+    user_name: str = "",
+    candidate_answer: str = "",
+) -> str:
+    context = _rag_context_text(rag_text)
+    if not context or not _rag_context_supports_request(request_text, context):
+        return _with_rag_feedback_link("Dazu habe ich kein internes Wissen.", rag_text)
+    deterministic = _deterministic_opening_hours_answer(request_text, context)
+    if deterministic:
+        return _with_rag_feedback_link(deterministic, rag_text)
+    retained_candidate = _retain_context_supported_answer(candidate_answer, context)
+    if not retained_candidate:
+        retained_candidate = _retain_grounded_answer(candidate_answer)
+    if retained_candidate:
+        return _with_rag_feedback_link(retained_candidate, rag_text)
     synthesized = _synthesize_rag_answer(request_text, rag_text, user_name)
-    if synthesized and len(synthesized) >= 40:
-        return synthesized
-    return _format_rag_context_for_user(rag_text)
+    if RAG_NO_KNOWLEDGE_RE.search(synthesized or ""):
+        return _with_rag_feedback_link("Dazu habe ich kein internes Wissen.", rag_text)
+    retained_synthesis = _retain_context_supported_answer(synthesized, context)
+    if not retained_synthesis:
+        retained_synthesis = _retain_grounded_answer(synthesized)
+    if retained_synthesis:
+        return _with_rag_feedback_link(
+            retained_synthesis, rag_text,
+        )
+    return _with_rag_feedback_link("Dazu habe ich kein internes Wissen.", rag_text)
 
 
 
@@ -1555,13 +2029,30 @@ def _needs_rag_refresh(request_text: str, messages: list[dict[str, Any]], index:
         return False
     if INTERNAL_PRODUCT_ID_RE.search(request_text):
         return True
+    folded = unicodedata.normalize("NFKD", request_text).encode("ascii", "ignore").decode().casefold()
+    if not re.search(r"\b(?:internet|websuche|online suchen|google)\b", folded):
+        if re.fullmatch(
+            r"wer\s+ist\s+(?:(?:unser|unsere|der|die)\s+)?"
+            r"[a-z][a-z.-]+(?:\s+[a-z][a-z.-]+){1,2}\s*[?!.]*",
+            folded,
+        ):
+            return True
+        if re.search(
+            r"\b(?:wps|kahle|vinci|intern\w*|bei uns|unser\w*|"
+            r"offnungszeiten|terminplanungssystem)\b",
+            folded,
+        ):
+            return True
     return bool(
         _previous_successful_rag_source(messages, index)
         and (INTERNAL_DETAIL_RE.search(request_text) or request_text.endswith("?"))
     )
 
 
-def _call_rag_chat_tool(query: str, messages: list[dict[str, Any]]) -> str:
+def _call_rag_chat_tool(
+    query: str, messages: list[dict[str, Any]], user: dict[str, Any] | None = None,
+) -> str:
+    query = _expand_customer_lock_followup(query, messages)
     db_path = Path(_env("WEBUI_DB_PATH", "OWUI_DB_PATH", default="/app/backend/data/webui.db"))
     con = None
     try:
@@ -1582,10 +2073,59 @@ def _call_rag_chat_tool(query: str, messages: list[dict[str, Any]]) -> str:
     try:
         exec(compile(str(row[0]), "<rag_chat_db>", "exec"), namespace)
         tools = namespace["Tools"]()
-        raw = _run_async_tool(tools.rag_chat(query=str(query or "").strip(), __messages__=messages))
+        raw = _run_async_tool(
+            tools.rag_chat(
+                query=str(query or "").strip(),
+                __user__=user or {},
+            )
+        )
         return str(raw or "").strip()
     except Exception:
         return ""
+
+
+def _expand_customer_lock_followup(
+    query: str, messages: list[dict[str, Any]],
+) -> str:
+    """Preserve the intent selected after Vinci's customer-lock clarification."""
+    current = str(query or "").strip()
+    if not current or len(current) > 120:
+        return current
+
+    previous_assistant = ""
+    for message in reversed(messages or []):
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            previous_assistant = str(message.get("content") or "")
+            break
+
+    def fold(value: str) -> str:
+        return (
+            unicodedata.normalize("NFKD", str(value or ""))
+            .encode("ascii", "ignore").decode().casefold()
+        )
+
+    previous = fold(previous_assistant)
+    folded = fold(current)
+    if not (
+        "werbung und befragungen" in previous
+        and "allgemeine kundensperre" in previous
+        and "vaudis" in previous
+    ):
+        return current
+    if any(token in folded for token in (
+        "werbung", "werbesperre", "werbewiderspruch", "befragung",
+        "kontaktfreigabe", "ersteres", "erste option",
+    )):
+        return (
+            "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
+            "in Vaudis über die DSE-Kontaktfreigaben?"
+        )
+    if any(token in folded for token in (
+        "allgemein", "kundensperre", "komplett", "vollstandig",
+        "zweiteres", "zweite option",
+    )):
+        return "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis?"
+    return current
 
 
 def _attach_rag_source(message: dict[str, Any], rag_text: str) -> None:
@@ -1714,18 +2254,47 @@ class Filter:
                     _set_message_content(message, formatted)
                 continue
 
+            rag_source_outcome = _extract_rag_source_outcome(message, __metadata__)
+            rag_content_owned_by_harness = bool(
+                isinstance(__metadata__, dict)
+                and __metadata__.get("kahle_knowledge_harness_active")
+                and rag_source_outcome
+            )
+            if not rag_content_owned_by_harness and rag_source_outcome == "clarification":
+                _set_message_content(
+                    message,
+                    _extract_rag_clarification(message, __metadata__)
+                    or "Bitte grenze deine Frage noch etwas genauer ein.",
+                )
+                continue
+            if not rag_content_owned_by_harness and rag_source_outcome == "guided":
+                _set_message_content(
+                    message,
+                    _extract_rag_guided_response(message, __metadata__)
+                    or "Bitte wende dich an datenschutz@kahle.de.",
+                )
+                continue
+            if not rag_content_owned_by_harness and rag_source_outcome == "missing":
+                answer = "Dazu habe ich kein internes Wissen."
+                feedback = _extract_rag_feedback_from_message(message, __metadata__)
+                if feedback:
+                    answer = f"{answer}\n\n{feedback}"
+                _set_message_content(message, answer)
+                continue
+
             successful_rag_source = _extract_successful_rag_source(message, __metadata__)
-            if successful_rag_source and (
-                _looks_like_failed_rag_answer(content)
-                or _message_contains_pseudo_toolcall(message)
-                or REASONING_LEAK_RE.search(content)
-            ):
+            if successful_rag_source and not rag_content_owned_by_harness:
                 user_name = ""
                 if isinstance(__user__, dict):
                     user_name = str(__user__.get("name") or __user__.get("email") or "").strip()
                 _set_message_content(
                     message,
-                    _rag_answer_text(request_text, successful_rag_source, user_name),
+                    _rag_answer_text(
+                        request_text,
+                        successful_rag_source,
+                        user_name,
+                        candidate_answer=content,
+                    ),
                 )
                 continue
 
@@ -1733,9 +2302,10 @@ class Filter:
             if (
                 index == len(messages) - 1
                 and not successful_rag_source
+                and not rag_content_owned_by_harness
                 and _needs_rag_refresh(request_text, messages, index)
             ):
-                rag_text = _call_rag_chat_tool(request_text, messages[:index])
+                rag_text = _call_rag_chat_tool(request_text, messages[:index], __user__)
                 if re.search(r"^FOUND:\s*true\s*$", rag_text, re.IGNORECASE | re.MULTILINE):
                     user_name = ""
                     if isinstance(__user__, dict):

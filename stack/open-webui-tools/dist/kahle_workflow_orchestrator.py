@@ -89,7 +89,7 @@ _TITLE_STOPWORDS = {
     "am", "an", "auf", "aus", "das", "der", "die", "ein", "eine", "einer",
     "fur", "im", "in", "mit", "oder", "steht", "und", "unser", "unsere",
     "unserer", "von", "was", "wer", "zu", "kahle", "gruppe", "dokument", "datei",
-    "du", "uber", "weisst", "weiss", "weit", "kennt", "kennst",
+    "du", "uber", "weisst", "weiss", "weit", "kennt", "kennst", "ist", "sind",
 }
 def _title_terms(value: str) -> set[str]:
     normalized = unicodedata.normalize("NFKD", value or "")
@@ -161,6 +161,79 @@ def diversify_reranked(
             continue
         selected.append((index, score))
         selected_indices.add(index)
+        if len(selected) >= result_limit:
+            break
+    return selected
+_OPENING_HOURS_LOCATIONS = (
+    ("hannover",),
+    ("wunstorf",),
+    ("wedemark",),
+    ("walsrode",),
+    ("neustadt", "rubenberge"),
+    ("nienburg",),
+    ("stadthagen",),
+)
+def opening_hours_all_locations_intent(query: str) -> bool:
+    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
+    if not ("offnungszeiten" in folded or "oeffnungszeiten" in folded):
+        return False
+    location_hits = sum(all(token in folded for token in location) for location in _OPENING_HOURS_LOCATIONS)
+    return any(token in folded for token in ("alle standorte", "allgemein", "alles")) or location_hits >= 4
+def focused_document_ids_for_query(
+    query: str, candidates: list[dict[str, Any]],
+) -> set[str]:
+    if opening_hours_all_locations_intent(query):
+        return set()
+    return focused_document_ids(query, candidates)
+def rerank_candidate_count(query: str, candidate_count: int, *, result_limit: int) -> int:
+    if opening_hours_all_locations_intent(query):
+        return min(candidate_count, 50)
+    return min(candidate_count, result_limit * 3)
+def _opening_hours_location_matches(
+    point: dict[str, Any], location: tuple[str, ...],
+) -> bool:
+    payload = point.get("payload") or {}
+    identity = "\n".join((
+        str(payload.get("title") or ""),
+        " > ".join(str(item) for item in (payload.get("heading_path") or ())),
+    ))
+    text = "\n".join((
+        identity,
+        str(payload.get("parent_content") or payload.get("content") or ""),
+    ))
+    folded_identity = (
+        unicodedata.normalize("NFKD", identity)
+        .encode("ascii", "ignore").decode().casefold()
+    )
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
+    has_hours = (
+        "offnungszeiten" in folded
+        or "oeffnungszeiten" in folded
+        or bool(re.search(r"\bmo\s*[-–]\s*fr\b", folded))
+    )
+    return has_hours and all(token in folded_identity for token in location)
+def missing_opening_hours_locations(
+    candidates: list[dict[str, Any]],
+) -> list[tuple[str, ...]]:
+    return [
+        location for location in _OPENING_HOURS_LOCATIONS
+        if not any(_opening_hours_location_matches(point, location) for point in candidates)
+    ]
+def diversify_opening_hours_locations(
+    reranked: list[tuple[int, float]], candidates: list[dict[str, Any]],
+    *, result_limit: int,
+) -> list[tuple[int, float]]:
+    """Return at most one opening-hours passage for each known location."""
+    selected: list[tuple[int, float]] = []
+    selected_indices: set[int] = set()
+    for location in _OPENING_HOURS_LOCATIONS:
+        for index, score in reranked:
+            if index < 0 or index >= len(candidates) or index in selected_indices:
+                continue
+            if _opening_hours_location_matches(candidates[index], location):
+                selected.append((index, score))
+                selected_indices.add(index)
+                break
         if len(selected) >= result_limit:
             break
     return selected
@@ -371,20 +444,39 @@ class QdrantHybridRetriever:
         if not 30 <= candidate_limit <= 50 or not 5 <= result_limit <= 8:
             raise RetrievalError("retrieval_limits_out_of_policy")
         acl = mandatory_acl_filter(scope, today)
-        sparse = self.sparse_encoder.encode_query(query)
-        build_id = str(sparse.pop("build_id", ""))
-        if not build_id:
-            raise RetrievalError("sparse_build_id_missing")
-        acl["must"].append({"key": "build_id", "match": {"value": build_id}})
-        body = {
-            "prefetch": [
-                {"query": dense_vector, "using": "dense", "filter": acl, "limit": candidate_limit},
-                {"query": sparse, "using": "bm25", "filter": acl, "limit": candidate_limit},
-            ],
-            "query": {"fusion": "rrf"},
-            "limit": candidate_limit,
-            "with_payload": True,
-        }
+        try:
+            sparse = self.sparse_encoder.encode_query(query)
+            build_id = str(sparse.pop("build_id", ""))
+            if not build_id:
+                raise RetrievalError("sparse_build_id_missing")
+        except RetrievalError as exc:
+            if not str(exc).startswith("sparse_"):
+                raise
+            sparse = None
+            build_id = ""
+        if build_id:
+            acl["must"].append({"key": "build_id", "match": {"value": build_id}})
+        if sparse is None:
+            # Dense retrieval remains ACL-filtered and is still checked by the
+            # external reranker. A temporary sparse encoder outage must not
+            # make valid internal knowledge disappear completely.
+            body = {
+                "query": dense_vector,
+                "using": "dense",
+                "filter": acl,
+                "limit": candidate_limit,
+                "with_payload": True,
+            }
+        else:
+            body = {
+                "prefetch": [
+                    {"query": dense_vector, "using": "dense", "filter": acl, "limit": candidate_limit},
+                    {"query": sparse, "using": "bm25", "filter": acl, "limit": candidate_limit},
+                ],
+                "query": {"fusion": "rrf"},
+                "limit": candidate_limit,
+                "with_payload": True,
+            }
         try:
             response = requests.post(
                 f"{self.qdrant_url}/collections/{self.alias}/points/query",
@@ -398,6 +490,8 @@ class QdrantHybridRetriever:
             point for point in self._parent_centered(points, candidate_limit)
             if not _metadata_only(point)
         ]
+        if opening_hours_all_locations_intent(query):
+            candidates = self._complete_opening_hours_locations(candidates, acl)
         identifiers = explicit_source_identifiers(query)
         if identifiers:
             candidates = [
@@ -411,7 +505,7 @@ class QdrantHybridRetriever:
             ]
             if not candidates:
                 return []
-        focused_ids = focused_document_ids(query, candidates) if not identifiers else set()
+        focused_ids = focused_document_ids_for_query(query, candidates) if not identifiers else set()
         if focused_ids:
             candidates = [
                 point for point in candidates
@@ -433,7 +527,7 @@ class QdrantHybridRetriever:
         try:
             reranked = self.reranker.rerank(
                 query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
-                min(len(candidates), result_limit * 3),
+                rerank_candidate_count(query, len(candidates), result_limit=result_limit),
             )
         except RetrievalError as exc:
             # A named person, e-mail address or an otherwise unambiguous document
@@ -466,6 +560,10 @@ class QdrantHybridRetriever:
         )
         if overview_selection:
             candidates, ranked_selection = merge_overview_chapters(candidates, overview_selection)
+        elif opening_hours_all_locations_intent(query):
+            ranked_selection = diversify_opening_hours_locations(
+                reranked, candidates, result_limit=result_limit,
+            )
         elif identifiers or focused_ids:
             ranked_selection = eligible_reranked[:result_limit]
         else:
@@ -492,6 +590,53 @@ class QdrantHybridRetriever:
                 retrieval_score=float(point.get("score") or 0), rerank_score=float(score),
             ))
         return selected
+
+    def _complete_opening_hours_locations(
+        self, candidates: list[dict[str, Any]], acl: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Recover location passages omitted from the broad top-50 fusion pool.
+
+        This remains one user-visible tool call. Only missing, known locations
+        receive a narrow BM25 lookup and every recovered point still carries
+        the same mandatory ACL filter.
+        """
+        result = list(candidates)
+        seen = {
+            str((point.get("payload") or {}).get("parent_id") or point.get("id") or "")
+            for point in result
+        }
+        for location in missing_opening_hours_locations(result):
+            try:
+                sparse = self.sparse_encoder.encode_query(
+                    "Öffnungszeiten Standort " + " ".join(location)
+                    + " Verkauf Service Teiledienst"
+                )
+                sparse.pop("build_id", None)
+                response = requests.post(
+                    f"{self.qdrant_url}/collections/{self.alias}/points/query",
+                    json={
+                        "query": sparse,
+                        "using": "bm25",
+                        "filter": acl,
+                        "limit": 8,
+                        "with_payload": True,
+                    },
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                points = response.json()["result"]["points"]
+            except (RetrievalError, requests.RequestException, KeyError, TypeError, ValueError):
+                continue
+            for point in self._parent_centered(points, 8):
+                identity = str(
+                    (point.get("payload") or {}).get("parent_id") or point.get("id") or ""
+                )
+                if identity in seen or _metadata_only(point):
+                    continue
+                if _opening_hours_location_matches(point, location):
+                    result.append(point)
+                    seen.add(identity)
+        return result
 
     def _document_points(
         self, document_ids: set[str], acl: dict[str, Any],

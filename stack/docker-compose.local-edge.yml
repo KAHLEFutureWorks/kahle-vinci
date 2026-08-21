@@ -17,9 +17,20 @@
 # Oder ueber scripts/start-stack.ps1 -WithEdge
 
 services:
+  open-webui:
+    environment:
+      # Lokal wird der neue Antwortpfad aktiv geprüft. Produktion bleibt ohne
+      # explizite Freigabe im Schattenbetrieb.
+      KAHLE_KNOWLEDGE_HARNESS_MODE: "active"
+
   kb-admin-api:
     environment:
       KB_PORTAL_AUTO_ACTIVATION_ENABLED: "true"
+
+  # Die Academy-Anbindung arbeitet mit produktiven Microsoft- und
+  # LearningSuite-Konten. Sie gehoert nicht in die lokale Portalabnahme.
+  academy-provisioner:
+    profiles: ["production-only"]
 
   caddy-local:
     image: caddy:2.11.3-alpine

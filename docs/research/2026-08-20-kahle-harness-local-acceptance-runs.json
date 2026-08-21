@@ -1,0 +1,661 @@
+{
+  "schema_version": "kahle.harness-acceptance-input.v1",
+  "expected_models": [
+    "KAHLE-Vinci",
+    "KAHLE-Vinci-Thinking",
+    "KAHLE-Vinci-Max-Thinking"
+  ],
+  "profile_authorization": {
+    "employee": true,
+    "manager": true
+  },
+  "required_case_ids": [
+    "procedure_without_guide",
+    "procedure_with_guide",
+    "person_lookup",
+    "aliases_and_followup",
+    "opening_hours",
+    "process_overview",
+    "customer_lock_clarification",
+    "permissions",
+    "model_parity",
+    "native_ui"
+  ],
+  "runs": [
+    {
+      "case_id": "procedure_without_guide",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "partially_supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "retry_required",
+        "fallback_used": true,
+        "delivery_status": "safe_fallback",
+        "feedback_link_present": true,
+        "latency_ms": 12127
+      }
+    },
+    {
+      "case_id": "procedure_without_guide",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "partially_supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "fallback_used": false,
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 7570
+      }
+    },
+    {
+      "case_id": "person_lookup",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2049
+      }
+    },
+    {
+      "case_id": "opening_hours",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "unsupported",
+        "source_count": 0,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "fallback_used": false,
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 1346
+      }
+    },
+    {
+      "case_id": "aliases_and_followup",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "fallback_used": false,
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 5751
+      }
+    },
+    {
+      "case_id": "customer_lock_clarification",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "fallback_used": false,
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 15770
+      }
+    },
+    {
+      "case_id": "person_lookup",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6529
+      }
+    },
+    {
+      "case_id": "aliases_and_followup",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 4954
+      }
+    },
+    {
+      "case_id": "opening_hours",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "unsupported",
+        "source_count": 0,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 394
+      }
+    },
+    {
+      "case_id": "process_overview",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "unsupported",
+        "source_count": 0,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 1081
+      }
+    },
+    {
+      "case_id": "process_overview",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "partially_supported",
+        "source_count": 3,
+        "permission_scope_present": true,
+        "final_validation_status": "retry_required",
+        "delivery_status": "safe_fallback",
+        "feedback_link_present": true,
+        "latency_ms": 16917
+      }
+    },
+    {
+      "case_id": "customer_lock_clarification",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "unsupported",
+        "source_count": 0,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 486
+      }
+    },
+    {
+      "case_id": "model_parity",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2049
+      }
+    },
+    {
+      "case_id": "model_parity",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6529
+      }
+    },
+    {
+      "case_id": "native_ui",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2049
+      }
+    },
+    {
+      "case_id": "native_ui",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6529
+      }
+    },
+    {
+      "case_id": "permissions",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "unsupported",
+        "source_count": 0,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 9598
+      }
+    },
+    {
+      "case_id": "permissions",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "unsupported",
+        "source_count": 0,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 8216
+      }
+    },
+    {
+      "case_id": "permissions",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 16944
+      }
+    },
+    {
+      "case_id": "permissions",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6605
+      }
+    },
+    {
+      "case_id": "procedure_with_guide",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 7493
+      }
+    },
+    {
+      "case_id": "procedure_with_guide",
+      "profile": "employee",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 3620
+      }
+    },
+    {
+      "case_id": "person_lookup",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6485
+      }
+    },
+    {
+      "case_id": "person_lookup",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2684
+      }
+    },
+    {
+      "case_id": "model_parity",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6485
+      }
+    },
+    {
+      "case_id": "model_parity",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2684
+      }
+    },
+    {
+      "case_id": "native_ui",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6485
+      }
+    },
+    {
+      "case_id": "native_ui",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "employee_directory",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2684
+      }
+    },
+    {
+      "case_id": "procedure_without_guide",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "partially_supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "retry_required",
+        "delivery_status": "safe_fallback",
+        "feedback_link_present": true,
+        "latency_ms": 9112
+      }
+    },
+    {
+      "case_id": "procedure_without_guide",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "partially_supported",
+        "source_count": 1,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2766
+      }
+    },
+    {
+      "case_id": "procedure_with_guide",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 16944
+      }
+    },
+    {
+      "case_id": "procedure_with_guide",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 6605
+      }
+    },
+    {
+      "case_id": "process_overview",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 3,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 8921
+      }
+    },
+    {
+      "case_id": "process_overview",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 3,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 3618
+      }
+    },
+    {
+      "case_id": "opening_hours",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 7211
+      }
+    },
+    {
+      "case_id": "opening_hours",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 5704
+      }
+    },
+    {
+      "case_id": "aliases_and_followup",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 7211
+      }
+    },
+    {
+      "case_id": "aliases_and_followup",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 5704
+      }
+    },
+    {
+      "case_id": "customer_lock_clarification",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 12805
+      }
+    },
+    {
+      "case_id": "customer_lock_clarification",
+      "profile": "manager",
+      "metrics": {
+        "model_name": "KAHLE-Vinci-Thinking",
+        "intent_kind": "internal_knowledge",
+        "tool_called": "rag_chat",
+        "evidence_status": "supported",
+        "source_count": 2,
+        "permission_scope_present": true,
+        "final_validation_status": "accepted",
+        "delivery_status": "accepted",
+        "feedback_link_present": true,
+        "latency_ms": 2981
+      }
+    }
+  ]
+}

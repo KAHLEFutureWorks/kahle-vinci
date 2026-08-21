@@ -90,6 +90,12 @@ from open_webui.utils.filter import (
     get_sorted_filter_ids,
     process_filter_functions,
 )
+from open_webui.utils.kahle_knowledge_harness import (
+    build_decision as build_knowledge_harness_decision,
+    rag_result_from_sources,
+    resolve_query_aliases,
+    validate_answer as validate_knowledge_harness_answer,
+)
 
 from open_webui.utils.mcp.client import MCPClient
 from open_webui.utils.memory import add_memory_context, review_memory_after_turn
@@ -182,6 +188,41 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _knowledge_harness_mode() -> str:
+    mode = str(os.getenv('KAHLE_KNOWLEDGE_HARNESS_MODE') or 'shadow').strip().lower()
+    return mode if mode in {'off', 'shadow', 'active'} else 'shadow'
+
+
+def _knowledge_harness_answer_timeout_seconds() -> float:
+    try:
+        value = float(os.getenv('KAHLE_ANSWER_STREAM_TIMEOUT_SECONDS') or 60)
+    except (TypeError, ValueError):
+        value = 60
+    return min(300.0, max(5.0, value))
+
+
+async def _await_kahle_answer_stream(awaitable: Any, *, timeout_seconds: float) -> bool:
+    """Return true when an active Harness answer stream exceeds its deadline."""
+    try:
+        await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+        return False
+    except asyncio.TimeoutError:
+        return True
+
+
+def _knowledge_harness_permission_scope(user: Any) -> dict[str, Any]:
+    if isinstance(user, dict):
+        get_value = user.get
+    else:
+        get_value = lambda name, default=None: getattr(user, name, default)
+    groups = get_value('groups', [])
+    return {
+        'user_id': str(get_value('id', '') or ''),
+        'role': str(get_value('role', '') or ''),
+        'groups': list(groups) if isinstance(groups, (list, tuple, set)) else [],
+    }
 
 
 # We believe in one maker of all models, seen and unseen,
@@ -456,6 +497,26 @@ def _has_explicit_internal_lookup_intent(folded: str) -> bool:
     )
 
 
+def _looks_like_named_person_question(text: str) -> bool:
+    """Treat short name lookups as internal unless web research is explicit.
+
+    KAHLE-Vinci is an internal assistant and employee questions are commonly
+    phrased without an additional "bei uns" marker (for example "Wer ist Engin
+    Bayir?"). Public-person research remains available through an explicit web
+    or internet request, which is handled before this signal is evaluated.
+    """
+    value = str(text or '').strip()
+    return bool(
+        re.fullmatch(
+            r'wer\s+ist\s+(?:(?:unser|unsere|der|die)\s+)?'
+            r'[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß.-]+'
+            r'(?:\s+[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß.-]+){1,2}\s*[?!.]*',
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def _looks_like_internal_rag_request(text: str) -> bool:
     folded = _ascii_fold(text)
     if not folded:
@@ -520,12 +581,137 @@ def _looks_like_internal_rag_request(text: str) -> bool:
     if any(token in folded for token in external_only) and not has_internal_signal:
         return False
 
-    if has_internal_signal:
+    if has_internal_signal or _looks_like_named_person_question(text):
         return True
 
     return any(token in folded for token in action_signals) and any(
         token in folded for token in ('kunde', 'kunden', 'auftrag', 'gutschein', 'rabatt', 'service')
     )
+
+
+def _is_internal_clarification_followup(messages: list[dict[str, Any]], user_text: str) -> bool:
+    """Keep a short answer to an internal clarification inside RAG routing."""
+    current = str(user_text or '').strip()
+    if not current or len(current) > 120:
+        return False
+    previous_assistant = ''
+    skipped_current_user = False
+    for message in reversed(messages or []):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get('role') or '')
+        if role == 'user' and not skipped_current_user:
+            skipped_current_user = True
+            continue
+        if role == 'assistant':
+            previous_assistant = str(message.get('content') or '')
+            break
+    def fold(value: str) -> str:
+        return (
+            str(value or '').casefold()
+            .replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+        )
+
+    previous = fold(previous_assistant)
+    if 'oeffnungszeiten' not in previous or 'welchen standort' not in previous:
+        return False
+    folded = fold(current)
+    return any(
+        token in folded
+        for token in (
+            'allgemein', 'alles', 'alle', 'verkauf', 'service', 'teiledienst',
+            'hannover', 'wunstorf', 'wedemark', 'walsrode', 'neustadt',
+            'nienburg', 'stadthagen',
+        )
+    )
+
+
+def _expanded_internal_rag_query(messages: list[dict[str, Any]], user_text: str) -> str:
+    """Turn short clarification replies into complete, unambiguous searches."""
+    current = str(user_text or '').strip()
+    previous_assistant = ''
+    skipped_current_user = False
+    for message in reversed(messages or []):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get('role') or '')
+        if role == 'user' and not skipped_current_user:
+            skipped_current_user = True
+            continue
+        if role == 'assistant':
+            previous_assistant = str(message.get('content') or '')
+            break
+    def fold(value: str) -> str:
+        return (
+            str(value or '').casefold()
+            .replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss')
+        )
+
+    previous = fold(previous_assistant)
+    folded = fold(current)
+    customer_lock_clarification = (
+        'werbung und befragungen' in previous
+        and 'allgemeine kundensperre' in previous
+        and 'vaudis' in previous
+    )
+    if customer_lock_clarification:
+        if any(token in folded for token in (
+            'werbung', 'werbesperre', 'werbewiderspruch', 'befragung',
+            'kontaktfreigabe', 'ersteres', 'erste option',
+        )):
+            return (
+                'Wie sperre ich Werbung und automatisierte Befragungen für einen '
+                'Kunden in Vaudis über die DSE-Kontaktfreigaben?'
+            )
+        if any(token in folded for token in (
+            'allgemein', 'kundensperre', 'komplett', 'vollstaendig',
+            'zweiteres', 'zweite option',
+        )):
+            return 'Wie veranlasse ich eine allgemeine Kundensperre in Vaudis?'
+    asks_for_all = any(token in folded for token in ('allgemein', 'alles', 'alle'))
+    if asks_for_all and 'oeffnungszeiten' in previous and 'standort' in previous:
+        return (
+            'Öffnungszeiten Verkauf Service Teiledienst alle Standorte '
+            'Hannover Wunstorf Wedemark Walsrode Neustadt am Rübenberge '
+            'Nienburg Stadthagen'
+        )
+    return resolve_query_aliases(current)
+
+
+def _internal_rag_source_outcome(sources: list[dict[str, Any]]) -> str:
+    """Return ``found`` or ``missing`` for a canonical rag_chat result."""
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        source_name = str((source.get('source') or {}).get('name') or '').lower()
+        if 'rag_chat' not in source_name:
+            continue
+        documents = source.get('document') if isinstance(source.get('document'), list) else []
+        text = '\n'.join(str(item or '') for item in documents)
+        if re.search(r'^CLARIFICATION_REQUIRED:\s*true\s*$', text, re.IGNORECASE | re.MULTILINE):
+            return 'clarification'
+        if re.search(r'^FOUND:\s*true\s*$', text, re.IGNORECASE | re.MULTILINE):
+            return 'found'
+        if re.search(r'^FOUND:\s*false\s*$', text, re.IGNORECASE | re.MULTILINE):
+            return 'missing'
+    return ''
+
+
+def _internal_rag_clarification(sources: list[dict[str, Any]]) -> str:
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        source_name = str((source.get('source') or {}).get('name') or '').lower()
+        if 'rag_chat' not in source_name:
+            continue
+        documents = source.get('document') if isinstance(source.get('document'), list) else []
+        text = '\n'.join(str(item or '') for item in documents)
+        if not re.search(r'^CLARIFICATION_REQUIRED:\s*true\s*$', text, re.IGNORECASE | re.MULTILINE):
+            continue
+        answer = re.search(r'^ANSWER:\s*(.+)$', text, re.IGNORECASE | re.MULTILINE)
+        if answer:
+            return answer.group(1).strip()
+    return ''
 
 
 def _build_native_rag_fallback(
@@ -851,17 +1037,30 @@ def _strip_pseudo_toolcall_stream_text(text: str) -> str:
     return value
 
 
-def _stream_safe_output(output: list) -> list:
+def _stream_safe_output(output: list, *, suppress_message_text: bool = False) -> list:
     safe_output = copy.deepcopy(output or [])
     for item in safe_output:
-        if not isinstance(item, dict) or item.get('type') != 'message':
+        if not isinstance(item, dict):
+            continue
+        if suppress_message_text and item.get('type') == 'reasoning':
+            summaries = item.get('summary', [])
+            if isinstance(summaries, list):
+                for summary in summaries:
+                    if isinstance(summary, dict) and 'text' in summary:
+                        summary['text'] = ''
+            continue
+        if item.get('type') != 'message':
             continue
         parts = item.get('content', [])
         if not isinstance(parts, list):
             continue
         for part in parts:
             if isinstance(part, dict) and 'text' in part:
-                part['text'] = _strip_pseudo_toolcall_stream_text(part.get('text', ''))
+                part['text'] = (
+                    ''
+                    if suppress_message_text
+                    else _strip_pseudo_toolcall_stream_text(part.get('text', ''))
+                )
     return safe_output
 
 
@@ -3148,6 +3347,40 @@ def _extract_kahle_rag_sources(tool_result: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _canonical_kahle_rag_source_events(
+    sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose retrieved documents as native OpenWebUI citation sources.
+
+    The tool invocation itself remains visible through its status event.  The
+    citation drawer, however, should identify the documents returned by RAG
+    instead of presenting the generic ``rag_chat/rag_chat`` tool as a source.
+    """
+    events = []
+    seen = set()
+    for source in sources:
+        title = str(source.get('title') or 'Interne Wissensquelle').strip()
+        url = str(source.get('source_url') or '').strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        metadata = {
+            key: source.get(key)
+            for key in (
+                'document_id', 'version_id', 'valid_until', 'knowledgebase_ids',
+            )
+            if source.get(key) not in (None, '', [])
+        }
+        metadata.update({'source': title, 'url': url})
+        evidence_text = str(source.get('evidence_text') or '').strip()
+        events.append({
+            'source': {'name': title, 'url': url},
+            'document': [evidence_text] if evidence_text else [],
+            'metadata': [metadata],
+        })
+    return events
+
+
 def _append_canonical_rag_source_links(output: list[dict[str, Any]], sources: list[dict[str, Any]]) -> None:
     if not sources:
         return
@@ -3162,6 +3395,14 @@ def _append_canonical_rag_source_links(output: list[dict[str, Any]], sources: li
     # Models must never turn an authenticated relative portal URL into an
     # invented host. Remove any model-authored source link and append the
     # canonical links from the trusted tool result below.
+    text = re.sub(
+        r'(?ims)\n*Quellen:\s*\n'
+        r'(?:\s*-\s*\[[^\]]+\]\('
+        r'(?:(?:https?://[^)\s]+/)|/)(?:wissen/)?api/portal/sources/[^)\s]+'
+        r'\)\s*\n?)+',
+        '\n',
+        text,
+    ).rstrip()
     text = re.sub(
         r'\[([^\]]+)\]\((?:(?:https?://[^)\s]+/)|/)(?:wissen/)?api/portal/sources/[^)\s]+\)',
         r'\1',
@@ -3212,6 +3453,16 @@ def _append_canonical_rag_feedback_link(output: list[dict[str, Any]], feedback_l
         text,
     ).rstrip()
     text_part['text'] = f"{text}\n\n[Wissensfehler melden]({feedback_link})"
+
+
+def _last_kahle_answer_text(output: list[dict[str, Any]]) -> str:
+    for item in reversed(output or []):
+        if item.get('type') != 'message':
+            continue
+        for part in reversed(item.get('content') or []):
+            if part.get('type') == 'output_text':
+                return str(part.get('text') or '').strip()
+    return ''
 
 
 def process_messages_with_output(
@@ -3965,10 +4216,135 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             # (e.g. pipe functions) can access all tools including MCP and builtins.
             metadata['tools'] = tools_dict
 
-            if metadata.get('params', {}).get('function_calling') != 'legacy':
-                # If the function calling is native, then call the tools function calling handler
+            native_function_calling = metadata.get('params', {}).get('function_calling') != 'legacy'
+            original_user_tool_request = get_last_user_message(form_data.get('messages', []) or [])
+            user_tool_request = _expanded_internal_rag_query(
+                form_data.get('messages', []) or [], original_user_tool_request or ''
+            )
+            force_internal_rag = (
+                native_function_calling
+                and 'rag_chat' in tools_dict
+                and (
+                    _looks_like_internal_rag_request(user_tool_request or '')
+                    or _is_internal_clarification_followup(
+                        form_data.get('messages', []) or [], user_tool_request or ''
+                    )
+                )
+            )
+
+            pre_routed_internal_rag = ''
+            if force_internal_rag:
+                metadata['_kahle_harness_started_monotonic'] = time.monotonic()
+                # Internal process questions must be retrieved before the
+                # answer model starts streaming. Native tool-capable models are
+                # otherwise allowed to skip rag_chat and answer from prior
+                # knowledge. The deterministic handler executes only rag_chat
+                # here and supplies its permission-filtered result as context.
+                try:
+                    pre_route_tools = {'rag_chat': tools_dict['rag_chat']}
+                    pre_route_form_data = copy.deepcopy(form_data)
+                    if user_tool_request != (original_user_tool_request or ''):
+                        set_last_user_message_content(
+                            user_tool_request, pre_route_form_data.get('messages', [])
+                        )
+                    pre_route_form_data, flags = await chat_completion_tools_handler(
+                        request, pre_route_form_data, extra_params, user, models, pre_route_tools
+                    )
+                    if user_tool_request != (original_user_tool_request or ''):
+                        set_last_user_message_content(
+                            original_user_tool_request or '', pre_route_form_data.get('messages', [])
+                        )
+                    form_data = pre_route_form_data
+                    pre_route_sources = flags.get('sources', [])
+                    sources.extend(pre_route_sources)
+                    pre_routed_internal_rag = _internal_rag_source_outcome(pre_route_sources)
+                    pre_route_rag_result = rag_result_from_sources(pre_route_sources)
+                    canonical_pre_route_sources = _extract_kahle_rag_sources(
+                        pre_route_rag_result
+                    )
+                    canonical_pre_route_events = _canonical_kahle_rag_source_events(
+                        canonical_pre_route_sources
+                    )
+                    sources[:] = [
+                        source
+                        for source in sources
+                        if 'rag_chat' not in str(
+                            (source.get('source') or {}).get('name') or ''
+                        ).lower()
+                    ]
+                    if canonical_pre_route_events:
+                        sources.extend(canonical_pre_route_events)
+                    metadata['kahle_canonical_rag_sources'] = canonical_pre_route_sources
+                    metadata['kahle_canonical_rag_feedback_link'] = (
+                        _extract_kahle_rag_feedback_link(pre_route_rag_result)
+                    )
+                    if pre_routed_internal_rag:
+                        metadata['kahle_internal_rag_prerouted'] = pre_routed_internal_rag
+                    harness_mode = _knowledge_harness_mode()
+                    harness_decision = None
+                    if harness_mode != 'off':
+                        harness_decision = build_knowledge_harness_decision(
+                            query=original_user_tool_request or '',
+                            resolved_query=user_tool_request or original_user_tool_request or '',
+                            messages=form_data.get('messages', []) or [],
+                            model_id=str(form_data.get('model') or ''),
+                            permission_scope=_knowledge_harness_permission_scope(user),
+                            rag_result=pre_route_rag_result,
+                        )
+                        shadow_decision = harness_decision.to_dict()
+                        shadow_status = shadow_decision['evidence_bundle']['status']
+                        legacy_status = {
+                            'found': 'supported',
+                            'missing': 'unsupported',
+                            'clarification': 'unsupported',
+                            'guided': 'supported',
+                        }.get(pre_routed_internal_rag, '')
+                        shadow_decision['comparison'] = {
+                            'legacy_outcome': pre_routed_internal_rag,
+                            'equivalent': bool(legacy_status)
+                            and legacy_status == shadow_status,
+                        }
+                        metadata['kahle_knowledge_harness_shadow'] = shadow_decision
+                        if harness_mode == 'active':
+                            metadata['kahle_knowledge_harness_active'] = True
+                            metadata['kahle_answer_contract'] = shadow_decision[
+                                'answer_contract'
+                            ]
+                            form_data['messages'] = add_or_update_system_message(
+                                harness_decision.answer_prompt(),
+                                form_data.get('messages', []) or [],
+                                append=True,
+                            )
+                            direct_answer = harness_decision.direct_answer()
+                            if direct_answer:
+                                metadata['kahle_direct_final_content'] = direct_answer
+                            metadata['kahle_answer_validation_fallback'] = (
+                                harness_decision.validation_fallback()
+                            )
+                    if harness_mode != 'active' and pre_routed_internal_rag == 'clarification':
+                        metadata['kahle_direct_final_content'] = (
+                            _internal_rag_clarification(pre_route_sources)
+                            or 'Bitte grenze deine Frage noch etwas genauer ein.'
+                        )
+                    elif harness_mode != 'active' and pre_routed_internal_rag == 'missing':
+                        metadata['kahle_direct_final_content'] = 'Dazu habe ich kein internes Wissen.'
+                except Exception as e:
+                    # Keep native tools available as a recovery path. The
+                    # streaming guard below still suppresses an unsupported
+                    # direct answer until the RAG fallback has completed.
+                    log.exception(e)
+
+            if native_function_calling:
+                # Native tools remain available for all other capabilities and
+                # as a fallback if the deterministic pre-route failed.
+                native_tools_dict = {
+                    name: tool
+                    for name, tool in tools_dict.items()
+                    if not (force_internal_rag and name == 'rag_chat' and pre_routed_internal_rag)
+                }
                 form_data['tools'] = [
-                    {'type': 'function', 'function': tool.get('spec', {})} for tool in tools_dict.values()
+                    {'type': 'function', 'function': tool.get('spec', {})}
+                    for tool in native_tools_dict.values()
                 ]
                 if inlet_filter_tools:
                     form_data['tools'].extend(inlet_filter_tools)
@@ -5192,8 +5568,22 @@ async def streaming_chat_response_handler(response, ctx):
             prior_output = []
             last_response_id = None
 
+            initial_user_message = get_last_user_message(form_data.get('messages', []) or [])
+            initial_tools = metadata.get('tools', {}) or {}
+            suppress_initial_rag_response = (
+                'rag_chat' in initial_tools
+                and (
+                    _looks_like_internal_rag_request(initial_user_message or '')
+                    or bool(metadata.get('kahle_internal_rag_prerouted'))
+                )
+            )
+
             def full_output():
-                return prior_output + output if prior_output else output
+                combined = prior_output + output if prior_output else output
+                return _stream_safe_output(
+                    combined,
+                    suppress_message_text=suppress_initial_rag_response,
+                )
 
             reasoning_tags_param = metadata.get('params', {}).get('reasoning_tags')
             DETECT_REASONING_TAGS = reasoning_tags_param is not False
@@ -5921,22 +6311,63 @@ async def streaming_chat_response_handler(response, ctx):
                         if responses_api_tool_calls:
                             tool_calls.append(_split_tool_calls(responses_api_tool_calls))
 
+                initial_answer_stream_timed_out = False
                 try:
-                    await stream_body_handler(response, form_data)
+                    if metadata.get('kahle_knowledge_harness_active'):
+                        initial_answer_stream_timed_out = await _await_kahle_answer_stream(
+                            stream_body_handler(response, form_data),
+                            timeout_seconds=_knowledge_harness_answer_timeout_seconds(),
+                        )
+                    else:
+                        await stream_body_handler(response, form_data)
                 finally:
-                    if response.background:
+                    if response.background and not initial_answer_stream_timed_out:
                         await response.background()
+
+                if initial_answer_stream_timed_out:
+                    metadata['kahle_answer_stream_timed_out'] = True
+                    if hasattr(response.body_iterator, 'aclose'):
+                        try:
+                            await response.body_iterator.aclose()
+                        except Exception:
+                            pass
+                    content = ''
+                    prior_output = []
+                    output = [{
+                        'type': 'message',
+                        'id': output_id('msg'),
+                        'status': 'in_progress',
+                        'role': 'assistant',
+                        'content': [{
+                            'type': 'output_text',
+                            'text': str(
+                                metadata.get('kahle_answer_validation_fallback')
+                                or 'Die Antwort konnte nicht rechtzeitig abgeschlossen werden.'
+                            ),
+                        }],
+                    }]
+
+                # The unsupported first model response has now been fully
+                # consumed without exposing its message text. Tool-call events
+                # and the answer generated from the RAG result may be shown.
+                suppress_initial_rag_response = False
 
                 tool_call_retries = 0
                 tool_call_sources = []  # Track citation sources from tool results
                 all_tool_call_sources = []  # Accumulated sources across all iterations
-                canonical_rag_sources = []  # Trusted original links from KAHLE_RAG_RESULT
-                canonical_rag_feedback_link = ''  # Trusted feedback target from KAHLE_RAG_RESULT
+                canonical_rag_sources = list(
+                    metadata.get('kahle_canonical_rag_sources') or []
+                )  # Trusted original links from KAHLE_RAG_RESULT
+                canonical_rag_feedback_link = str(
+                    metadata.get('kahle_canonical_rag_feedback_link') or ''
+                )  # Trusted feedback target from KAHLE_RAG_RESULT
                 user_message = get_last_user_message(form_data['messages'])
                 tools = metadata.get('tools', {})
 
-                native_rag_fallback = _build_native_rag_fallback(
-                    tools, user_message or '', tool_calls, output
+                native_rag_fallback = (
+                    []
+                    if metadata.get('kahle_internal_rag_prerouted')
+                    else _build_native_rag_fallback(tools, user_message or '', tool_calls, output)
                 )
                 if native_rag_fallback:
                     # Discard the model's unsupported direct answer. The next
@@ -6546,6 +6977,153 @@ async def streaming_chat_response_handler(response, ctx):
                             log.debug(e)
                             break
 
+                validation_attempts = []
+                validation_fallback_used = False
+                harness_payload = metadata.get('kahle_knowledge_harness_shadow')
+                if (
+                    metadata.get('kahle_knowledge_harness_active')
+                    and harness_payload
+                    and metadata.get('kahle_answer_stream_timed_out')
+                ):
+                    validation_fallback_used = True
+                    validation_attempts.append({
+                        'schema_version': 'kahle.answer-validation.v1',
+                        'status': 'timeout',
+                        'violations': [{
+                            'code': 'answer_stream_timeout',
+                            'message': 'Der Antwortstream wurde nicht rechtzeitig abgeschlossen.',
+                        }],
+                    })
+                    metadata['kahle_answer_validation'] = {
+                        'schema_version': 'kahle.answer-validation-run.v1',
+                        'attempts': validation_attempts,
+                    }
+                elif metadata.get('kahle_knowledge_harness_active') and harness_payload:
+                    validation = validate_knowledge_harness_answer(
+                        _last_kahle_answer_text(output), harness_payload
+                    )
+                    validation_attempts.append(validation.to_dict())
+                    if validation.retry_required:
+                        retry_messages = add_or_update_system_message(
+                            validation.retry_prompt(),
+                            copy.deepcopy(form_data.get('messages', []) or []),
+                            append=True,
+                        )
+                        output = []
+                        content = ''
+                        suppress_initial_rag_response = True
+                        try:
+                            retry_form_data = {
+                                **form_data,
+                                'model': model_id,
+                                'stream': True,
+                                'metadata': metadata,
+                                'messages': retry_messages,
+                            }
+                            retry_form_data.pop('tools', None)
+                            retry_form_data.pop('tool_choice', None)
+                            retry_response = await generate_chat_completion(
+                                request,
+                                retry_form_data,
+                                user,
+                                bypass_system_prompt=True,
+                            )
+                            retry_answer_stream_timed_out = False
+                            if isinstance(retry_response, StreamingResponse):
+                                try:
+                                    retry_answer_stream_timed_out = await _await_kahle_answer_stream(
+                                        stream_body_handler(retry_response, retry_form_data),
+                                        timeout_seconds=_knowledge_harness_answer_timeout_seconds(),
+                                    )
+                                finally:
+                                    if retry_response.background and not retry_answer_stream_timed_out:
+                                        await retry_response.background()
+                                if retry_answer_stream_timed_out:
+                                    metadata['kahle_answer_stream_timed_out'] = True
+                                    if hasattr(retry_response.body_iterator, 'aclose'):
+                                        try:
+                                            await retry_response.body_iterator.aclose()
+                                        except Exception:
+                                            pass
+                        except Exception as e:
+                            log.warning('KAHLE answer retry failed: %s', e)
+                        finally:
+                            suppress_initial_rag_response = False
+
+                        retry_validation = validate_knowledge_harness_answer(
+                            _last_kahle_answer_text(output), harness_payload
+                        )
+                        validation_attempts.append(retry_validation.to_dict())
+                        if retry_validation.retry_required:
+                            validation_fallback_used = True
+                            output = [{
+                                'type': 'message',
+                                'id': output_id('msg'),
+                                'status': 'in_progress',
+                                'role': 'assistant',
+                                'content': [{
+                                    'type': 'output_text',
+                                    'text': str(
+                                        metadata.get('kahle_answer_validation_fallback')
+                                        or 'Die vorhandenen Quellen reichen für eine verlässliche Antwort nicht aus.'
+                                    ),
+                                }],
+                            }]
+                    metadata['kahle_answer_validation'] = {
+                        'schema_version': 'kahle.answer-validation-run.v1',
+                        'attempts': validation_attempts,
+                    }
+
+                if harness_payload:
+                    intent_payload = harness_payload.get('user_intent') or {}
+                    retrieval_payload = harness_payload.get('retrieval_plan') or {}
+                    evidence_payload = harness_payload.get('evidence_bundle') or {}
+                    permission_payload = retrieval_payload.get('permission_scope') or {}
+                    started_at = metadata.get('_kahle_harness_started_monotonic')
+                    elapsed_ms = (
+                        max(0, round((time.monotonic() - started_at) * 1000))
+                        if isinstance(started_at, (int, float))
+                        else None
+                    )
+                    metadata['kahle_harness_metrics'] = {
+                        'schema_version': 'kahle.harness-metrics.v1',
+                        'model_id': str(model_id or ''),
+                        'model_name': str(
+                            (model.get('name') or model.get('id') or model_id)
+                            if isinstance(model, dict)
+                            else model_id
+                        ),
+                        'intent_kind': str(intent_payload.get('kind') or ''),
+                        'required_tool': str(retrieval_payload.get('required_tool') or ''),
+                        'tool_called': 'rag_chat',
+                        'evidence_status': str(evidence_payload.get('status') or ''),
+                        'source_count': len(evidence_payload.get('sources') or []),
+                        'permission_scope_present': bool(permission_payload.get('user_id')),
+                        'validation_attempts': len(validation_attempts),
+                        'retry_count': max(0, len(validation_attempts) - 1),
+                        'fallback_used': validation_fallback_used,
+                        'final_validation_status': (
+                            validation_attempts[-1].get('status')
+                            if validation_attempts
+                            else 'not_run'
+                        ),
+                        'delivery_status': (
+                            'safe_timeout_fallback'
+                            if metadata.get('kahle_answer_stream_timed_out')
+                            else
+                            'safe_fallback'
+                            if validation_fallback_used
+                            else (
+                                validation_attempts[-1].get('status')
+                                if validation_attempts
+                                else 'not_run'
+                            )
+                        ),
+                        'document_sources_present': bool(canonical_rag_sources),
+                        'feedback_link_present': bool(canonical_rag_feedback_link),
+                        'latency_ms': elapsed_ms,
+                    }
+
                 _append_canonical_rag_source_links(output, canonical_rag_sources)
                 _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
 
@@ -6564,6 +7142,16 @@ async def streaming_chat_response_handler(response, ctx):
                     'output': output,
                     'title': title,
                     **({'usage': usage} if usage else {}),
+                    **(
+                        {'kahle_answer_validation': metadata['kahle_answer_validation']}
+                        if metadata.get('kahle_answer_validation')
+                        else {}
+                    ),
+                    **(
+                        {'kahle_harness_metrics': metadata['kahle_harness_metrics']}
+                        if metadata.get('kahle_harness_metrics')
+                        else {}
+                    ),
                 }
 
                 if not metadata.get('chat_id', '').startswith('channel:'):
@@ -6576,19 +7164,36 @@ async def streaming_chat_response_handler(response, ctx):
                                 'done': True,
                                 'output': output,
                                 **({'usage': usage} if usage else {}),
+                                **(
+                                    {'kahle_answer_validation': metadata['kahle_answer_validation']}
+                                    if metadata.get('kahle_answer_validation')
+                                    else {}
+                                ),
+                                **(
+                                    {'kahle_harness_metrics': metadata['kahle_harness_metrics']}
+                                    if metadata.get('kahle_harness_metrics')
+                                    else {}
+                                ),
                             },
                         )
-                    elif usage:
-                        await Chats.upsert_message_to_chat_by_id_and_message_id(
-                            metadata['chat_id'],
-                            metadata['message_id'],
-                            {'done': True, 'usage': usage},
-                        )
                     else:
+                        realtime_metadata = {
+                            **({'usage': usage} if usage else {}),
+                            **(
+                                {'kahle_answer_validation': metadata['kahle_answer_validation']}
+                                if metadata.get('kahle_answer_validation')
+                                else {}
+                            ),
+                            **(
+                                {'kahle_harness_metrics': metadata['kahle_harness_metrics']}
+                                if metadata.get('kahle_harness_metrics')
+                                else {}
+                            ),
+                        }
                         await Chats.upsert_message_to_chat_by_id_and_message_id(
                             metadata['chat_id'],
                             metadata['message_id'],
-                            {'done': True},
+                            {'done': True, **realtime_metadata},
                         )
 
                 # Send a webhook notification if the user is not active

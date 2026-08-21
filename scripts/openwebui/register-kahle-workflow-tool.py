@@ -556,10 +556,22 @@ def resolve_vinci_model_ids(con: sqlite3.Connection) -> list[str]:
     for row in rows:
         model_id = str(row["id"] or "")
         model_name = str(row["name"] or "").strip().lower()
-        if model_id in configured_ids or model_name in KAHLE_VINCI_MODEL_NAMES:
+        is_admin = model_id == ADMIN_MODEL_ID or model_name == "kahle-vinci admin"
+        is_vinci_app_model = (
+            model_id in configured_ids
+            or model_name in KAHLE_VINCI_MODEL_NAMES
+            or model_id.startswith("kahle-vinci-")
+            or model_name.startswith("kahle-vinci ")
+        )
+        if is_vinci_app_model and not is_admin:
             if model_id not in resolved:
                 resolved.append(model_id)
     return resolved
+
+
+def shared_vinci_tool_ids() -> list[str]:
+    """Tools every current and future KAHLE-Vinci app model must share."""
+    return ["rag_chat", "kahle_tasks", "kahle_workflow"]
 
 
 def ensure_admin_model(con: sqlite3.Connection, now: int) -> None:
@@ -697,12 +709,11 @@ def main() -> int:
             if prompt_path is None:
                 name_row = con.execute("select name from model where id = ?", (model_id,)).fetchone()
                 model_name = str(name_row["name"] or "").strip().lower() if name_row else ""
-                prompt_path = (
-                    PROMPTS_DIR / "kahle-vinci-systemprompt.md"
-                    if model_name == "kahle-vinci"
-                    else PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md"
-                )
-            set_model_tools(con, model_id, ["kahle_tasks", "kahle_workflow"], now, prompt_path)
+                if model_name == "kahle-vinci":
+                    prompt_path = PROMPTS_DIR / "kahle-vinci-systemprompt.md"
+                elif model_name in {"kahle-vinci-thinking", "kahle-vinci-max-thinking"}:
+                    prompt_path = PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md"
+            set_model_tools(con, model_id, shared_vinci_tool_ids(), now, prompt_path)
 
         for model_id in KAHLE_VINCI_MODEL_IDS:
             if model_id not in resolved_vinci_model_ids:
@@ -729,7 +740,7 @@ def main() -> int:
 
     print("Registered KAHLE tools: " + ", ".join(TOOL_DEFINITIONS))
     print("Registered KAHLE functions: " + ", ".join(FUNCTION_DEFINITIONS))
-    print(f"Attached kahle_tasks/kahle_workflow to {', '.join(resolved_vinci_model_ids)}")
+    print(f"Attached shared Vinci harness tools to {', '.join(resolved_vinci_model_ids)}")
     print(f"Ensured admin model: {ADMIN_MODEL_ID}")
     if tools_prompt_updated:
         print("Updated global tools function-calling prompt")

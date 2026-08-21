@@ -44,6 +44,34 @@ def test_registered_suggestion_prompts_start_guided_input_flow():
     assert "Bitte frage mich jetzt nach Fahrzeug, Angebotsdaten" in script
 
 
+def test_core_vinci_prompts_clarify_ambiguous_internal_requests_without_guessing():
+    prompt_root = ROOT / "open-webui-prompts"
+    for file_name in (
+        "kahle-vinci-systemprompt.md",
+        "kahle-vinci-thinking-systemprompt.md",
+    ):
+        prompt = (prompt_root / file_name).read_text(encoding="utf-8")
+
+        assert "zwei oder mehr plausible Bedeutungen" in prompt, file_name
+        assert "genau eine kurze Rueckfrage" in prompt, file_name
+        assert "Nutzerabsicht nicht veraendern" in prompt, file_name
+        assert "datenschutz@kahle.de" in prompt, file_name
+
+
+def test_core_vinci_prompts_do_not_forward_marketing_opt_out_to_privacy():
+    prompt_root = ROOT / "open-webui-prompts"
+    for file_name in (
+        "kahle-vinci-systemprompt.md",
+        "kahle-vinci-thinking-systemprompt.md",
+    ):
+        prompt = (prompt_root / file_name).read_text(encoding="utf-8")
+
+        assert "Datenschutz / Legal / Werbesperre" not in prompt, file_name
+        assert "Werbewiderspruch" in prompt, file_name
+        assert "besondere Merkmale" in prompt, file_name
+        assert "Finanzdaten" in prompt, file_name
+
+
 if __name__ == "__main__":
     test_all_vinci_prompts_handle_empty_starter_prompts()
     test_registered_suggestion_prompts_start_guided_input_flow()
