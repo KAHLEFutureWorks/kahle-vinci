@@ -155,6 +155,37 @@ Before inviting further employees, record the following checks in `docs/WISSENSP
 - A backup exists and a restore has been verified before inviting employees.
 - The 21-question runtime evaluation and multi-user role test are documented as passed.
 
+## Rollout History
+
+Production rollouts are shipped as signed tarballs built from `deploy/`. That
+directory is deliberately git-ignored: the packages are build output, and the
+repository commits record what went live instead. Each package backs its
+targets up to `/opt/kahle-vinci/.rollout-backups/<name>-before-<timestamp>`
+and rolls back automatically on any failure.
+
+### 2026-08-21 — Knowledge portal version archive
+
+- Package: `wissen-versionsarchiv-20260821.tar.gz`
+- SHA-256: `9a777b3eb643c5f3878ac0efb329864745068bca1ddd2f5ae21a127a18cbb7c7`
+- Commits: `dd50ac3`, `66db7ba`
+- Rebuilt services: `kb-admin-api`, `kb-maintenance`, `kb-upload-worker`,
+  `kb-admin-dashboard`. Open WebUI, Qdrant, kb-sync, n8n and the document
+  worker were untouched.
+- Contents: version archive with restore and 90-day retention, "replaced by"
+  chains across several archived versions, notification replies with visible
+  thread history, and hardened ingest (German prompt-injection patterns,
+  Unicode obfuscation, Office zip-bomb limits).
+- Schema: `document_versions.superseded_at`, `document_versions.purged_at`,
+  `portal_case_notifications.sender_user_id` and
+  `portal_case_notifications.thread_id` are added by `kb-admin-api` on
+  startup. All are additive and nullable, so a code-only rollback does not
+  require a database rollback.
+- **Not deployed:** the observing knowledge harness (`191b7a3`) stays local
+  until it is finished and its tests pass. Middleware, guard, retrieval tools
+  and system prompts were not part of this package.
+- Result: rollout succeeded, all four services came up, code and schema
+  verification passed.
+
 ## References
 
 - Open WebUI requires `WEBUI_URL` before OAuth/SSO use and documents Microsoft OAuth variables in its environment configuration.
