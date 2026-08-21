@@ -3336,6 +3336,14 @@ def portal_admin_archived_versions(
                       v.superseded_at, v.purged_at, v.valid_from, v.valid_until,
                       d.active_version_id, active.title active_version_title,
                       active.original_filename active_original_filename,
+                      (SELECT successor.title FROM document_versions successor
+                       WHERE successor.previous_version_id=v.version_id
+                       ORDER BY successor.created_at DESC, successor.version_id DESC
+                       LIMIT 1) superseded_by_version_title,
+                      (SELECT successor.original_filename FROM document_versions successor
+                       WHERE successor.previous_version_id=v.version_id
+                       ORDER BY successor.created_at DESC, successor.version_id DESC
+                       LIMIT 1) superseded_by_original_filename,
                       (SELECT COUNT(*) FROM document_versions all_versions
                        WHERE all_versions.document_id=v.document_id) version_count
                FROM document_versions v

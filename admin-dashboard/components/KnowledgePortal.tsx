@@ -183,6 +183,8 @@ type ArchivedVersion = {
   active_version_id?: string | null;
   active_version_title?: string | null;
   active_original_filename?: string | null;
+  superseded_by_version_title?: string | null;
+  superseded_by_original_filename?: string | null;
   version_count: number;
   has_original: boolean;
   can_restore: boolean;
@@ -5626,7 +5628,10 @@ function ArchiveView({
                 <Badge status="Aktuell gültige Fassung" />
                 <strong>{current.active_version_title || "Aktuelle Fassung nicht verfügbar"}</strong>
                 <span>{current.active_original_filename || "Dateiname nicht verfügbar"}</span>
-                <small>{history.length} frühere {history.length === 1 ? "Fassung" : "Fassungen"} im Verlauf</small>
+                <small>
+                  {current.version_count} {current.version_count === 1 ? "Fassung" : "Fassungen"} insgesamt,
+                  davon {history.length} im Archiv
+                </small>
               </div>
               <div className="wp-doc-list wp-archive-history">
                 {history.map((item, position) => (
@@ -5641,6 +5646,13 @@ function ArchiveView({
                             : `Ersetzt am ${item.superseded_at || "unbekannten Zeitpunkt"}.`}
                         </span>
                         <small className="wp-hint">{item.original_filename}</small>
+                        <p className="wp-hint">
+                          Ersetzt durch:{" "}
+                          <strong>{item.superseded_by_version_title || "unbekannte Fassung"}</strong>
+                          {item.superseded_by_original_filename
+                            ? ` (${item.superseded_by_original_filename})`
+                            : ""}
+                        </p>
                         <p className="wp-hint">
                           Aktuell gültige Fassung: <strong>{item.active_version_title || "nicht verfügbar"}</strong>
                         </p>

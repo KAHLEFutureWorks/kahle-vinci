@@ -429,3 +429,13 @@ test("offers the version archive with restore only to admins", async () => {
   assert.match(portal, /Frühere Version wiederherstellen\?/);
   assert.match(portal, /Aktuell gültige Fassung/);
 });
+
+test("makes a chain of several archived versions readable", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /Ersetzt durch:/);
+  assert.match(portal, /item\.superseded_by_version_title \|\| "unbekannte Fassung"/);
+  assert.match(portal, /item\.superseded_by_original_filename/);
+  assert.match(portal, /\{current\.version_count\} \{current\.version_count === 1 \? "Fassung" : "Fassungen"\} insgesamt/);
+  assert.match(portal, /davon \{history\.length\} im Archiv/);
+  assert.match(portal, /position === 0 \? "Zuletzt ersetzte Fassung" : "Ältere Fassung"/);
+});

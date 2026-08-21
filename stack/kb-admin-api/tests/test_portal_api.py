@@ -807,6 +807,18 @@ def test_admin_archive_lists_and_restores_a_retained_document_version():
         assert entry["can_restore"] is True
         assert entry["active_version_title"] == third.title
         assert entry["version_count"] == 3
+        # Die abloesende Fassung ist die direkte Nachfolgerin, nicht die heute
+        # gueltige. Sonst laesst sich eine Kette aus drei Fassungen nicht lesen.
+        assert entry["superseded_by_original_filename"] == second.original_filename
+        replaced_second = next(
+            item for item in archived_versions if item["version_id"] == second.version_id
+        )
+        assert replaced_second["superseded_by_original_filename"] == third.original_filename
+        assert replaced_second["active_version_title"] == third.title
+        # Neueste Ablösung zuerst, damit der Verlauf von oben nach unten zurueckreicht.
+        assert [item["version_id"] for item in same_document_history] == [
+            second.version_id, first.version_id,
+        ]
         assert client.get(f"/portal/admin/archive/{first.version_id}/source").status_code == 200
 
         restored = client.post(
