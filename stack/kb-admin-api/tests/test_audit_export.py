@@ -24,3 +24,29 @@ def test_unified_audit_exports_governance_and_lifecycle_as_csv_and_pdf():
         assert "Dokument hochgeladen" in csv_text
         assert "employee" not in csv_text.splitlines()[-1].split(";")[1]
         assert exporter.pdf_bytes().startswith(b"%PDF-")
+
+
+def test_technical_audit_actors_are_presented_as_system_actions():
+    with tempfile.TemporaryDirectory() as directory:
+        governance, _, _ = setup(Path(directory))
+        technical_actors = {
+            "migration": "System: Bestandsübernahme",
+            "classifier": "System: automatische Klassifizierung",
+            "indexer": "System: Veröffentlichung und Indexierung",
+            "auto_activation": "System: automatische Veröffentlichung",
+        }
+        with governance.store.connect() as db:
+            for actor_user_id in technical_actors:
+                db.execute(
+                    """INSERT INTO governance_audit
+                       (occurred_at, actor_user_id, event_type, subject_type, subject_id, details_json)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    ("2026-08-06T10:00:00+00:00", actor_user_id, "analysis_recorded",
+                     "document", actor_user_id, "{}"),
+                )
+
+        entries_by_actor = {
+            entry.actor_user_id: entry.actor_name for entry in AuditExporter(governance.store).entries()
+        }
+        for actor_user_id, label in technical_actors.items():
+            assert entries_by_actor[actor_user_id] == label

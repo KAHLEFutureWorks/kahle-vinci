@@ -3,6 +3,8 @@ from __future__ import annotations
 import calendar
 import hashlib
 import json
+import os
+import shutil
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -66,13 +68,24 @@ class OutboxMessage:
 
 class MaintenanceService:
     TRASH_RECOVERY_DAYS = 30
-    REMINDER_STAGES = (15, 10, 5, 1)
+    TRASH_DELETION_DAYS = 90
+    SUPERSEDED_VERSION_RETENTION_DAYS = 90
+    REMINDER_STAGES = (7, 5, 1)
 
     def __init__(self, store: SQLiteGovernanceStore, *, today: Callable[[], date] = date.today,
-                 now: Callable[[], str] | None = None):
+                 now: Callable[[], str] | None = None, portal_public_url: str | None = None):
         self.store, self.today = store, today
         self.now = now or (lambda: datetime.now().astimezone().isoformat())
+        self.portal_public_url = (
+            portal_public_url
+            if portal_public_url is not None
+            else os.getenv("PORTAL_PUBLIC_URL", "")
+        ).rstrip("/")
         self._initialize()
+
+    def _document_url(self, document_id: str) -> str:
+        path = f"/wissen/?document={document_id}"
+        return f"{self.portal_public_url}{path}" if self.portal_public_url else path
 
     def _initialize(self) -> None:
         with self.store.connect() as db:
@@ -164,7 +177,7 @@ class MaintenanceService:
                 seen.add(key)
                 grouped.setdefault(recipient.lower(), []).append({
                     "title": row["title"], "knowledgebase": row["knowledgebase_id"],
-                    "remaining": remaining, "case_url": f"/wissen/?document={row['document_id']}",
+                    "remaining": remaining, "case_url": self._document_url(row["document_id"]),
                 })
         messages = []
         for recipient, items in sorted(grouped.items()):
@@ -198,6 +211,66 @@ class MaintenanceService:
                 db.execute("UPDATE document_cases SET status = 'expired', updated_at = ? WHERE version_id = ? AND status = 'active'", (self.now(), row["active_version_id"]))
                 expired.append(row["document_id"])
         return expired
+
+    def purge_superseded_version_files(self, files_root: Path) -> list[str]:
+        """Remove file payloads of safely replaced versions after the retention period.
+
+        The version row and its audit history stay in place. This leaves a
+        compact, auditable record while removing the original and RAG Markdown.
+        """
+        cutoff = (self.today() - timedelta(days=self.SUPERSEDED_VERSION_RETENTION_DAYS)).isoformat()
+        root = files_root.resolve()
+        purged: list[str] = []
+        with self.store.connect() as db:
+            rows = db.execute(
+                """SELECT v.version_id, v.document_id, v.superseded_at
+                   FROM document_versions v
+                   JOIN canonical_documents d ON d.document_id=v.document_id
+                   WHERE v.status='superseded' AND v.superseded_at IS NOT NULL
+                     AND substr(v.superseded_at, 1, 10) <= ?
+                     AND d.active_version_id IS NOT NULL
+                     AND d.active_version_id <> v.version_id
+                   ORDER BY v.superseded_at, v.version_id""",
+                (cutoff,),
+            ).fetchall()
+            for row in rows:
+                document_root = (root / row["document_id"]).resolve()
+                version_root = (document_root / row["version_id"]).resolve()
+                if root not in document_root.parents or document_root.parent != root:
+                    continue
+                if version_root.parent != document_root:
+                    continue
+                if version_root.exists():
+                    if not version_root.is_dir():
+                        continue
+                    shutil.rmtree(version_root)
+                updated = db.execute(
+                    """UPDATE document_versions SET status='purged', purged_at=?
+                       WHERE version_id=? AND status='superseded'""",
+                    (self.now(), row["version_id"]),
+                )
+                if not updated.rowcount:
+                    continue
+                case = db.execute(
+                    "SELECT case_id FROM document_cases WHERE version_id=? ORDER BY created_at DESC LIMIT 1",
+                    (row["version_id"],),
+                ).fetchone()
+                if case:
+                    db.execute(
+                        """INSERT INTO document_events
+                           (case_id, actor_user_id, event_type, details_json, created_at)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (
+                            case["case_id"], "system", "superseded_version_purged",
+                            json.dumps({
+                                "retention_days": self.SUPERSEDED_VERSION_RETENTION_DAYS,
+                                "superseded_at": row["superseded_at"],
+                            }, ensure_ascii=False, sort_keys=True),
+                            self.now(),
+                        ),
+                    )
+                purged.append(row["version_id"])
+        return purged
 
     def process_pending_approvals(self) -> dict[str, list[str]]:
         """Apply the 2/4/6-workday reminder and escalation policy."""
@@ -414,26 +487,51 @@ class MaintenanceService:
         today = self.today()
         reminders, deleted = [], []
         with self.store.connect() as db:
-            rows = db.execute("SELECT * FROM document_trash WHERE physically_deleted_at IS NULL").fetchall()
+            rows = db.execute(
+                """SELECT trash.*, document.title FROM document_trash trash
+                   LEFT JOIN canonical_documents document ON document.document_id = trash.document_id
+                   WHERE trash.physically_deleted_at IS NULL"""
+            ).fetchall()
             admins = [row["email"] for row in db.execute(
                 "SELECT email FROM portal_users WHERE active = 1 AND role IN ('admin','portal_admin')"
             ).fetchall()]
+            deletion_candidates: list[dict[str, str]] = []
             for row in rows:
                 age = (today - date.fromisoformat(row["trashed_at"])).days
                 if row["legal_hold"]:
                     continue
-                if age >= 90:
+                if age >= self.TRASH_DELETION_DAYS:
                     self._physically_delete(db, row, file_root)
                     deleted.append(row["document_id"])
                     continue
-                if age == 87 or (age >= 30 and (age - 30) % 10 == 0):
-                    kind = "trash_final_warning" if age == 87 else "trash_deletion_reminder"
-                    for recipient in admins:
-                        message = self._enqueue(recipient, f"{kind}:{row['document_id']}", today.isoformat(),
-                                                "KAHLE-Vinci: Löschauftrag",
-                                                f"Dokument {row['document_id']} liegt seit {age} Tagen im Papierkorb. /wissen/?trash={row['document_id']}")
-                        if message:
-                            reminders.append(message.message_id)
+                deletion_date = date.fromisoformat(row["trashed_at"]) + timedelta(
+                    days=self.TRASH_DELETION_DAYS,
+                )
+                if is_workday(today) and workdays_until(today, deletion_date) == 4:
+                    deletion_candidates.append({
+                        "document_id": row["document_id"],
+                        "title": row["title"] or "Dokument ohne Titel",
+                    })
+        if deletion_candidates:
+            lines = [
+                "Folgende Dokumente werden in vier Arbeitstagen endgültig gelöscht:",
+                "",
+            ]
+            lines.extend(
+                f"- {item['title']} · {self._document_url(item['document_id'])}"
+                for item in sorted(deletion_candidates, key=lambda item: item["title"])
+            )
+            body = "\n".join(lines)
+            for recipient in admins:
+                message = self._enqueue(
+                    recipient,
+                    "trash_deletion_digest",
+                    today.isoformat(),
+                    "KAHLE-Vinci: Endgültige Löschung aus dem Papierkorb",
+                    body,
+                )
+                if message:
+                    reminders.append(message.message_id)
         return {"reminders": reminders, "deleted": deleted}
 
     def process_migration_deadlines(self) -> list[str]:

@@ -364,6 +364,10 @@ class PortalRestoreRequest(BaseModel):
     confirmed: bool = False
 
 
+class PortalArchivedVersionRestoreRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=2000)
+
+
 class PortalLegalHoldRequest(BaseModel):
     enabled: bool
     reason: str = Field(..., min_length=3, max_length=2000)
@@ -442,6 +446,10 @@ class PortalCaseDecisionRequest(BaseModel):
 class PortalCaseInquiryRequest(BaseModel):
     recipient_user_id: str = Field(..., min_length=1, max_length=200)
     question: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalNotificationReplyRequest(BaseModel):
+    message: str = Field(..., min_length=3, max_length=2000)
 
 
 class PortalCaseTargetRequest(BaseModel):
@@ -978,6 +986,17 @@ def _trigger_hybrid_document_sync(document_id: str) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {"ok": True}
     except (requests.RequestException, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
+
+
+def _archived_version_files(document_id: str, version_id: str) -> tuple[Path, list[Path], Path]:
+    """Return retained archive paths only when they remain under portal storage."""
+    version_root = (PORTAL_FILES_ROOT / document_id / version_id).resolve()
+    try:
+        version_root.relative_to(PORTAL_FILES_ROOT.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="archived_version_not_available") from exc
+    originals = [item for item in version_root.glob("original.*") if item.is_file()]
+    return version_root, originals, version_root / "rag.md"
 
 
 def _document_summary(path: Path, collection: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -2545,10 +2564,11 @@ def portal_case_inquiry(
     with PORTAL_GOVERNANCE.store.connect() as db:
         db.execute(
             "INSERT INTO portal_case_notifications "
-            "(notification_id,recipient_user_id,case_id,status,message,reason,created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "(notification_id,recipient_user_id,case_id,status,message,reason,created_at,"
+            "sender_user_id,thread_id) VALUES (?,?,?,?,?,?,?,?,?)",
             (notification_id, recipient["user_id"], case_id, "clarification_requested",
-             message, question, datetime.now().astimezone().isoformat()),
+             message, question, datetime.now().astimezone().isoformat(),
+             sender.user_id, notification_id),
         )
     MAINTENANCE.enqueue_notification(
         recipient["email"], "case_inquiry",
@@ -2560,6 +2580,84 @@ def portal_case_inquiry(
     return {"notification_id": notification_id, "status": "sent"}
 
 
+@app.post("/portal/notifications/{notification_id}/reply", status_code=201)
+def portal_notification_reply(
+    notification_id: str, payload: PortalNotificationReplyRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, str]:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        original = db.execute(
+            "SELECT n.case_id,n.sender_user_id,n.thread_id,d.title AS document_title,"
+            "sender.email AS sender_email "
+            "FROM portal_case_notifications n "
+            "JOIN document_cases c ON c.case_id=n.case_id "
+            "JOIN canonical_documents d ON d.document_id=c.document_id "
+            "LEFT JOIN portal_users sender ON sender.user_id=n.sender_user_id AND sender.active=1 "
+            "WHERE n.notification_id=? AND n.recipient_user_id=?",
+            (notification_id, identity["user_id"]),
+        ).fetchone()
+        if not original:
+            raise HTTPException(status_code=404, detail="notification_not_found")
+        if not original["sender_user_id"] or not original["sender_email"]:
+            raise HTTPException(status_code=422, detail="notification_reply_not_available")
+        sender = PORTAL_GOVERNANCE.identity(identity["user_id"])
+        reply_id = uuid.uuid4().hex
+        answer = payload.message.strip()
+        message = f"{sender.display_name} hat auf deine Rückfrage geantwortet."
+        db.execute(
+            "INSERT INTO portal_case_notifications "
+            "(notification_id,recipient_user_id,case_id,status,message,reason,created_at,"
+            "sender_user_id,thread_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            (reply_id, original["sender_user_id"], original["case_id"],
+             "clarification_reply", message, answer,
+             datetime.now().astimezone().isoformat(), sender.user_id,
+             original["thread_id"] or notification_id),
+        )
+    MAINTENANCE.enqueue_notification(
+        original["sender_email"], "case_inquiry_reply",
+        f"KAHLE-Vinci: Antwort zu {original['document_title']}",
+        f"{message}\n\nAntwort:\n{answer}\n\n"
+        f"Im Wissensportal öffnen: /wissen/?notifications=1",
+        dedupe_key=reply_id,
+    )
+    return {"notification_id": reply_id, "status": "sent"}
+
+
+@app.get("/portal/notifications/{notification_id}/thread")
+def portal_notification_thread(
+    notification_id: str,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        selected = db.execute(
+            "SELECT COALESCE(thread_id,notification_id) AS thread_id "
+            "FROM portal_case_notifications WHERE notification_id=?",
+            (notification_id,),
+        ).fetchone()
+        if not selected:
+            raise HTTPException(status_code=404, detail="notification_not_found")
+        allowed = db.execute(
+            "SELECT 1 FROM portal_case_notifications "
+            "WHERE COALESCE(thread_id,notification_id)=? "
+            "AND (recipient_user_id=? OR sender_user_id=?) LIMIT 1",
+            (selected["thread_id"], identity["user_id"], identity["user_id"]),
+        ).fetchone()
+        if not allowed:
+            raise HTTPException(status_code=404, detail="notification_not_found")
+        rows = db.execute(
+            "SELECT n.notification_id,n.status,n.reason AS message,n.created_at,"
+            "n.sender_user_id,sender.display_name AS sender_name,"
+            "n.recipient_user_id,recipient.display_name AS recipient_name "
+            "FROM portal_case_notifications n "
+            "LEFT JOIN portal_users sender ON sender.user_id=n.sender_user_id "
+            "LEFT JOIN portal_users recipient ON recipient.user_id=n.recipient_user_id "
+            "WHERE COALESCE(n.thread_id,n.notification_id)=? "
+            "ORDER BY n.created_at,n.notification_id",
+            (selected["thread_id"],),
+        ).fetchall()
+    return {"thread_id": selected["thread_id"], "messages": [dict(row) for row in rows]}
+
+
 @app.get("/portal/notifications")
 def portal_notifications(
     identity: dict[str, Any] = Depends(require_portal_identity),
@@ -2568,17 +2666,22 @@ def portal_notifications(
         rows = db.execute(
             "SELECT * FROM ("
             "SELECT n.notification_id,n.case_id,n.status,n.message,n.reason,n.created_at,n.read_at,"
-            "d.title AS document_title FROM portal_case_notifications n "
+            "d.title AS document_title,n.sender_user_id,n.thread_id FROM portal_case_notifications n "
             "JOIN document_cases c ON c.case_id=n.case_id "
             "JOIN canonical_documents d ON d.document_id=c.document_id "
             "WHERE n.recipient_user_id=? UNION ALL "
             "SELECT n.notification_id,NULL AS case_id,n.status,n.message,n.reason,n.created_at,n.read_at,"
-            "n.subject_title AS document_title FROM portal_notifications n "
+            "n.subject_title AS document_title,NULL AS sender_user_id,NULL AS thread_id FROM portal_notifications n "
             "WHERE n.recipient_user_id=?"
             ") ORDER BY created_at DESC,notification_id DESC LIMIT 100",
             (identity["user_id"], identity["user_id"]),
         ).fetchall()
-    return {"notifications": [dict(row) for row in rows]}
+    notifications = []
+    for row in rows:
+        item = dict(row)
+        item["can_reply"] = bool(item["case_id"] and item["sender_user_id"])
+        notifications.append(item)
+    return {"notifications": notifications}
 
 
 @app.post("/portal/notifications/{notification_id}/read")
@@ -2685,7 +2788,9 @@ def _notify_access_removed(
         )
 
 
-def _notify_case_status(case: Any, reason: str = "") -> None:
+def _notify_case_status(
+    case: Any, reason: str = "", *, send_publication_email: bool = False,
+) -> None:
     labels = {
         "active": "Das Dokument wurde veröffentlicht und in Vinci abrufbar gemacht. Der Zugriff bleibt auf berechtigte Nutzer beschränkt.",
         "pending_manager_approval": "Das Dokument wurde noch nicht veröffentlicht. Die Führungskraft muss entscheiden.",
@@ -2720,25 +2825,21 @@ def _notify_case_status(case: Any, reason: str = "") -> None:
                 (notification_id, recipient_user_id, case.case_id, case.status, message,
                  clean_reason, datetime.now().astimezone().isoformat()),
             )
-    status_labels = {
-        "active": "Veröffentlicht",
-        "pending_manager_approval": "Prüfung durch Führungskraft",
-        "pending_admin_approval": "Prüfung durch Admin",
-        "rejected": "Abgelehnt",
-        "withdrawn": "Verworfen",
-        "needs_correction": "Korrektur erforderlich",
-    }
-    subject = f"KAHLE-Vinci: {case.title} · {status_labels.get(case.status, case.status)}"
-    body = f"{message}\n"
-    if clean_reason:
-        body += f"Begründung: {clean_reason}\n"
-    body += f"/wissen/?case={case.case_id}"
-    for recipient_user_id in dict.fromkeys(recipient_ids):
-        recipient = PORTAL_GOVERNANCE.identity(recipient_user_id).email
-        MAINTENANCE.enqueue_notification(
-            recipient, "case_status", subject, body,
-            dedupe_key=f"{case.case_id}:{case.status}:{recipient_user_id}:{notification_id}",
-        )
+    # Die übrigen Status sind im Portal direkt sichtbar. Eine E-Mail wird nur
+    # nach einer tatsächlichen Freigabe und erfolgreicher Indexierung versendet.
+    if not (case.status == "active" and send_publication_email):
+        return
+    uploader = PORTAL_GOVERNANCE.identity(case.uploaded_by_user_id)
+    if not uploader.active:
+        return
+    MAINTENANCE.enqueue_notification(
+        uploader.email,
+        "approved_document_published",
+        f"KAHLE-Vinci: {case.title} · Veröffentlicht",
+        "Dein Dokument wurde freigegeben, erfolgreich indexiert und ist jetzt in Vinci abrufbar.\n"
+        f"/wissen/?document={case.document_id}",
+        dedupe_key=f"{case.case_id}:approved_document_published:{uploader.user_id}",
+    )
 
 
 def _refresh_global_corpus_version(version_id: str, status: str) -> None:
@@ -2822,12 +2923,6 @@ def _notify_upload_failure(
                  "failed", "Das Dokument konnte nicht vollständig aufbereitet werden.",
                  user_reason, stamp),
             )
-        MAINTENANCE.enqueue_notification(
-            recipient.email, "upload_failed", "KAHLE-Vinci: Dokument konnte nicht verarbeitet werden",
-            f"Das Dokument „{subject_title}“ konnte nicht vollständig aufbereitet werden. "
-            f"{reason_text}\n\nIm Wissensportal öffnen: /wissen/?notifications=1",
-            dedupe_key=notification_id,
-        )
 
 
 def _notify_system_error(
@@ -2974,7 +3069,7 @@ def _execute_portal_case_decision(
         raise
     except (LifecycleError, GovernanceError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _notify_case_status(case, payload.reason)
+    _notify_case_status(case, payload.reason, send_publication_email=True)
     return {"case": asdict(case)}
 
 
@@ -3227,6 +3322,100 @@ def portal_request_removal(
 def portal_admin_removals(identity: dict[str, Any] = Depends(require_portal_identity)) -> dict[str, Any]:
     if identity["role"] not in {"admin", "portal_admin"}: raise HTTPException(status_code=403, detail="admin_required")
     return MAINTENANCE.list_removals(identity["user_id"])
+
+
+@app.get("/portal/admin/archive")
+def portal_admin_archived_versions(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        rows = db.execute(
+            """SELECT v.version_id, v.document_id, v.title, v.original_filename, v.status,
+                      v.superseded_at, v.purged_at, v.valid_from, v.valid_until,
+                      d.active_version_id, active.title active_version_title,
+                      active.original_filename active_original_filename,
+                      (SELECT COUNT(*) FROM document_versions all_versions
+                       WHERE all_versions.document_id=v.document_id) version_count
+               FROM document_versions v
+               JOIN canonical_documents d ON d.document_id=v.document_id
+               LEFT JOIN document_versions active ON active.version_id=d.active_version_id
+               WHERE v.status IN ('superseded', 'purged')
+               ORDER BY COALESCE(v.purged_at, v.superseded_at, v.created_at) DESC, v.version_id DESC""",
+        ).fetchall()
+    versions = []
+    for row in rows:
+        item = dict(row)
+        _, originals, markdown = _archived_version_files(item["document_id"], item["version_id"])
+        item["has_original"] = len(originals) == 1
+        item["can_restore"] = item["status"] == "superseded" and item["has_original"] and markdown.is_file()
+        versions.append(item)
+    return {"versions": versions}
+
+
+@app.get("/portal/admin/archive/{version_id}/source")
+def portal_admin_archived_version_source(
+    version_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> FileResponse:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    try:
+        record = DOCUMENT_LIFECYCLE.version_record(version_id)
+    except LifecycleError as exc:
+        raise HTTPException(status_code=404, detail="archived_version_not_available") from exc
+    if record["status"] not in {"superseded", "purged"}:
+        raise HTTPException(status_code=404, detail="archived_version_not_available")
+    _, originals, _ = _archived_version_files(record["document_id"], version_id)
+    if len(originals) != 1:
+        raise HTTPException(status_code=404, detail="archived_original_not_available")
+    disposition = "inline" if originals[0].suffix.lower() in {".pdf", ".txt", ".md"} else "attachment"
+    return FileResponse(
+        originals[0], filename=record["original_filename"], content_disposition_type=disposition,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.post("/portal/admin/archive/{version_id}/restore")
+def portal_admin_restore_archived_version(
+    version_id: str, payload: PortalArchivedVersionRestoreRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    try:
+        record = DOCUMENT_LIFECYCLE.version_record(version_id)
+    except LifecycleError as exc:
+        raise HTTPException(status_code=404, detail="archived_version_not_available") from exc
+    if record["status"] != "superseded":
+        raise HTTPException(status_code=409, detail="archived_version_restore_not_allowed")
+    _, originals, markdown = _archived_version_files(record["document_id"], version_id)
+    if len(originals) != 1 or not markdown.is_file():
+        raise HTTPException(status_code=409, detail="archived_version_payload_not_available")
+    previous_version_id = DOCUMENT_LIFECYCLE.active_version(record["document_id"])
+    try:
+        restored = DOCUMENT_LIFECYCLE.restore_superseded_version(
+            version_id=version_id, actor_user_id=identity["user_id"], reason=payload.reason,
+        )
+        RAG_METADATA.write(restored.version_id)
+        indexing = _trigger_hybrid_version_sync(restored.version_id)
+        if not indexing.get("ok"):
+            DOCUMENT_LIFECYCLE.rollback_superseded_version_restore(
+                restored_version_id=restored.version_id, previous_version_id=previous_version_id,
+                actor_user_id="indexer", reason=str(indexing.get("error") or "hybrid_reindex_failed"),
+            )
+            _trigger_hybrid_version_sync(previous_version_id)
+            _refresh_global_corpus_version(restored.version_id, "superseded")
+            _refresh_global_corpus_version(previous_version_id, "active")
+            raise HTTPException(status_code=503, detail="archive_restore_index_failed_previous_version_restored")
+    except HTTPException:
+        raise
+    except LifecycleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _refresh_global_corpus_version(restored.version_id, "active")
+    if previous_version_id and previous_version_id != restored.version_id:
+        _refresh_global_corpus_version(previous_version_id, "superseded")
+    return {"version": asdict(restored)}
 
 
 @app.post("/portal/admin/trash/read")

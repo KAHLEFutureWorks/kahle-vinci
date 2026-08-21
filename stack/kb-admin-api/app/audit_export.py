@@ -48,6 +48,9 @@ EVENT_LABELS = {
     "authority_relation_created": "Beziehung zwischen Dokumenten angelegt",
     "activated": "Dokument veröffentlicht",
     "activation_rolled_back": "Dokumentveröffentlichung zurückgesetzt",
+    "superseded_version_purged": "Abgelöste Dokumentversion endgültig bereinigt",
+    "archived_version_restored": "Frühere Dokumentversion wiederhergestellt",
+    "archived_version_restore_rolled_back": "Wiederherstellung einer früheren Dokumentversion zurückgesetzt",
     "moved_to_trash": "Dokument in den Papierkorb verschoben",
     "restored_from_trash": "Dokument aus dem Papierkorb wiederhergestellt",
     "document_deleted_from_trash": "Dokument endgültig gelöscht",
@@ -92,6 +95,19 @@ DETAIL_LABELS = {
     "prompt_injection_risk": "Risiko manipulativer Anweisungen", "restricted_terms": "Gefundene Sperrwörter",
     "same_kb_similarity": "Ähnlichkeit im Wissensbereich", "status": "Verarbeitungsstatus",
     "version_candidate_document_ids": "Mögliche Vorgängerversionen",
+    "previous_version_id": "Vorherige aktive Version", "restored_version_id": "Wiederhergestellte Version",
+}
+
+
+# Diese Kennungen werden von Hintergrundprozessen geschrieben und sind keine
+# Benutzerkonten. Sie müssen im Audit verständlich erscheinen, ohne einen
+# tatsächlich nicht auflösbaren Nutzer zu kaschieren.
+TECHNICAL_ACTOR_LABELS = {
+    "system": "System",
+    "migration": "System: Bestandsübernahme",
+    "classifier": "System: automatische Klassifizierung",
+    "indexer": "System: Veröffentlichung und Indexierung",
+    "auto_activation": "System: automatische Veröffentlichung",
 }
 
 
@@ -138,7 +154,10 @@ class AuditExporter:
             }.get(subject_type, subject_type.replace("_", " ").capitalize())
             rows.append(AuditEntry(
                 occurred_at, actor_id, event_type, subject_type, subject_id, details,
-                user_names.get(actor_id, "System" if actor_id == "system" else "Unbekannter Benutzer"),
+                user_names.get(
+                    actor_id,
+                    TECHNICAL_ACTOR_LABELS.get(actor_id, "Unbekannter Benutzer"),
+                ),
                 EVENT_LABELS.get(event_type, event_type.replace("_", " ").capitalize()),
                 subject_label, self._friendly_details(details, user_names, base_names, document_names),
             ))

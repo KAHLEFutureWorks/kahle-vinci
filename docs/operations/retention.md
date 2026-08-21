@@ -9,6 +9,10 @@ Diese Betriebsnotiz beschreibt die vorhandenen n8n-Cleanup-Workflows. Beide Work
 | `Cleanup Uploaded+Generated Files (15d)` | Loescht alte Uploads, generierte Ausgabedateien und temporaere Worker-Dateien. | Alle 15 Tage um 03:15 Uhr. | In `n8n/all-workflows.json` vorhanden, `active: false`. |
 | `Retention Cleanup: OWUI Logs 180d + Chats 60d` | Entfernt alte Open-WebUI-Logs nach 180 Tagen und Chatdaten nach 60 Tagen. | Taeglich um 03:30 Uhr. | In `n8n/all-workflows.json`, `n8n/retention-workflow-export.json` und `n8n/scripts/workflow_retention_cleanup.json` vorhanden, `active: false`. |
 
+## Wissensportal: ersetzte Dokumentversionen
+
+Der Wartungsdienst des Wissensportals bereinigt automatisch nur Versionen mit dem Status `superseded`. Nach 90 Kalendertagen löscht er deren gespeicherte Originaldatei und das zugehörige RAG-Markdown. Der Nachfolger muss weiterhin aktiv sein. Die Versionsmetadaten und der Audit-Eintrag bleiben für 24 Monate erhalten; der Vorgang erscheint im Audit als endgültige Bereinigung einer abgelösten Dokumentversion.
+
 ## Dry-Run und Aktivierung
 
 - Vor dem ersten produktiven Lauf die Workflow-Logik im n8n-Editor importieren und deaktiviert lassen.

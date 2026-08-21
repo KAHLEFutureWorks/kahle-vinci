@@ -19,6 +19,10 @@ class Service:
         self.calls.append("expire")
         return []
 
+    def purge_superseded_version_files(self, files_root):
+        self.calls.append("purge")
+        return []
+
     def process_trash(self, files_root):
         self.calls.append("trash")
         return {"deleted": []}
@@ -48,7 +52,7 @@ def test_expiry_schedule_uses_berlin_time_when_worker_receives_utc():
 def test_regular_maintenance_continues_before_digest_time():
     service = Service()
     run_once(service, None, generate_expiry_digest=False)
-    assert service.calls == ["approvals", "expire", "trash", "migration", "retention"]
+    assert service.calls == ["approvals", "expire", "purge", "trash", "migration", "retention"]
 
 
 def test_maintenance_updates_only_changed_documents(monkeypatch):

@@ -458,6 +458,39 @@ def test_new_version_atomically_supersedes_previous_active_version():
         assert lifecycle.version_record(active_second.version_id)["status"] == "active"
 
 
+def test_admin_can_restore_a_superseded_version():
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+        first = submit(lifecycle, kb_id)
+        lifecycle.record_analysis(
+            case_id=first.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(),
+        )
+        lifecycle.decide(
+            case_id=first.case_id, actor_user_id="manager", decision="approve", reason="Erstfassung geprüft",
+        )
+        first = lifecycle.activate(case_id=first.case_id)
+        second = submit(lifecycle, kb_id, sha="d" * 64, document_id=first.document_id)
+        lifecycle.record_analysis(
+            case_id=second.case_id, normalized_sha256="e" * 64, markdown_sha256="f" * 64,
+            analysis=lifecycle_module.Analysis(same_kb_similarity="very_high"),
+        )
+        lifecycle.choose_action(case_id=second.case_id, actor_user_id="employee", action="replace")
+        lifecycle.decide(
+            case_id=second.case_id, actor_user_id="manager", decision="approve", reason="Neue Fassung geprüft",
+        )
+        second = lifecycle.activate(case_id=second.case_id)
+
+        restored = lifecycle.restore_superseded_version(
+            version_id=first.version_id, actor_user_id="admin", reason="Vorherige Fassung wieder freigeben",
+        )
+
+        assert restored.version_id == first.version_id
+        assert lifecycle.active_version(first.document_id) == first.version_id
+        assert lifecycle.version_record(first.version_id)["status"] == "active"
+        assert lifecycle.version_record(second.version_id)["status"] == "superseded"
+
+
 def test_failed_index_activation_restores_previous_active_version():
     with tempfile.TemporaryDirectory() as directory:
         _, lifecycle, kb_id = setup(Path(directory))
@@ -670,14 +703,20 @@ def test_any_prompt_injection_signal_requires_manager_then_admin():
         assert flagged.status == "pending_manager_approval"
         assert flagged.requires_admin is True
         assert lifecycle.tasks_for("employee") == []
-        assert lifecycle.tasks_for("admin") == []
-        assert lifecycle.tasks_for("manager")[0].case_id == flagged.case_id
-        approved = lifecycle.decide(
-            case_id=flagged.case_id, actor_user_id="manager", decision="approve",
-            reason="Fachlich vorgeprüft",
+
+
+def test_high_prompt_injection_is_quarantined_before_any_approval():
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+        case = submit(lifecycle, kb_id)
+        blocked = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(prompt_injection_risk="high"),
         )
-        assert approved.status == "pending_admin_approval"
-        assert lifecycle.tasks_for("admin")[0].case_id == flagged.case_id
+        assert blocked.status == "security_blocked"
+        assert blocked.requires_admin is True
+        assert lifecycle.tasks_for("manager") == []
+        assert lifecycle.tasks_for("admin")[0].case_id == blocked.case_id
 
 
 def test_workday_expiry_uses_dynamic_niedersachsen_holidays_after_2026():

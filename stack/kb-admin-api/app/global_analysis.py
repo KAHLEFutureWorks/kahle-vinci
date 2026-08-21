@@ -240,7 +240,7 @@ class GlobalCorpus:
 
     # Endzustaende einer Version. Ein Dokument in einem dieser Zustaende ist aus
     # dem Bestand heraus und darf keinen Aehnlichkeitstreffer mehr ausloesen.
-    RETIRED_VERSION_STATES = ("trash", "deleted", "withdrawn", "rejected", "withdrawn_duplicate")
+    RETIRED_VERSION_STATES = ("trash", "deleted", "purged", "withdrawn", "rejected", "withdrawn_duplicate")
 
     def documents(self, exclude_version_id: str | None = None) -> list[CorpusDocument]:
         # Der Korpus fuehrt einen eigenen Status, der beim Verschieben in den

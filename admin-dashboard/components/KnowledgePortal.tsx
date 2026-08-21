@@ -14,6 +14,7 @@ import {
 import Link from "next/link";
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
   CheckCircle2,
   ChevronRight,
@@ -124,12 +125,25 @@ type RestrictedTerm = {
 type PortalNotification = {
   notification_id: string;
   case_id?: string | null;
+  sender_user_id?: string | null;
+  thread_id?: string | null;
+  can_reply?: boolean;
   status: string;
   message: string;
   reason?: string;
   created_at: string;
   read_at?: string;
   document_title: string;
+};
+type NotificationThreadMessage = {
+  notification_id: string;
+  status: string;
+  message: string;
+  created_at: string;
+  sender_user_id: string;
+  sender_name: string;
+  recipient_user_id: string;
+  recipient_name: string;
 };
 type PortalUser = {
   user_id: string;
@@ -155,6 +169,23 @@ type AuditEntry = {
   event_label: string;
   subject_label: string;
   details_label: string;
+};
+type ArchivedVersion = {
+  version_id: string;
+  document_id: string;
+  title: string;
+  original_filename: string;
+  status: "superseded" | "purged";
+  superseded_at?: string | null;
+  purged_at?: string | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  active_version_id?: string | null;
+  active_version_title?: string | null;
+  active_original_filename?: string | null;
+  version_count: number;
+  has_original: boolean;
+  can_restore: boolean;
 };
 type KBOverviewDocument = {
   document_id: string;
@@ -500,6 +531,7 @@ const statusText: Record<string, string> = {
   knowledgebase_archive: "Wissensbereich archiviert",
   knowledgebase_delete: "Wissensbereich gelöscht",
   clarification_requested: "Rückfrage zum Dokument",
+  clarification_reply: "Antwort zur Rückfrage",
   queued: "Wartet auf Verarbeitung",
   processing: "Wird verarbeitet",
   completed: "Abgeschlossen",
@@ -806,17 +838,22 @@ function KnowledgePortalContent() {
     }),
     [documents, setDocuments] = useState<PortalDocument[]>([]),
     [removals, setRemovals] = useState<Removals>({ requests: [], trash: [] }),
+    [archive, setArchive] = useState<ArchivedVersion[]>([]),
     [documentChanges, setDocumentChanges] = useState<DocumentChange[]>([]),
     [ownershipTasks, setOwnershipTasks] = useState<OwnershipTask[]>([]),
     [restrictedTerms, setRestrictedTerms] = useState<RestrictedTerm[]>([]),
     [notifications, setNotifications] = useState<PortalNotification[]>([]),
     [autoActivation, setAutoActivation] = useState(false);
-  const [tab, setTab] = useState(() =>
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("feedback")
-        ? "feedback"
-        : "overview",
-    ),
+  const focusedDocumentId =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("document") || ""
+      : "";
+  const [tab, setTab] = useState(() => {
+      if (typeof window === "undefined") return "overview";
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("document")) return "documents";
+      return params.get("feedback") ? "feedback" : "overview";
+    }),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true);
   const refresh = useCallback(async () => {
@@ -857,6 +894,7 @@ function KnowledgePortalContent() {
           qualityPayload,
           qualityCasePayload,
           removalPayload,
+          archivePayload,
           restrictedPayload,
           autoActivationPayload,
         ] = await Promise.all([
@@ -866,6 +904,7 @@ function KnowledgePortalContent() {
           api<QualityDashboard>("/portal/admin/dashboard"),
           api<QualityCases>("/portal/admin/quality-cases"),
           api<Removals>("/portal/admin/removals"),
+          api<{ versions: ArchivedVersion[] }>("/portal/admin/archive"),
           api<{ terms: RestrictedTerm[] }>("/portal/admin/restricted-terms"),
           api<{ enabled: boolean }>("/portal/admin/settings/auto-activation"),
         ]);
@@ -875,6 +914,7 @@ function KnowledgePortalContent() {
         setQuality(qualityPayload);
         setQualityCases(qualityCasePayload);
         setRemovals(removalPayload);
+        setArchive(archivePayload.versions);
         setRestrictedTerms(restrictedPayload.terms);
         setAutoActivation(autoActivationPayload.enabled);
       }
@@ -948,6 +988,7 @@ function KnowledgePortalContent() {
             ["users", "Benutzer & Rechte", Users],
             ["knowledgebases", "Knowledge Bases", LayoutDashboard],
             ["trash", "Papierkorb", XCircle],
+            ["archive", "Versionsarchiv", Archive],
             ["audit", "Audit", ShieldCheck],
           ] as NavigationTab[])
         : []),
@@ -1042,6 +1083,7 @@ function KnowledgePortalContent() {
             ownershipTasks={ownershipTasks}
             users={users}
             session={session}
+            focusedDocumentId={focusedDocumentId}
             done={refresh}
           />
         )}
@@ -1079,6 +1121,9 @@ function KnowledgePortalContent() {
         {tab === "trash" && isAdmin && (
           <TrashView data={removals} done={refresh} session={session} />
         )}
+        {tab === "archive" && isAdmin && (
+          <ArchiveView versions={archive} done={refresh} />
+        )}
         {tab === "audit" && isAdmin && (
           <AuditView entries={audit} users={users} />
         )}
@@ -1094,6 +1139,47 @@ function Notifications({
   items: PortalNotification[];
   onRead: (notificationId: string) => Promise<void>;
 }) {
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replies, setReplies] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const [openHistory, setOpenHistory] = useState<Record<string, boolean>>({});
+  const [history, setHistory] = useState<Record<string, NotificationThreadMessage[]>>({});
+
+  async function sendReply(item: PortalNotification) {
+    const answer = (replies[item.notification_id] || "").trim();
+    if (answer.length < 3) return;
+    setBusy(item.notification_id);
+    setMessage("");
+    try {
+      await api(`/portal/notifications/${item.notification_id}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ message: answer }),
+      });
+      setReplies((current) => ({ ...current, [item.notification_id]: "" }));
+      setReplyingTo(null);
+      setMessage("Deine Antwort wurde als Mitteilung und per E-Mail versendet.");
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Die Antwort konnte nicht versendet werden."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleHistory(item: PortalNotification) {
+    const nextOpen = !openHistory[item.notification_id];
+    setOpenHistory((current) => ({ ...current, [item.notification_id]: nextOpen }));
+    if (!nextOpen || history[item.notification_id]) return;
+    try {
+      const result = await api<{ messages: NotificationThreadMessage[] }>(
+        `/portal/notifications/${item.notification_id}/thread`,
+      );
+      setHistory((current) => ({ ...current, [item.notification_id]: result.messages }));
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Der Chatverlauf konnte nicht geladen werden."));
+    }
+  }
+
   return (
     <section className="wp-page">
       <Title
@@ -1101,14 +1187,13 @@ function Notifications({
         title="Mitteilungen"
         text="Hier siehst du Freigaben sowie Änderungen an Dokumenten und Wissensbereichen, die dich betreffen."
       />
+      {message && <p className="wp-alert" role="status">{message}</p>}
       {items.length ? (
         <div className="wp-doc-list">
           {items.map((item) => (
-            <button
-              type="button"
+            <article
               key={item.notification_id}
               className={`wp-notification-card ${item.read_at ? "read" : "unread"}`}
-              onClick={() => void onRead(item.notification_id)}
             >
               <div className="wp-doc-panel">
                 <Badge status={item.status} />
@@ -1121,8 +1206,79 @@ function Notifications({
                   </p>
                 )}
                 <small>{new Date(item.created_at).toLocaleString("de-DE")}</small>
+                {!item.read_at && (
+                  <button
+                    type="button"
+                    className="wp-secondary"
+                    onClick={() => void onRead(item.notification_id)}
+                  >Als gelesen markieren</button>
+                )}
+                {item.can_reply && (
+                  <div className="wp-notification-reply">
+                    {replyingTo !== item.notification_id ? (
+                      <button
+                        type="button"
+                        className="wp-secondary"
+                        onClick={() => setReplyingTo(item.notification_id)}
+                      >Antworten</button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="wp-history-toggle"
+                          aria-expanded={Boolean(openHistory[item.notification_id])}
+                          onClick={() => void toggleHistory(item)}
+                        >
+                          <ChevronRight
+                            className={openHistory[item.notification_id] ? "wp-rot" : ""}
+                            size={17}
+                          />
+                          Chatverlauf anzeigen
+                        </button>
+                        {openHistory[item.notification_id] && (
+                          <div className="wp-chat-history">
+                            {(history[item.notification_id] || []).map((entry) => (
+                              <div key={entry.notification_id} className="wp-chat-message">
+                                <strong>{entry.sender_name || "Unbekannter Nutzer"}</strong>
+                                <p>{entry.message}</p>
+                                <small>{new Date(entry.created_at).toLocaleString("de-DE")}</small>
+                              </div>
+                            ))}
+                            {!history[item.notification_id] && (
+                              <span><LoaderCircle className="spin" size={16} /> Verlauf wird geladen …</span>
+                            )}
+                          </div>
+                        )}
+                        <label>
+                          Deine Antwort
+                          <textarea
+                            value={replies[item.notification_id] || ""}
+                            onChange={(event) => setReplies((current) => ({
+                              ...current,
+                              [item.notification_id]: event.target.value,
+                            }))}
+                            placeholder="Antwort eingeben …"
+                          />
+                        </label>
+                        <div className="wp-actions">
+                          <button
+                            type="button"
+                            className="wp-secondary"
+                            onClick={() => setReplyingTo(null)}
+                          >Abbrechen</button>
+                          <button
+                            type="button"
+                            className="wp-primary"
+                            disabled={busy === item.notification_id || (replies[item.notification_id] || "").trim().length < 3}
+                            onClick={() => void sendReply(item)}
+                          >{busy === item.notification_id ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />} Antwort senden</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-            </button>
+            </article>
           ))}
         </div>
       ) : (
@@ -4835,6 +4991,7 @@ function DocumentList({
   ownershipTasks,
   users,
   session,
+  focusedDocumentId,
   done,
 }: {
   documents: PortalDocument[];
@@ -4842,6 +4999,7 @@ function DocumentList({
   ownershipTasks: OwnershipTask[];
   users: PortalUser[];
   session: Session;
+  focusedDocumentId: string;
   done: () => Promise<void>;
 }) {
   const confirm = useConfirmation();
@@ -4858,6 +5016,21 @@ function DocumentList({
   const publicationSaveLocks = useRef(new Set<string>());
   const reason = reasonByDocument[selected] || "";
   const isAdmin = ["admin", "portal_admin"].includes(session.role);
+  // Ein Deeplink aus einer Mitteilung oeffnet genau ein Dokument. Auswahl und
+  // Sprung laufen bewusst ausserhalb des Renderlaufs und nur einmal je Dokument,
+  // damit eine spaetere Nutzerauswahl nicht wieder ueberschrieben wird.
+  const focusApplied = useRef("");
+  useEffect(() => {
+    if (!focusedDocumentId || focusApplied.current === focusedDocumentId) return;
+    if (!documents.some((item) => item.document_id === focusedDocumentId)) return;
+    focusApplied.current = focusedDocumentId;
+    window.setTimeout(() => {
+      setSelected(focusedDocumentId);
+      document.getElementById(`portal-document-${focusedDocumentId}`)?.scrollIntoView({
+        behavior: "smooth", block: "start",
+      });
+    }, 0);
+  }, [documents, focusedDocumentId]);
   useEffect(() => {
     if (!isAdmin) return;
     void api<{ knowledgebases: KBOverview[] }>(
@@ -5122,6 +5295,7 @@ function DocumentList({
             return (
               <article
                 key={doc.document_id}
+                id={`portal-document-${doc.document_id}`}
                 className={open ? "selected" : ""}
               >
                 {/* Kopf als Schaltflaeche: das Panel darunter enthaelt eigene Bedienelemente
@@ -5186,22 +5360,26 @@ function DocumentList({
                       <button onClick={() => void renewal()}>
                         Gültigkeit verlängern
                       </button>
-                      <label>
-                        Wer darf das Dokument sehen?
-                        <select
-                          value={desired}
-                          onChange={(e) => setDesired(e.target.value)}
-                        >
-                          {confidentialityOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button onClick={() => void classification()}>
-                        Einstufung ändern
-                      </button>
+                      {isAdmin && (
+                        <label>
+                          Wer darf das Dokument sehen?
+                          <select
+                            value={desired}
+                            onChange={(e) => setDesired(e.target.value)}
+                          >
+                            {confidentialityOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {isAdmin && (
+                        <button onClick={() => void classification()}>
+                          Einstufung ändern
+                        </button>
+                      )}
                       <button onClick={() => void requestRemoval("deactivate")}>
                         Deaktivierung beantragen
                       </button>
@@ -5374,6 +5552,143 @@ function DocumentList({
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+function ArchiveView({
+  versions,
+  done,
+}: {
+  versions: ArchivedVersion[];
+  done: () => Promise<void>;
+}) {
+  const confirm = useConfirmation();
+  const [reason, setReason] = useState<Record<string, string>>({});
+  const documents = useMemo(() => {
+    const groups = new Map<string, ArchivedVersion[]>();
+    for (const version of versions) {
+      groups.set(version.document_id, [...(groups.get(version.document_id) || []), version]);
+    }
+    return [...groups.values()]
+      .map((group) => ({
+        current: group[0],
+        versions: [...group].sort((left, right) =>
+          String(right.superseded_at || right.purged_at || "").localeCompare(
+            String(left.superseded_at || left.purged_at || ""),
+          ),
+        ),
+      }))
+      .sort((left, right) => left.current.title.localeCompare(right.current.title, "de"));
+  }, [versions]);
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function restore(item: ArchivedVersion) {
+    const approved = await confirm({
+      title: "Frühere Version wiederherstellen?",
+      description: `„${item.title}“ wird wieder zur gültigen Fassung. Die aktuell gültige Fassung wird dabei ins Versionsarchiv verschoben.`,
+      confirmLabel: "Version wiederherstellen",
+    });
+    if (!approved) return;
+    setBusy(item.version_id);
+    setMessage("");
+    try {
+      await api(`/portal/admin/archive/${item.version_id}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason: reason[item.version_id] || "Frühere Dokumentversion wiederhergestellt",
+        }),
+      });
+      setMessage("Die frühere Version ist wieder veröffentlicht. Die bisher aktive Fassung liegt jetzt im Archiv.");
+      await done();
+    } catch (cause) {
+      setMessage(friendlyError(cause, "Die Version konnte nicht wiederhergestellt werden."));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <section className="wp-page">
+      <Title
+        eyebrow="Aufbewahrung"
+        title="Versionsarchiv"
+        text="Hier liegen ersetzte Dokumentversionen. Sie bleiben 90 Tage einsehbar und können in dieser Zeit wiederhergestellt werden. Danach bleiben nur die Auditdaten erhalten."
+      />
+      {message && <p className="wp-message">{message}</p>}
+      <div className="wp-archive-groups">
+        {documents.length ? (
+          documents.map(({ current, versions: history }) => (
+            <section className="wp-archive-group wp-form" key={current.document_id} style={{ marginBottom: 24 }}>
+              <div className="wp-archive-current wp-trash-copy">
+                <Badge status="Aktuell gültige Fassung" />
+                <strong>{current.active_version_title || "Aktuelle Fassung nicht verfügbar"}</strong>
+                <span>{current.active_original_filename || "Dateiname nicht verfügbar"}</span>
+                <small>{history.length} frühere {history.length === 1 ? "Fassung" : "Fassungen"} im Verlauf</small>
+              </div>
+              <div className="wp-doc-list wp-archive-history">
+                {history.map((item, position) => (
+                  <article key={item.version_id}>
+                    <div className="wp-trash-row">
+                      <div className="wp-trash-copy">
+                        <Badge status={item.status === "purged" ? "Bereinigt" : position === 0 ? "Zuletzt ersetzte Fassung" : "Ältere Fassung"} />
+                        <strong>{item.title}</strong>
+                        <span>
+                          {item.status === "purged"
+                            ? `Dateien am ${item.purged_at || "unbekannten Zeitpunkt"} nach Ablauf der Aufbewahrung bereinigt.`
+                            : `Ersetzt am ${item.superseded_at || "unbekannten Zeitpunkt"}.`}
+                        </span>
+                        <small className="wp-hint">{item.original_filename}</small>
+                        <p className="wp-hint">
+                          Aktuell gültige Fassung: <strong>{item.active_version_title || "nicht verfügbar"}</strong>
+                        </p>
+                      </div>
+                      <div className="wp-trash-side">
+                        {item.has_original && (
+                          <a
+                            className="wp-button-link"
+                            href={`${API}/portal/admin/archive/${item.version_id}/source`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Original ansehen
+                          </a>
+                        )}
+                        {item.can_restore ? (
+                          <>
+                            <textarea
+                              placeholder="Begründung für die Wiederherstellung"
+                              value={reason[item.version_id] || ""}
+                              onChange={(event) => setReason({ ...reason, [item.version_id]: event.target.value })}
+                            />
+                            <div className="wp-actions">
+                              <button
+                                className="approve"
+                                disabled={busy === item.version_id}
+                                onClick={() => void restore(item)}
+                              >
+                                Wiederherstellen
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="wp-hint">
+                            Diese Version kann nicht mehr wiederhergestellt werden, weil ihre Daten nach 90 Tagen bereinigt wurden.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))
+        ) : (
+          <p className="wp-empty-hint">Es gibt derzeit keine ersetzten Dokumentversionen im Archiv.</p>
+        )}
+      </div>
     </section>
   );
 }

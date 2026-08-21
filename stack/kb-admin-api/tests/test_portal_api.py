@@ -615,6 +615,45 @@ def test_reviewer_can_ask_involved_people_and_question_is_sent_in_app_and_by_mai
         assert notification["status"] == "clarification_requested"
         assert "Frau Führung" in notification["message"]
         assert notification["reason"] == "Welche Filiale betrifft diese Arbeitsanweisung?"
+        assert notification["can_reply"] is True
+        assert notification["sender_user_id"] == "manager"
+
+        answered = client.post(
+            f"/portal/notifications/{notification['notification_id']}/reply",
+            json={"message": "Die Arbeitsanweisung betrifft die Filiale Hannover."},
+        )
+        assert answered.status_code == 201, answered.text
+
+        current["user"] = {**identity("manager"), "name": "Frau Führung"}
+        reply = client.get("/portal/notifications").json()["notifications"][0]
+        assert reply["status"] == "clarification_reply"
+        assert reply["sender_user_id"] == "employee"
+        assert reply["reason"] == "Die Arbeitsanweisung betrifft die Filiale Hannover."
+        assert reply["can_reply"] is True
+
+        replied_again = client.post(
+            f"/portal/notifications/{reply['notification_id']}/reply",
+            json={"message": "Danke, damit kann ich die Prüfung abschließen."},
+        )
+        assert replied_again.status_code == 201, replied_again.text
+
+        current["user"] = identity("employee")
+        follow_up = client.get("/portal/notifications").json()["notifications"][0]
+        assert follow_up["status"] == "clarification_reply"
+        assert follow_up["sender_user_id"] == "manager"
+        assert follow_up["reason"] == "Danke, damit kann ich die Prüfung abschließen."
+        thread = client.get(
+            f"/portal/notifications/{follow_up['notification_id']}/thread"
+        )
+        assert thread.status_code == 200, thread.text
+        assert [item["sender_name"] for item in thread.json()["messages"]] == [
+            "Frau Führung", "Employee", "Frau Führung",
+        ]
+        assert [item["message"] for item in thread.json()["messages"]] == [
+            "Welche Filiale betrifft diese Arbeitsanweisung?",
+            "Die Arbeitsanweisung betrifft die Filiale Hannover.",
+            "Danke, damit kann ich die Prüfung abschließen.",
+        ]
         with module.PORTAL_GOVERNANCE.store.connect() as db:
             mail = db.execute(
                 "SELECT recipient,subject,body FROM notification_outbox WHERE kind='case_inquiry'"
@@ -686,3 +725,94 @@ def test_admins_can_reassign_a_document_to_another_knowledgebase():
         assert client.get("/portal/session").status_code == 200
         assert client.put(f"/portal/admin/documents/{case.document_id}/publications",
                           json={"knowledgebase_id": first.knowledgebase_id, "reason": "Nicht erlaubt"}).status_code == 403
+
+
+def test_admin_archive_lists_and_restores_a_retained_document_version():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        module = load_app(root)
+        module._trigger_hybrid_version_sync = lambda _version_id: {"ok": True}
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        first = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal", target_knowledgebase_id=kb.knowledgebase_id,
+            title="Arbeitsanweisung", original_filename="anweisung.md", original_file_id="first",
+            original_sha256="a" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        module.DOCUMENT_LIFECYCLE.record_analysis(
+            case_id=first.case_id, normalized_sha256="b" * 64, markdown_sha256="c" * 64,
+            analysis=module.Analysis(),
+        )
+        module.DOCUMENT_LIFECYCLE.decide(
+            case_id=first.case_id, actor_user_id="portal", decision="approve", reason="Erstfassung",
+        )
+        first = module.DOCUMENT_LIFECYCLE.activate(case_id=first.case_id)
+        second = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal", target_knowledgebase_id=kb.knowledgebase_id,
+            document_id=first.document_id, title="Arbeitsanweisung", original_filename="anweisung-neu.md",
+            original_file_id="second", original_sha256="d" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        module.DOCUMENT_LIFECYCLE.record_analysis(
+            case_id=second.case_id, normalized_sha256="e" * 64, markdown_sha256="f" * 64,
+            analysis=module.Analysis(same_kb_similarity="very_high"),
+        )
+        module.DOCUMENT_LIFECYCLE.choose_action(
+            case_id=second.case_id, actor_user_id="portal", action="replace",
+        )
+        module.DOCUMENT_LIFECYCLE.decide(
+            case_id=second.case_id, actor_user_id="portal", decision="approve", reason="Neue Fassung",
+        )
+        second = module.DOCUMENT_LIFECYCLE.activate(case_id=second.case_id)
+        third = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal", target_knowledgebase_id=kb.knowledgebase_id,
+            document_id=first.document_id, title="Arbeitsanweisung aktuell", original_filename="anweisung-aktuell.md",
+            original_file_id="third", original_sha256="1" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        module.DOCUMENT_LIFECYCLE.record_analysis(
+            case_id=third.case_id, normalized_sha256="2" * 64, markdown_sha256="3" * 64,
+            analysis=module.Analysis(same_kb_similarity="very_high"),
+        )
+        module.DOCUMENT_LIFECYCLE.choose_action(
+            case_id=third.case_id, actor_user_id="portal", action="replace",
+        )
+        module.DOCUMENT_LIFECYCLE.decide(
+            case_id=third.case_id, actor_user_id="portal", decision="approve", reason="Aktuelle Fassung",
+        )
+        third = module.DOCUMENT_LIFECYCLE.activate(case_id=third.case_id)
+        for version, content in (
+            (first, "# Frühere Fassung\n"), (second, "# Zweite Fassung\n"), (third, "# Aktuelle Fassung\n"),
+        ):
+            version_dir = root / "portal-files" / version.document_id / version.version_id
+            version_dir.mkdir(parents=True)
+            (version_dir / "original.md").write_text(content, encoding="utf-8")
+            (version_dir / "rag.md").write_text(content, encoding="utf-8")
+
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        assert client.get("/portal/admin/archive").status_code == 403
+
+        current["user"] = identity("portal", "admin")
+        archive = client.get("/portal/admin/archive")
+        assert archive.status_code == 200
+        archived_versions = archive.json()["versions"]
+        same_document_history = [item for item in archived_versions if item["document_id"] == first.document_id]
+        assert len(same_document_history) == 2
+        entry = next(item for item in archived_versions if item["version_id"] == first.version_id)
+        assert entry["has_original"] is True
+        assert entry["can_restore"] is True
+        assert entry["active_version_title"] == third.title
+        assert entry["version_count"] == 3
+        assert client.get(f"/portal/admin/archive/{first.version_id}/source").status_code == 200
+
+        restored = client.post(
+            f"/portal/admin/archive/{first.version_id}/restore", json={"reason": "Fachlich wieder gültig"},
+        )
+        assert restored.status_code == 200, restored.text
+        assert module.DOCUMENT_LIFECYCLE.active_version(first.document_id) == first.version_id
+        assert module.DOCUMENT_LIFECYCLE.version_record(second.version_id)["status"] == "superseded"
+        assert module.DOCUMENT_LIFECYCLE.version_record(third.version_id)["status"] == "superseded"

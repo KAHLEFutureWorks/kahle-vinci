@@ -10,6 +10,7 @@ import socket
 import struct
 import tempfile
 import time
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,10 +74,15 @@ class SecureFileInspector:
     }
 
     def __init__(self, max_bytes: int = 50 * 1024 * 1024, max_pdf_pages: int = 1000,
-                 max_office_pages: int = 200):
+                 max_office_pages: int = 200, max_office_entries: int = 10_000,
+                 max_office_uncompressed_bytes: int = 200 * 1024 * 1024,
+                 max_office_compression_ratio: int = 100):
         self.max_bytes = max_bytes
         self.max_pdf_pages = max_pdf_pages
         self.max_office_pages = max_office_pages
+        self.max_office_entries = max_office_entries
+        self.max_office_uncompressed_bytes = max_office_uncompressed_bytes
+        self.max_office_compression_ratio = max_office_compression_ratio
 
     def inspect(self, filename: str, data: bytes) -> InspectedFile:
         safe_name = Path(filename or "").name
@@ -165,6 +171,18 @@ class SecureFileInspector:
             raise IngestError("encrypted_or_legacy_office_not_allowed")
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                entries = archive.infolist()
+                if len(entries) > self.max_office_entries:
+                    raise IngestError("office_archive_entry_limit_exceeded")
+                uncompressed_size = sum(max(0, entry.file_size) for entry in entries)
+                if uncompressed_size > self.max_office_uncompressed_bytes:
+                    raise IngestError("office_archive_uncompressed_size_exceeded")
+                compressed_size = sum(max(0, entry.compress_size) for entry in entries)
+                if (
+                    compressed_size
+                    and uncompressed_size / compressed_size > self.max_office_compression_ratio
+                ):
+                    raise IngestError("office_archive_compression_ratio_exceeded")
                 names = {name.replace("\\", "/").lower() for name in archive.namelist()}
                 if "[content_types].xml" not in names:
                     raise IngestError("file_type_mismatch")
@@ -388,16 +406,49 @@ class DocumentWorkerAdapter:
 
 class PromptInjectionInspector:
     RULES = {
-        "ignore_instructions": re.compile(r"\b(ignore|disregard|forget)\b.{0,50}\b(instruction|prompt|system)\b", re.I | re.S),
-        "system_prompt_request": re.compile(r"\b(system prompt|developer message|hidden instructions?)\b", re.I),
-        "tool_or_secret_request": re.compile(r"\b(call|use|execute|reveal|show)\b.{0,60}\b(tool|password|secret|token|api key)\b", re.I | re.S),
-        "role_override": re.compile(r"\b(you are now|act as|new role|jailbreak)\b", re.I),
+        "ignore_instructions": re.compile(
+            r"\b(ignore|disregard|forget|ignoriere|missachte|vergiss|uebergehe|übergehe)\b"
+            r".{0,80}\b(instructions?|anweisungen?|prompt|system)\b", re.I | re.S,
+        ),
+        "system_prompt_request": re.compile(
+            r"\b(system\s*prompt|developer\s*(message|nachricht)|"
+            r"hidden\s*instructions?|versteckte?\s*(anweisungen?|instruktionen?))\b", re.I,
+        ),
+        "tool_or_secret_request": re.compile(
+            r"\b(call|use|execute|reveal|show|rufe|nutze|verwende|fuehre|führe|"
+            r"verrate|zeige|gib)\b.{0,80}\b(tool|werkzeug|password|passwort|secret|"
+            r"geheimnis|token|(?:api\s*key|a\s*p\s*i\s*key)|zugangscode)\b", re.I | re.S,
+        ),
+        "role_override": re.compile(
+            r"\b(you\s*are\s*now|act\s*as|new\s*role|jailbreak|du\s*bist\s*jetzt|"
+            r"verhalte\s*dich\s*als|uebernimm\s*die\s*rolle|übernimm\s*die\s*rolle)\b", re.I,
+        ),
     }
 
+    COMPACT_MARKERS = (
+        "ignoreallsysteminstructions", "ignoriereallesystemanweisungen",
+        "revealtheapikey", "zeigedenapikey", "verratedentoken",
+    )
+
+    @staticmethod
+    def _normalized_text(markdown: str) -> tuple[str, bool]:
+        source = markdown or ""
+        normalized = unicodedata.normalize("NFKC", source)
+        normalized = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", normalized)
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized, normalized != source
+
     def inspect(self, markdown: str) -> InjectionFinding:
-        signals = tuple(name for name, rule in self.RULES.items() if rule.search(markdown))
-        risk = "high" if len(signals) >= 2 else "medium" if signals else "none"
-        return InjectionFinding(risk=risk, signals=signals)
+        normalized, was_normalized = self._normalized_text(markdown)
+        signals = [name for name, rule in self.RULES.items() if rule.search(normalized)]
+        compact = re.sub(r"[^\w]+", "", normalized.casefold())
+        if any(marker in compact for marker in self.COMPACT_MARKERS):
+            signals.append("obfuscated_instruction")
+        if was_normalized and signals:
+            signals.append("unicode_or_whitespace_obfuscation")
+        unique_signals = tuple(dict.fromkeys(signals))
+        risk = "critical" if len(unique_signals) >= 3 else "high" if len(unique_signals) >= 2 else "medium" if unique_signals else "none"
+        return InjectionFinding(risk=risk, signals=unique_signals)
 
 
 class ConversionQualityInspector:

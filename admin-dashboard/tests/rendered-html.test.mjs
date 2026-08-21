@@ -278,8 +278,21 @@ test("shows named read notifications and groups searchable documents by knowledg
   assert.match(portal, /Zusätzlich verknüpft/);
   assert.match(portal, /const searchable = document\.title\.toLocaleLowerCase/);
   assert.match(portal, /className="wp-notification-title"/);
+  assert.match(portal, /params\.get\("document"\).*return "documents"/s);
+  assert.match(portal, /focusedDocumentId=\{focusedDocumentId\}/);
+  assert.match(portal, /id=\{`portal-document-\$\{doc\.document_id\}`\}/);
+  assert.match(portal, />Antworten</);
+  assert.match(portal, /\/portal\/notifications\/\$\{item\.notification_id\}\/reply/);
+  assert.match(portal, /Chatverlauf anzeigen/);
+  assert.match(portal, /\/portal\/notifications\/\$\{item\.notification_id\}\/thread/);
   assert.match(resultStyles, /\.wp-notification-title[^}]*font-weight:\s*800/);
   assert.match(resultStyles, /\.wp-notification-card\.unread[^}]*border:\s*2px solid var\(--blue\)/);
+});
+
+test("shows document confidentiality controls only to admins", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /isAdmin && \(\s*<label>\s*Wer darf das Dokument sehen\?/);
+  assert.match(portal, /isAdmin && \(\s*<button onClick=\{\(\) => void classification\(\)\}>/);
 });
 
 test("accepts approvals immediately and shows background publication separately", async () => {
@@ -405,4 +418,14 @@ test("uses German upload messages and offers decisions for preparation review", 
   assert.match(portal, /Ablehnen/);
   assert.match(portal, /Weiterleiten/);
   assert.match(portal, /Freigeben/);
+});
+
+test("offers the version archive with restore only to admins", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /\["archive", "Versionsarchiv", Archive\]/);
+  assert.match(portal, /tab === "archive" && isAdmin && \(/);
+  assert.match(portal, /\/portal\/admin\/archive\/\$\{item\.version_id\}\/restore/);
+  assert.match(portal, /\/portal\/admin\/archive\/\$\{item\.version_id\}\/source/);
+  assert.match(portal, /Frühere Version wiederherstellen\?/);
+  assert.match(portal, /Aktuell gültige Fassung/);
 });

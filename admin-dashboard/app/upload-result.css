@@ -63,6 +63,14 @@
 .wp-notification-card.unread { border: 2px solid var(--blue); box-shadow: 0 0 0 2px #dceefa; }
 .wp-notification-card.read { opacity: .82; }
 .wp-notification-title { margin: 7px 0 2px; color: var(--blue); font-size: 18px; font-weight: 800; }
+.wp-notification-reply { display: grid; gap: 10px; margin-top: 14px; }
+.wp-notification-reply label { display: grid; gap: 6px; font-weight: 700; }
+.wp-notification-reply textarea { min-height: 96px; resize: vertical; }
+.wp-history-toggle { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 4px 0; border: 0; background: transparent; color: var(--blue); font-weight: 750; }
+.wp-chat-history { display: grid; gap: 8px; max-height: 260px; overflow-y: auto; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #f7fbfe; }
+.wp-chat-message { padding: 9px 11px; border-radius: 7px; background: #fff; }
+.wp-chat-message p { margin: 4px 0; white-space: pre-wrap; }
+.wp-chat-message small { color: var(--muted); }
 .wp-document-filters { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(220px, 320px); gap: 16px; align-items: end; margin: 0 0 24px; }
 .wp-document-filters label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; font-weight: 750; }
 .wp-document-filters input,.wp-document-filters select { width: 100%; height: 46px; }

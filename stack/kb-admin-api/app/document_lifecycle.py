@@ -173,7 +173,9 @@ class DocumentLifecycle:
                     valid_until TEXT,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    activated_at TEXT
+                    activated_at TEXT,
+                    superseded_at TEXT,
+                    purged_at TEXT
                 );
 
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_active_binary_duplicate
@@ -255,9 +257,38 @@ class DocumentLifecycle:
             }
             if "title" not in version_columns:
                 db.execute("ALTER TABLE document_versions ADD COLUMN title TEXT")
+            if "superseded_at" not in version_columns:
+                db.execute("ALTER TABLE document_versions ADD COLUMN superseded_at TEXT")
+            if "purged_at" not in version_columns:
+                db.execute("ALTER TABLE document_versions ADD COLUMN purged_at TEXT")
+            notification_columns = {
+                row["name"] for row in db.execute(
+                    "PRAGMA table_info(portal_case_notifications)"
+                )
+            }
+            if "sender_user_id" not in notification_columns:
+                db.execute(
+                    "ALTER TABLE portal_case_notifications ADD COLUMN sender_user_id TEXT"
+                )
+            if "thread_id" not in notification_columns:
+                db.execute(
+                    "ALTER TABLE portal_case_notifications ADD COLUMN thread_id TEXT"
+                )
             db.execute(
                 "UPDATE document_versions SET title=(SELECT d.title FROM canonical_documents d "
                 "WHERE d.document_id=document_versions.document_id) WHERE title IS NULL"
+            )
+            db.execute(
+                """UPDATE document_versions AS previous
+                   SET superseded_at=(
+                       SELECT successor.activated_at FROM document_versions AS successor
+                       WHERE successor.previous_version_id=previous.version_id
+                         AND successor.status IN ('active','superseded','purged')
+                         AND successor.activated_at IS NOT NULL
+                       ORDER BY successor.activated_at
+                       LIMIT 1
+                   )
+                   WHERE previous.status='superseded' AND previous.superseded_at IS NULL"""
             )
 
     def submit(
@@ -448,6 +479,8 @@ class DocumentLifecycle:
             or analysis.version_candidate_document_ids
         )
         if not analysis.malware_safe:
+            next_status = "security_blocked"
+        elif analysis.prompt_injection_risk in {"high", "critical"}:
             next_status = "security_blocked"
         elif analysis.conversion_quality == "failed":
             next_status = "needs_correction"
@@ -919,7 +952,8 @@ class DocumentLifecycle:
             )
             if previous_version_id:
                 db.execute(
-                    "UPDATE document_versions SET status = 'active' WHERE version_id = ? AND document_id = ?",
+                    "UPDATE document_versions SET status = 'active', superseded_at = NULL, purged_at = NULL "
+                    "WHERE version_id = ? AND document_id = ?",
                     (previous_version_id, case.document_id),
                 )
             db.execute(
@@ -963,8 +997,14 @@ class DocumentLifecycle:
             ).fetchone()["active_version_id"]
             if previous and previous != case.version_id:
                 db.execute(
-                    "UPDATE document_versions SET status = 'superseded' WHERE version_id = ?",
-                    (previous,),
+                    "UPDATE document_versions SET status = 'superseded', superseded_at = ?, purged_at = NULL "
+                    "WHERE version_id = ?",
+                    (self.now(), previous),
+                )
+                db.execute(
+                    "UPDATE document_cases SET status = 'superseded', updated_at = ? "
+                    "WHERE version_id = ? AND status = 'active'",
+                    (self.now(), previous),
                 )
             db.execute(
                 """
@@ -1109,6 +1149,139 @@ class DocumentLifecycle:
             if _is_workday(current, self.holidays):
                 count += 1
         return count
+
+    def restore_superseded_version(
+        self, *, version_id: str, actor_user_id: str, reason: str,
+    ) -> Submission:
+        """Make a retained predecessor the active document version again."""
+        actor = self.governance.identity(actor_user_id)
+        if actor.role not in {"admin", "portal_admin"}:
+            raise LifecycleError("admin_required")
+        if len(reason.strip()) < 3:
+            raise LifecycleError("restore_reason_required")
+        valid_from = self.today()
+        with self.store.connect() as db:
+            target = db.execute(
+                """SELECT v.*, d.active_version_id FROM document_versions v
+                   JOIN canonical_documents d ON d.document_id=v.document_id
+                   WHERE v.version_id=?""",
+                (version_id,),
+            ).fetchone()
+            if not target:
+                raise LifecycleError("unknown_version")
+            if target["status"] != "superseded":
+                raise LifecycleError("archived_version_restore_not_allowed")
+            previous_version_id = target["active_version_id"]
+            if not previous_version_id or previous_version_id == version_id:
+                raise LifecycleError("archived_version_restore_not_allowed")
+            previous = db.execute(
+                "SELECT status FROM document_versions WHERE version_id=? AND document_id=?",
+                (previous_version_id, target["document_id"]),
+            ).fetchone()
+            if not previous or previous["status"] != "active":
+                raise LifecycleError("archived_version_restore_not_allowed")
+            valid_until = add_workdays(valid_from, int(target["valid_workdays"]), self.holidays)
+            db.execute(
+                "UPDATE document_versions SET status='superseded', superseded_at=?, purged_at=NULL "
+                "WHERE version_id=?",
+                (self.now(), previous_version_id),
+            )
+            db.execute(
+                "UPDATE document_cases SET status='superseded', updated_at=? "
+                "WHERE version_id=? AND status='active'",
+                (self.now(), previous_version_id),
+            )
+            db.execute(
+                """UPDATE document_versions
+                   SET status='active', valid_from=?, valid_until=?, activated_at=?,
+                       superseded_at=NULL, purged_at=NULL
+                   WHERE version_id=?""",
+                (valid_from.isoformat(), valid_until.isoformat(), self.now(), version_id),
+            )
+            db.execute(
+                """UPDATE canonical_documents SET active_version_id=?, title=?, updated_at=?
+                   WHERE document_id=?""",
+                (version_id, target["title"], self.now(), target["document_id"]),
+            )
+            case = db.execute(
+                "SELECT case_id FROM document_cases WHERE version_id=? ORDER BY created_at DESC LIMIT 1",
+                (version_id,),
+            ).fetchone()
+            if not case:
+                raise LifecycleError("archived_version_case_missing")
+            db.execute(
+                "UPDATE document_cases SET status='active', updated_at=? WHERE case_id=?",
+                (self.now(), case["case_id"]),
+            )
+            self._event(db, case["case_id"], actor_user_id, "archived_version_restored", {
+                "previous_version_id": previous_version_id,
+                "reason": reason.strip(),
+                "valid_until": valid_until.isoformat(),
+            })
+        return self.submission(case["case_id"])
+
+    def rollback_superseded_version_restore(
+        self, *, restored_version_id: str, previous_version_id: str, reason: str,
+        actor_user_id: str = "indexer",
+    ) -> Submission:
+        """Restore the version that was active before a failed archive restoration."""
+        with self.store.connect() as db:
+            restored = db.execute(
+                """SELECT v.*, d.active_version_id FROM document_versions v
+                   JOIN canonical_documents d ON d.document_id=v.document_id
+                   WHERE v.version_id=?""",
+                (restored_version_id,),
+            ).fetchone()
+            previous = db.execute(
+                "SELECT * FROM document_versions WHERE version_id=?",
+                (previous_version_id,),
+            ).fetchone()
+            if (
+                not restored or not previous or restored["status"] != "active"
+                or restored["active_version_id"] != restored_version_id
+                or previous["document_id"] != restored["document_id"]
+                or previous["status"] != "superseded"
+            ):
+                raise LifecycleError("archived_version_restore_rollback_not_allowed")
+            db.execute(
+                "UPDATE document_versions SET status='superseded', superseded_at=? WHERE version_id=?",
+                (self.now(), restored_version_id),
+            )
+            db.execute(
+                "UPDATE document_cases SET status='superseded', updated_at=? "
+                "WHERE version_id=? AND status='active'",
+                (self.now(), restored_version_id),
+            )
+            db.execute(
+                "UPDATE document_versions SET status='active', superseded_at=NULL, purged_at=NULL "
+                "WHERE version_id=?",
+                (previous_version_id,),
+            )
+            db.execute(
+                """UPDATE canonical_documents SET active_version_id=?, title=?, updated_at=?
+                   WHERE document_id=?""",
+                (previous_version_id, previous["title"], self.now(), restored["document_id"]),
+            )
+            previous_case = db.execute(
+                "SELECT case_id FROM document_cases WHERE version_id=? ORDER BY created_at DESC LIMIT 1",
+                (previous_version_id,),
+            ).fetchone()
+            if not previous_case:
+                raise LifecycleError("archived_version_case_missing")
+            db.execute(
+                "UPDATE document_cases SET status='active', updated_at=? WHERE case_id=?",
+                (self.now(), previous_case["case_id"]),
+            )
+            restored_case = db.execute(
+                "SELECT case_id FROM document_cases WHERE version_id=? ORDER BY created_at DESC LIMIT 1",
+                (restored_version_id,),
+            ).fetchone()
+            if restored_case:
+                self._event(db, restored_case["case_id"], actor_user_id, "archived_version_restore_rolled_back", {
+                    "reason": reason,
+                    "restored_version_id": previous_version_id,
+                })
+        return self.submission(previous_case["case_id"])
 
     def source_record(self, version_id: str, actor_user_id: str) -> dict[str, Any]:
         self.governance.identity(actor_user_id)

@@ -84,6 +84,14 @@ def test_clean_general_upload_uses_account_owner_and_is_activated_by_manager():
         assert completed.status_code == 200, completed.text
         assert completed.json()["status"] == "completed"
         assert completed.json()["result"]["case"]["status"] == "active"
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            publication_mail = db.execute(
+                "SELECT recipient, subject, body FROM notification_outbox "
+                "WHERE kind='approved_document_published'",
+            ).fetchone()
+        assert publication_mail["recipient"] == "employee@kahle.de"
+        assert "Wissen · Veröffentlicht" in publication_mail["subject"]
+        assert "erfolgreich indexiert" in publication_mail["body"]
 
 
 def test_failed_activation_returns_to_manager_as_retryable_publication():
@@ -617,7 +625,7 @@ def test_upload_worker_reports_legacy_interruption_and_then_processes_next_job()
             "Betroffenes Dokument: Älterer unterbrochener Upload. "
             "Die Verarbeitung wurde unterbrochen. Bitte lade das Dokument erneut hoch.",
         )
-        assert outbox[0] == "employee@kahle.de"
+        assert outbox is None
 
 
 def test_failed_upload_incident_contains_job_context_and_notifies_uploader_and_owner():
@@ -660,7 +668,7 @@ def test_failed_upload_incident_contains_job_context_and_notifies_uploader_and_o
                 "SELECT recipient FROM notification_outbox WHERE kind='upload_failed' ORDER BY recipient"
             ).fetchall()]
         assert recipients == ["employee", "owner"]
-        assert outbox == ["employee@kahle.de", "owner@kahle.de"]
+        assert outbox == []
 
 
 def test_upload_job_accepts_multiple_knowledgebases():

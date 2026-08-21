@@ -63,6 +63,7 @@ def run_once(service: MaintenanceService, dispatcher: OutboxDispatcher | None,
         service.generate_expiry_digest()
     service.process_pending_approvals()
     changed = service.expire_due_versions()
+    service.purge_superseded_version_files(FILES_ROOT)
     trash = service.process_trash(FILES_ROOT)
     migration_expired = service.process_migration_deadlines()
     service.enforce_retention()
