@@ -274,6 +274,24 @@ def test_directory_search_normalizes_serviceassistenzen_and_office_preposition()
     assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
 
 
+def test_directory_search_keeps_controlled_feminine_serviceassistenz_variant():
+    matching = person(
+        "1", name="Anna Adler", position="Serviceassistentin", office="Wedemark"
+    )
+    wrong_office = person(
+        "2", name="Berta Berlin", position="Serviceassistentin", office="Hannover"
+    )
+    wrong_role = person(
+        "3", name="Clara Celle", position="Serviceberater", office="Wedemark"
+    )
+
+    evidence = search([matching, wrong_office, wrong_role]).search(
+        query("Wie heißen die Serviceassistenzen in der Wedemark?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
 def test_sales_role_description_is_a_directory_search_with_brand_and_area_filters():
     matching = person(
         "1",
@@ -301,6 +319,36 @@ def test_sales_role_description_is_a_directory_search_with_brand_and_area_filter
     evidence = directory.search(query("Wer ist Verkäufer von Seat Neuwagen?"))
 
     assert classify_directory_query("Wer ist Verkäufer von Seat Neuwagen?") == "directory_search"
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+def test_sales_role_search_matches_controlled_feminine_and_compound_business_fields():
+    matching = person(
+        "1",
+        name="Anna Adler",
+        position="Automobilverkäuferin",
+        department="Neuwagenverkauf",
+        team="SEAT Vertrieb",
+    )
+    wrong_brand = person(
+        "2",
+        name="Berta Berlin",
+        position="Automobilverkäuferin",
+        department="Neuwagenverkauf",
+        team="CUPRA Vertrieb",
+    )
+    wrong_role = person(
+        "3",
+        name="Clara Celle",
+        position="Serviceberaterin",
+        department="Neuwagenverkauf",
+        team="SEAT Vertrieb",
+    )
+
+    evidence = search([matching, wrong_brand, wrong_role]).search(
+        query("Wer ist Verkäufer von Seat Neuwagen?", "directory_search")
+    )
+
     assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
 
 

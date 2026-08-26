@@ -463,10 +463,19 @@ def _add_matching_field_values(
         value
         for person in people
         if (value := _normalise_text(str(getattr(person, field))))
-        and normalized_variants.intersection(value.split())
+        and _contains_controlled_variant(value, normalized_variants)
     }
     if matched:
         filters[field] = frozenset(set(filters.get(field, ())) | matched)
+
+
+def _contains_controlled_variant(value: str, variants: frozenset[str]) -> bool:
+    """Match only approved role/business stems, including German inflections."""
+    return any(
+        token.startswith(variant)
+        for token in value.split()
+        for variant in variants
+    )
 
 
 def _is_controlled_role_description(query: str) -> bool:
