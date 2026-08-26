@@ -78,7 +78,14 @@ _V1_ALIASES: dict[str, tuple[str, ...]] = {
     "team": ("team",),
     "office": ("office", "standort", "location", "workplace"),
     "business_email": ("email", "email address", "e-mail", "geschäftliche e-mail", "dienstliche e-mail"),
-    "business_phone": ("phone", "telephone", "telefon", "geschäftliche telefonnummer", "dienstliche telefonnummer"),
+    "business_phone": (
+        "phone",
+        "telephone",
+        "telefon",
+        "geschäftliche telefonnummer",
+        "telefonnummer geschäftlich",
+        "dienstliche telefonnummer",
+    ),
     "employment_status": ("status", "employment status", "beschäftigungsstatus"),
     "source_updated_at": (
         "updated_at",

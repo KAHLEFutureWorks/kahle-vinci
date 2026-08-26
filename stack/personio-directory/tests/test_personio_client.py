@@ -177,6 +177,35 @@ def test_v1_assessment_maps_actual_last_modified_at_key_and_label(config):
     assert assessment.mapping["source_updated_at"] == "last_modified_at"
 
 
+def test_v1_assessment_maps_exact_business_phone_unicode_label(config):
+    attributes_with_live_phone_label = v1_attributes()._payload
+    attributes_with_live_phone_label = {
+        "data": [
+            (
+                {
+                    "key": "custom_business_phone",
+                    "label": "Telefonnummer geschäftlich",
+                }
+                if attribute["key"] == "phone"
+                else attribute
+            )
+            for attribute in attributes_with_live_phone_label["data"]
+        ]
+    }
+    session = FakeSession([
+        Response(200, {"access_token": "v2-token", "expires_in": 3600}),
+        Response(200, {"data": []}),
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        Response(200, attributes_with_live_phone_label),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+
+    assessment = client.assess_api()
+
+    assert assessment.version == "v1"
+    assert assessment.mapping["business_phone"] == "custom_business_phone"
+
+
 def test_v1_iter_people_uses_bounded_offset_pagination_and_updated_since(config):
     session = FakeSession([
         Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),

@@ -239,3 +239,22 @@ stack/tests: 421 passed, 2 failed in 5.80s
 The two stack failures remain the same missing unversioned local reference
 files documented above. No live API, environment variable or Compose service
 was accessed.
+
+## Business-phone live-label fix
+
+A sanitized live mapping assessment showed only the business phone unresolved.
+The safe Personio label is `Telefonnummer geschäftlich`. The exact Unicode
+label regression failed first with the required-fields error and passed after
+the alias was added. Existing phone aliases remain supported. An explicit
+UTF-8 code-point check confirmed that both production code and regression use
+the real `ä` character rather than the terminal replacement glyph.
+
+Fresh offline verification:
+
+```text
+stack/personio-directory/tests: 112 passed in 1.34s
+stack/tests: 421 passed, 2 failed in 5.80s
+```
+
+The two stack failures remain the known missing unversioned local reference
+files. No live API, environment variable or Compose service was accessed.
