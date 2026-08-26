@@ -317,8 +317,8 @@ def _personio_directory_intent(query: str) -> str:
     if re.search(r'\bmit\s+wem\b.*\b(?:arbeitet|zusammen)\b', folded):
         return 'coworker_lookup'
     if re.search(
-        r'\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|was\s+weisst\s+du\s+uber|'
-        r'was\s+hat|wie\s+hangen)\b',
+        r'\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|was\s+weisst\s+du\s+u(?:e)?ber|'
+        r'was\s+hat|wie\s+haengen)\b',
         folded,
     ):
         return 'person_lookup'

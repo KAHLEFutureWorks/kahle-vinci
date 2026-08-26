@@ -139,6 +139,27 @@ def test_pure_person_query_calls_personio_once_and_never_falls_back_to_rag():
         "passende freigegebene Information."
     )
 
+
+def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
+    personio_intent = load_function_from_middleware("_personio_directory_intent")
+    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
+        "_ascii_fold"
+    )
+
+    assert personio_intent("Was weißt du über Max Mustermann?") == "person_lookup"
+
+
+def test_german_wie_haengen_question_uses_person_lookup_intent():
+    personio_intent = load_function_from_middleware("_personio_directory_intent")
+    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
+        "_ascii_fold"
+    )
+
+    assert (
+        personio_intent("Wie hängen Max Mustermann und KAHLE-Vinci zusammen?")
+        == "person_lookup"
+    )
+
 def test_actual_middleware_gate_plans_directory_and_mixed_queries_before_legacy_rag_gate():
     gate = load_retrieval_gate()
     legacy_gate = load_rag_routing_helpers()
@@ -631,6 +652,7 @@ def load_function_from_middleware(name: str):
         "json": __import__("json"),
         "output_id": lambda prefix: f"{prefix}-fixed",
         "re": re,
+        "unicodedata": unicodedata,
         "resolve_query_aliases": lambda query: __import__("functools").reduce(
             lambda value, item: re.sub(
                 rf"(?<!\w){re.escape(item[0])}(?!\w)",
