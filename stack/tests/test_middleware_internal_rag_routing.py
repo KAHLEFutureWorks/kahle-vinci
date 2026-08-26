@@ -808,6 +808,16 @@ def test_prerouted_rag_tool_output_keeps_native_function_call_visible():
     assert completed[1]["call_id"] == "call-1"
 
 
+def test_prerouted_rag_status_is_hidden_for_personio_only_plan():
+    try:
+        should_emit = load_function_from_middleware("_should_emit_prerouted_rag_status")
+    except (KeyError, StopIteration):
+        pytest.fail("middleware must decide whether a RAG status is actually required")
+
+    assert should_emit(retrieval_plan("Wo arbeitet Max Mustermann?")) is False
+    assert should_emit(retrieval_plan("Was sagt unsere interne Richtlinie?")) is True
+
+
 def test_prerouted_rag_answer_stream_is_not_suppressed_after_evidence_is_ready():
     helper = load_function_from_middleware("_should_suppress_initial_rag_response")
 

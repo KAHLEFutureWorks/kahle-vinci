@@ -1101,6 +1101,13 @@ def _prerouted_rag_tool_output(
     return output
 
 
+def _should_emit_prerouted_rag_status(retrieval_plan: Any) -> bool:
+    """Show native RAG progress only when the fixed plan actually uses RAG."""
+    return 'rag_chat' in tuple(
+        getattr(retrieval_plan, 'required_tools', ()) or ()
+    )
+
+
 def _internal_rag_source_outcome(sources: list[dict[str, Any]]) -> str:
     """Return ``found`` or ``missing`` for a canonical rag_chat result."""
     for source in sources or []:
@@ -4704,14 +4711,18 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 # retrievals concurrently.
                 try:
                     pre_route_call_id = output_id('fc')
-                    metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
-                        pre_route_call_id, user_tool_request or '', completed=False,
+                    emit_prerouted_rag_status = _should_emit_prerouted_rag_status(
+                        retrieval_plan
                     )
-                    if event_emitter:
-                        await event_emitter({
-                            'type': 'chat:completion',
-                            'data': {'output': metadata['kahle_prerouted_rag_tool_output']},
-                        })
+                    if emit_prerouted_rag_status:
+                        metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
+                            pre_route_call_id, user_tool_request or '', completed=False,
+                        )
+                        if event_emitter:
+                            await event_emitter({
+                                'type': 'chat:completion',
+                                'data': {'output': metadata['kahle_prerouted_rag_tool_output']},
+                            })
 
                     async def retrieve_pre_route_rag() -> dict[str, Any]:
                         if 'rag_chat' not in tools_dict:
@@ -4760,14 +4771,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 pre_route_form_data.get('messages', []),
                             )
                         pre_route_sources = flags.get('sources', [])
-                        metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
-                            pre_route_call_id, user_tool_request or '', completed=True,
-                        )
-                        if event_emitter:
-                            await event_emitter({
-                                'type': 'chat:completion',
-                                'data': {'output': metadata['kahle_prerouted_rag_tool_output']},
-                            })
+                        if emit_prerouted_rag_status:
+                            metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
+                                pre_route_call_id, user_tool_request or '', completed=True,
+                            )
+                            if event_emitter:
+                                await event_emitter({
+                                    'type': 'chat:completion',
+                                    'data': {'output': metadata['kahle_prerouted_rag_tool_output']},
+                                })
                         return {
                             'form_data': pre_route_form_data,
                             'sources': pre_route_sources,
