@@ -149,7 +149,11 @@ class DirectorySearch:
                 relationship_basis=coworkers.basis,
             )
         return self._evidence(
-            self._directory_candidates(query.text, people),
+            self._directory_candidates(
+                query.text,
+                people,
+                ignore_unstructured_terms=intent == "onboarding_search",
+            ),
             sync_completed_at=sync_completed_at,
         )
 
@@ -224,10 +228,14 @@ class DirectorySearch:
         return self._ordered(matches)
 
     def _directory_candidates(
-        self, text: str, people: Iterable[PersonRecord]
+        self,
+        text: str,
+        people: Iterable[PersonRecord],
+        *,
+        ignore_unstructured_terms: bool = False,
     ) -> tuple[PersonRecord, ...]:
         people = tuple(people)
-        terms = _search_terms(text)
+        terms = () if ignore_unstructured_terms else _search_terms(text)
         filters = _explicit_field_filters(text, people)
         phone_digits = _digits(text)
         query_emails = _EMAIL.findall(text)

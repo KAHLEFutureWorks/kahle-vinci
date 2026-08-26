@@ -155,6 +155,39 @@ def test_onboarding_evidence_is_reduced_before_claims_and_never_leaks_contacts_o
     assert "employment_status" not in repr(explicit.claims)
 
 
+def test_general_onboarding_question_returns_all_onboarding_people_without_filler_filters():
+    nora = person("17", name="Nora Neu", status="ONBOARDING")
+    erik = person("18", name="Erik Einstieg", status="ONBOARDING", position="Verkäufer")
+
+    evidence = search([nora, erik]).search(
+        query("Welche neuen Mitarbeiter sind aktuell bei uns im Onboarding?")
+    )
+
+    assert evidence.status == "ok"
+    assert [claim["display_name"] for claim in evidence.claims] == [
+        "Erik Einstieg",
+        "Nora Neu",
+    ]
+    assert all(
+        set(claim) == {"display_name", "position", "department", "team", "office", "source_id"}
+        for claim in evidence.claims
+    )
+
+
+def test_role_limited_onboarding_question_keeps_the_explicit_role_filter():
+    onboarding_service = person("17", name="Nora Neu", status="ONBOARDING")
+    onboarding_sales = person(
+        "18", name="Erik Einstieg", status="ONBOARDING", position="Verkäufer"
+    )
+
+    evidence = search([onboarding_service, onboarding_sales]).search(
+        query("Welche neuen Serviceberater sind aktuell im Onboarding?")
+    )
+
+    assert evidence.status == "ok"
+    assert [claim["display_name"] for claim in evidence.claims] == ["Nora Neu"]
+
+
 def test_directory_search_combines_role_and_office_filters_and_uses_stable_personio_sources():
     erika = person("2", name="Erika Beispiel")
     anna = person("1", name="Anna Adler")
