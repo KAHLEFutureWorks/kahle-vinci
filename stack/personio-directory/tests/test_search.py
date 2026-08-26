@@ -27,6 +27,8 @@ def person(
     personio_id: str,
     *,
     name: str,
+    first_name: str | None = None,
+    last_name: str | None = None,
     position: str = "Serviceberater",
     department: str = "Service",
     team: str = "Service Hannover",
@@ -34,7 +36,9 @@ def person(
     status: str = "ACTIVE",
     supervisor_personio_id: str = "",
 ) -> PersonRecord:
-    first_name, last_name = name.split(" ", 1)
+    default_first_name, default_last_name = name.split(" ", 1)
+    first_name = first_name or default_first_name
+    last_name = last_name or default_last_name
     return PersonRecord(
         personio_id=personio_id,
         first_name=first_name,
@@ -141,6 +145,46 @@ def test_named_person_query_requires_exact_full_name_or_email_before_expansion()
     assert partial.status == "not_found"
     assert by_name.claims[0]["display_name"] == "Erika Beispiel"
     assert by_email.claims[0]["display_name"] == "Erika Beispiel"
+
+
+def test_unambiguous_first_and_last_name_alias_matches_display_name_with_middle_name():
+    employee = person(
+        "1",
+        name="Erika Marie Beispiel",
+        first_name="Erika",
+        last_name="Beispiel",
+    )
+
+    evidence = search([employee]).search(
+        query("Was weißt du über Erika Beispiel?", "person_lookup")
+    )
+
+    assert evidence.status == "ok"
+    assert [claim["display_name"] for claim in evidence.claims] == [
+        "Erika Marie Beispiel"
+    ]
+
+
+def test_ambiguous_first_and_last_name_alias_remains_fail_closed():
+    first = person(
+        "1",
+        name="Erika Marie Beispiel",
+        first_name="Erika",
+        last_name="Beispiel",
+    )
+    second = person(
+        "2",
+        name="Erika Maria Beispiel",
+        first_name="Erika",
+        last_name="Beispiel",
+    )
+
+    evidence = search([first, second]).search(
+        query("Was weißt du über Erika Beispiel?", "person_lookup")
+    )
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
 
 
 def test_short_who_is_person_question_uses_exact_gate_and_rejects_partial_names():

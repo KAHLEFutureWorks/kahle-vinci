@@ -20,7 +20,8 @@ _COWORKER_PHRASE = re.compile(
     re.IGNORECASE,
 )
 _PERSON_LOOKUP_PHRASE = re.compile(
-    r"\b(?:was\s+weisst\s+du\s+uber|wo\s+arbeitet|was\s+macht)\b",
+    r"\b(?:was\s+weisst\s+du(?:\s+alles)?\s+uber|wo\s+arbeitet|was\s+macht|"
+    r"wie\s+erreiche(?:\s+ich)?|(?:telefonnummer|kontaktdaten|e-?mail)\s+(?:von|fur))\b",
     re.IGNORECASE,
 )
 _SHORT_PERSON_QUESTION = re.compile(r"^wer\s+ist\s+\w+(?:\s+\w+)*$")
@@ -260,15 +261,27 @@ class DirectorySearch:
     ) -> tuple[PersonRecord, ...]:
         normalized = _normalise_text(text)
         normalized_email_text = _normalise_email_text(text)
-        matches = []
+        people = tuple(people)
+        exact_matches = []
         for person in people:
             full_name = _normalise_text(person.display_name)
             email = _normalise_email(person.business_email)
             name_matches = bool(full_name) and f" {full_name} " in f" {normalized} "
             email_matches = bool(email) and email in normalized_email_text
             if name_matches or email_matches:
-                matches.append(person)
-        return self._ordered(matches)
+                exact_matches.append(person)
+        if exact_matches:
+            return self._ordered(exact_matches)
+
+        aliases = []
+        for person in people:
+            name_parts = person.display_name.split()
+            if len(name_parts) < 3:
+                continue
+            alias = _normalise_text(f"{name_parts[0]} {name_parts[-1]}")
+            if alias and f" {alias} " in f" {normalized} ":
+                aliases.append(person)
+        return self._ordered(aliases) if len(aliases) == 1 else ()
 
     def _directory_candidates(
         self,
