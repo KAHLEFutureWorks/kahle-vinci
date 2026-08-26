@@ -268,6 +268,7 @@ async def _execute_kahle_retrieval_plan(
     *,
     query: str,
     directory_intent: str,
+    supervisor_candidate_query: str = '',
     user_id: str,
     user_role: str,
     personio_client: Any,
@@ -284,7 +285,11 @@ async def _execute_kahle_retrieval_plan(
 
     async def retrieve_personio() -> Any:
         return await personio_client.search(
-            query, directory_intent, user_id, user_role
+            query,
+            directory_intent,
+            user_id,
+            user_role,
+            candidate_query=supervisor_candidate_query,
         )
 
     if required_tools == ('personio_directory', 'rag_chat'):
@@ -325,6 +330,22 @@ def _personio_directory_intent(query: str) -> str:
     ):
         return 'person_lookup'
     return 'directory_search'
+
+
+def _supervisor_candidate_query(messages: list[dict[str, Any]], query: str) -> str:
+    """Return only the immediately preceding user request for a supervisor follow-up."""
+    if _personio_directory_intent(query) != 'supervisor_lookup':
+        return ''
+    current = str(query or '').strip()
+    prior_user_messages = [
+        str(message.get('content') or '').strip()
+        for message in messages
+        if isinstance(message, dict) and message.get('role') == 'user'
+    ]
+    for candidate in reversed(prior_user_messages):
+        if candidate and candidate != current:
+            return candidate
+    return ''
 
 
 def _knowledge_harness_metadata_payload(decision: Any) -> dict[str, Any]:
@@ -4793,6 +4814,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         query=user_tool_request or original_user_tool_request or '',
                         directory_intent=_personio_directory_intent(
                             user_tool_request or original_user_tool_request or ''
+                        ),
+                        supervisor_candidate_query=_supervisor_candidate_query(
+                            form_data.get('messages', []) or [],
+                            user_tool_request or original_user_tool_request or '',
                         ),
                         user_id=str(permission_scope.get('user_id') or ''),
                         user_role=str(permission_scope.get('role') or ''),

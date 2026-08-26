@@ -16,6 +16,7 @@ class PersonRecord:
     business_phone: str
     employment_status: Literal["ACTIVE", "LEAVE", "ONBOARDING"]
     source_updated_at: str
+    supervisor_personio_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class DirectoryQuery:
     ]
     user_id: str
     user_role: str
+    candidate_query: str = ""
 
 
 @dataclass(frozen=True)

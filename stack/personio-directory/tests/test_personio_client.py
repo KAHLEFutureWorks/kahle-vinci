@@ -15,6 +15,7 @@ OFFICIAL_V1_MAPPING = MAPPING | {
     "business_email": "email",
     "business_phone": "phone",
     "employment_status": "status",
+    "supervisor_personio_id": "supervisor",
 }
 
 
@@ -65,6 +66,7 @@ def v1_attributes() -> Response:
         {"key": "phone", "label": "Geschäftliche Telefonnummer"},
         {"key": "status", "label": "Beschäftigungsstatus"},
         {"key": "updated_at", "label": "Letzte Änderung"},
+        {"key": "supervisor", "label": "Supervisor"},
     ]})
 
 
@@ -80,6 +82,13 @@ def official_v1_person(status: str = "ACTIVE") -> dict[str, object]:
         "phone": "+49 555 000001",
         "status": status,
         "updated_at": "2026-08-24T10:15:00Z",
+        "supervisor": {
+            "type": "Employee",
+            "attributes": {
+                "id": {"value": 42, "label": "ID", "type": "standard", "universal_id": "id"},
+                "preferred_name": {"value": "Leitung", "label": "Name", "type": "standard", "universal_id": "name"},
+            },
+        },
     }
     return {
         "type": "Employee",
@@ -286,6 +295,7 @@ def test_v1_iter_people_flattens_official_attribute_envelope_for_probe(config):
         "phone": "+49 555 000001",
         "status": "ACTIVE",
         "updated_at": "2026-08-24T10:15:00Z",
+        "supervisor": "42",
     }
     assert "label" not in repr(people)
     assert "universal_id" not in repr(people)
@@ -295,6 +305,24 @@ def test_v1_iter_people_flattens_official_attribute_envelope_for_probe(config):
     assert filter_person(people[1], OFFICIAL_V1_MAPPING) is None
     _count_exclusion(people[1], OFFICIAL_V1_MAPPING, excluded)
     assert excluded == {"INACTIVE": 1, "INVALID": 0}
+
+
+def test_v1_supervisor_relationship_is_flattened_to_its_stable_personio_id(config):
+    session = FakeSession([
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        Response(200, {"data": [official_v1_person()]}),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+    client._assessment = type(
+        "Assessment", (), {"version": "v1", "mapping": OFFICIAL_V1_MAPPING}
+    )()
+
+    flattened = list(client.iter_people())[0]
+
+    assert flattened["supervisor"] == "42"
+    person = filter_person(flattened, OFFICIAL_V1_MAPPING)
+    assert person is not None
+    assert person.supervisor_personio_id == "42"
 
 
 def test_v1_relationship_without_string_name_flattens_to_empty(config):

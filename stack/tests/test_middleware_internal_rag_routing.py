@@ -8,8 +8,8 @@ class FakePersonioClient:
         self.started = started
         self.release = release
 
-    async def search(self, query, intent, user_id, user_role):
-        self.calls.append((query, intent, user_id, user_role))
+    async def search(self, query, intent, user_id, user_role, *, candidate_query=""):
+        self.calls.append((query, intent, user_id, user_role, candidate_query))
         if self.started is not None:
             self.started.set()
         if self.release is not None:
@@ -115,7 +115,7 @@ def test_pure_person_query_calls_personio_once_and_never_falls_back_to_rag():
         )
     )
 
-    assert personio.calls == [(query, "person_lookup", "user-1", "user")]
+    assert personio.calls == [(query, "person_lookup", "user-1", "user", "")]
     assert rag_calls == []
     assert result["personio_result"]["status"] == "not_found"
     assert result["rag_result"] == ""
@@ -138,6 +138,40 @@ def test_pure_person_query_calls_personio_once_and_never_falls_back_to_rag():
         "Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine "
         "passende freigegebene Information."
     )
+
+
+def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_context():
+    execute = load_planned_retrieval_executor()
+    query = "Wer davon ist die Führungskraft?"
+    prior_query = "Wer arbeitet im Teiledienst in Hannover?"
+    personio = FakePersonioClient(
+        {
+            "status": "not_found",
+            "claims": [],
+            "sources": [],
+            "sync_completed_at": "2026-08-24T10:15:00Z",
+            "stale": False,
+        }
+    )
+
+    result = asyncio.run(
+        execute(
+            retrieval_plan(query),
+            query=query,
+            directory_intent="supervisor_lookup",
+            supervisor_candidate_query=prior_query,
+            user_id="user-1",
+            user_role="user",
+            personio_client=personio,
+            rag_retriever=lambda: None,
+            metadata={},
+        )
+    )
+
+    assert result["rag_result"] == ""
+    assert personio.calls == [
+        (query, "supervisor_lookup", "user-1", "user", prior_query)
+    ]
 
 
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
@@ -384,6 +418,42 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
         "intent": "person_lookup",
         "user_id": "user-1",
         "user_role": "admin",
+    }
+
+
+def test_personio_client_passes_only_a_supervisor_candidate_query_to_the_private_api():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_supervisor_context")
+    captured = {}
+    payload = {
+        "status": "not_found",
+        "claims": [],
+        "sources": [],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search(
+            "Wer davon ist die Führungskraft?",
+            "supervisor_lookup",
+            "user-1",
+            "admin",
+            candidate_query="Wer arbeitet im Teiledienst in Hannover?",
+        )
+    )
+
+    assert result == payload
+    assert captured["json"] == {
+        "query": "Wer davon ist die Führungskraft?",
+        "intent": "supervisor_lookup",
+        "user_id": "user-1",
+        "user_role": "admin",
+        "candidate_query": "Wer arbeitet im Teiledienst in Hannover?",
     }
 
 def test_personio_client_returns_only_sanitized_unavailable_error_for_invalid_schema():

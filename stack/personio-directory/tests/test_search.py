@@ -32,6 +32,7 @@ def person(
     team: str = "Service Hannover",
     office: str = "Hannover",
     status: str = "ACTIVE",
+    supervisor_personio_id: str = "",
 ) -> PersonRecord:
     first_name, last_name = name.split(" ", 1)
     return PersonRecord(
@@ -47,6 +48,7 @@ def person(
         business_phone="+49 511 123456",
         employment_status=status,  # type: ignore[arg-type]
         source_updated_at="2026-08-24T10:15:00Z",
+        supervisor_personio_id=supervisor_personio_id,
     )
 
 
@@ -102,6 +104,30 @@ def test_supervisor_question_uses_dedicated_fail_closed_directory_intent():
     assert classify_directory_query("Wer davon ist die Führungskraft?") == "supervisor_lookup"
     assert evidence.status == "not_found"
     assert evidence.claims == ()
+
+
+def test_supervisor_follow_up_returns_only_the_explicitly_evidenced_prior_candidate():
+    leader = person("1", name="Erika Beispiel", position="Teiledienstleitung", department="Teiledienst")
+    report = person(
+        "2",
+        name="Anna Adler",
+        position="Teiledienstberaterin",
+        department="Teiledienst",
+        supervisor_personio_id="1",
+    )
+    directory = search([leader, report])
+    supervisor_query = DirectoryQuery(
+        text="Wer davon ist die Führungskraft?",
+        intent="supervisor_lookup",
+        user_id="test-user",
+        user_role="user",
+        candidate_query="Wer arbeitet im Teiledienst in Hannover?",
+    )
+
+    evidence = directory.search(supervisor_query)
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+    assert "supervisor_personio_id" not in repr(evidence.claims)
 
 
 def test_named_person_query_requires_exact_full_name_or_email_before_expansion():

@@ -44,6 +44,7 @@ class SearchRequest(BaseModel):
     ]
     user_id: str = Field(min_length=1, max_length=256)
     user_role: str = Field(min_length=1, max_length=32)
+    candidate_query: str = Field(default="", max_length=1000)
 
 
 class SearchResponse(BaseModel):
@@ -152,6 +153,7 @@ def create_app(
                 intent=payload.intent,
                 user_id=payload.user_id,
                 user_role=payload.user_role,
+                candidate_query=payload.candidate_query,
             )
         )
         return _response_from_evidence(evidence, onboarding=payload.intent == "onboarding_search")

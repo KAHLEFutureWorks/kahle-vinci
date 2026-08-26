@@ -3,9 +3,11 @@ from collections.abc import Mapping
 from app.models import PersonRecord
 
 
-_PERSON_FIELDS = frozenset(PersonRecord.__dataclass_fields__)
+_OPTIONAL_UNMAPPED_FIELDS = frozenset({"supervisor_personio_id"})
+_PERSON_FIELDS = frozenset(PersonRecord.__dataclass_fields__) - _OPTIONAL_UNMAPPED_FIELDS
 _DERIVED_PERSON_FIELDS = frozenset({"first_name", "last_name"})
 _MAPPED_PERSON_FIELDS = _PERSON_FIELDS - _DERIVED_PERSON_FIELDS
+_OPTIONAL_MAPPED_PERSON_FIELDS = frozenset({"supervisor_personio_id"})
 _ALLOWED_STATUSES = frozenset({"ACTIVE", "LEAVE", "ONBOARDING"})
 _REQUIRED_VALUE_FIELDS = frozenset(
     {"personio_id", "display_name", "employment_status", "source_updated_at"}
@@ -33,7 +35,10 @@ def filter_person(
     raw: Mapping[str, object], mapping: Mapping[str, str]
 ) -> PersonRecord | None:
     """Return a canonical directory record only when its mapping is safe."""
-    if set(mapping) != _MAPPED_PERSON_FIELDS or any(
+    if set(mapping) not in (
+        _MAPPED_PERSON_FIELDS,
+        _MAPPED_PERSON_FIELDS | _OPTIONAL_MAPPED_PERSON_FIELDS,
+    ) or any(
         not isinstance(source, str) or not source.strip()
         for source in mapping.values()
     ):
@@ -48,6 +53,11 @@ def filter_person(
         return None
 
     values = {field: raw.get(source) for field, source in mapping.items()}
+    values["supervisor_personio_id"] = (
+        str(values.get("supervisor_personio_id") or "").strip()
+        if "supervisor_personio_id" in mapping
+        else ""
+    )
     if any(
         not isinstance(values[field], str) or not values[field].strip()
         for field in _REQUIRED_VALUE_FIELDS
@@ -72,6 +82,8 @@ def filter_person(
     values["first_name"] = first_name
     values["last_name"] = last_name
     values["business_email"] = _kahle_business_email(values["business_email"])
+    if values["supervisor_personio_id"] and not values["supervisor_personio_id"].isdigit():
+        values["supervisor_personio_id"] = ""
 
     return PersonRecord(**values)  # type: ignore[arg-type]
 

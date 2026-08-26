@@ -163,6 +163,7 @@ class QdrantDirectoryIndex:
             "business_phone": person.business_phone,
             "employment_status": person.employment_status,
             "source_updated_at": person.source_updated_at,
+            "supervisor_personio_id": person.supervisor_personio_id,
             "exact_display_name": _normalise_text(person.display_name),
             "exact_email": person.business_email.casefold(),
             "exact_phone": "".join(char for char in person.business_phone if char.isdigit()),
@@ -181,7 +182,11 @@ def _normalise_text(value: str) -> str:
 def _person_from_payload(payload: Mapping[str, object]) -> PersonRecord:
     fields = PersonRecord.__dataclass_fields__
     values = {field: payload.get(field) for field in fields}
-    optional = {"position", "department", "team", "office", "business_email", "business_phone"}
+    values["supervisor_personio_id"] = values["supervisor_personio_id"] or ""
+    optional = {
+        "position", "department", "team", "office", "business_email",
+        "business_phone", "supervisor_personio_id",
+    }
     if any(not isinstance(value, str) for value in values.values()) or any(
         not values[field] for field in fields if field not in optional
     ):

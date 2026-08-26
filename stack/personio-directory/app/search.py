@@ -162,9 +162,10 @@ class DirectorySearch:
                 relationship_basis=coworkers.basis,
             )
         if intent == "supervisor_lookup":
-            # Candidate context and an explicitly mapped supervisor relation
-            # are intentionally required before naming any manager.
-            return self._evidence((), sync_completed_at=sync_completed_at)
+            return self._evidence(
+                self._supervisors_from_candidate_query(query.candidate_query, people),
+                sync_completed_at=sync_completed_at,
+            )
         return self._evidence(
             self._directory_candidates(
                 query.text,
@@ -211,6 +212,31 @@ class DirectorySearch:
                 ),
             )
         return CoworkerResult(None, ())
+
+    def _supervisors_from_candidate_query(
+        self, candidate_query: str, people: Iterable[PersonRecord]
+    ) -> tuple[PersonRecord, ...]:
+        """Resolve a manager only when one prior candidate explicitly evidences it."""
+        candidate_text = str(candidate_query or "").strip()
+        if not candidate_text:
+            return ()
+        candidate_intent = classify_directory_query(candidate_text)
+        if candidate_intent not in {"directory_search", "onboarding_search"}:
+            return ()
+        candidates = self._directory_candidates(
+            candidate_text,
+            people,
+            ignore_unstructured_terms=candidate_intent == "onboarding_search",
+        )
+        candidate_by_id = {person.personio_id: person for person in candidates}
+        supervisor_ids = {
+            person.supervisor_personio_id
+            for person in candidates
+            if person.supervisor_personio_id in candidate_by_id
+        }
+        if len(supervisor_ids) != 1:
+            return ()
+        return (candidate_by_id[supervisor_ids.pop()],)
 
     def _eligible_people(self, onboarding_requested: bool) -> tuple[PersonRecord, ...]:
         indexed_ids = self._index.indexed_personio_ids()

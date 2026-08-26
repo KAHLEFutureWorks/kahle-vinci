@@ -95,6 +95,7 @@ _V1_ALIASES: dict[str, tuple[str, ...]] = {
         "last modified",
         "letzte änderung",
     ),
+    "supervisor_personio_id": ("supervisor", "vorgesetzte", "vorgesetzter"),
 }
 
 
@@ -202,6 +203,8 @@ class PersonioClient:
             "employment_status": "employment_status",
             "source_updated_at": "updated_at",
         }
+        if "supervisor" in available_sources:
+            mapping["supervisor_personio_id"] = "supervisor"
         reasons = tuple(
             f"v2_{field}_unresolved"
             for field in _V2_REQUIRED_FIELDS
@@ -216,6 +219,7 @@ class PersonioClient:
         )
 
     def _iter_v1_people(self, updated_since: str | None) -> Iterator[dict[str, object]]:
+        supervisor_source = self.assess_api().mapping.get("supervisor_personio_id", "")
         offset = 0
         while True:
             params: dict[str, object] = {"limit": 100, "offset": offset}
@@ -229,7 +233,9 @@ class PersonioClient:
             for person in people:
                 if not isinstance(person, Mapping):
                     continue
-                flattened = _flatten_v1_person(person)
+                flattened = _flatten_v1_person(
+                    person, supervisor_source=supervisor_source
+                )
                 if flattened is not None:
                     yield flattened
             if len(people) < 100:
@@ -465,10 +471,17 @@ def _field_value(value: object) -> str:
 
 
 def _flatten_v1_person(
-    person: Mapping[str, object]
+    person: Mapping[str, object], *, supervisor_source: str = ""
 ) -> dict[str, object] | None:
     if "attributes" not in person:
-        return {str(key): _field_value(value) for key, value in person.items()}
+        return {
+            str(key): (
+                _relationship_personio_id(value)
+                if key == supervisor_source
+                else _field_value(value)
+            )
+            for key, value in person.items()
+        }
 
     attributes = person.get("attributes")
     if not isinstance(attributes, Mapping) or not attributes:
@@ -483,7 +496,9 @@ def _flatten_v1_person(
         ):
             return None
         value = attribute.get("value")
-        if key == "id" and isinstance(value, int) and not isinstance(value, bool):
+        if key == supervisor_source:
+            flattened[key] = _relationship_personio_id(value)
+        elif key == "id" and isinstance(value, int) and not isinstance(value, bool):
             flattened[key] = str(value)
         else:
             flattened[key] = _field_value(value)
@@ -507,8 +522,24 @@ def _flatten_v2_person(person: Mapping[str, object]) -> dict[str, object]:
         "department": _field_value(employment.get("department")),
         "team": _field_value(employment.get("team")),
         "office": _field_value(employment.get("office")),
+        "supervisor": _relationship_personio_id(employment.get("supervisor")),
         "updated_at": _field_value(person.get("updated_at") or employment.get("updated_at")),
     }
+
+
+def _relationship_personio_id(value: object) -> str:
+    if isinstance(value, Mapping):
+        candidate = value.get("id")
+        attributes = value.get("attributes")
+        if candidate is None and isinstance(attributes, Mapping):
+            candidate = attributes.get("id")
+        if isinstance(candidate, Mapping):
+            candidate = candidate.get("value")
+        if isinstance(candidate, int) and not isinstance(candidate, bool):
+            return str(candidate)
+        if isinstance(candidate, str) and candidate.strip().isdigit():
+            return candidate.strip()
+    return ""
 
 
 def _v2_available_sources(people: list[Mapping[str, object]]) -> set[str]:
@@ -531,7 +562,7 @@ def _v2_available_sources(people: list[Mapping[str, object]]) -> set[str]:
                 continue
             if "status" in employment:
                 sources.add("employment_status")
-            for field in ("position", "department", "team", "office", "business_phone"):
+            for field in ("position", "department", "team", "office", "business_phone", "supervisor"):
                 if field in employment:
                     sources.add(field)
             if "business_phone" in person:

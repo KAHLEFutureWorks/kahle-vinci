@@ -77,6 +77,8 @@ class PersonioDirectoryClient:
         intent: str,
         user_id: str,
         user_role: str,
+        *,
+        candidate_query: str = "",
     ) -> dict[str, Any]:
         if (
             not self._api_key
@@ -93,6 +95,8 @@ class PersonioDirectoryClient:
             "user_id": str(user_id).strip(),
             "user_role": user_role,
         }
+        if intent == "supervisor_lookup" and str(candidate_query or "").strip():
+            payload["candidate_query"] = str(candidate_query).strip()
         try:
             session_factory = self._session_factory
             session_options: dict[str, Any] = {}

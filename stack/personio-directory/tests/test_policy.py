@@ -89,6 +89,17 @@ def test_policy_keeps_only_business_email_at_exact_kahle_domain(email, expected)
     assert person.business_email == expected
 
 
+def test_policy_accepts_an_optional_supervisor_personio_id_without_public_disclosure():
+    raw = raw_person("ACTIVE", "INTERNAL") | {"supervisor_id": "42"}
+    mapping = MAPPING | {"supervisor_personio_id": "supervisor_id"}
+
+    person = filter_person(raw, mapping)
+
+    assert person is not None
+    assert person.supervisor_personio_id == "42"
+    assert "supervisor_personio_id" not in public_payload(person, onboarding_requested=False)
+
+
 def test_policy_rejects_unknown_employment_status():
     assert filter_person(raw_person("SABBATICAL", "INTERNAL"), MAPPING) is None
 
