@@ -199,8 +199,7 @@ class DirectorySearch:
         return self._ordered(
             person
             for person in people
-            if person.employment_type == "INTERNAL"
-            and person.employment_status in allowed_statuses
+            if person.employment_status in allowed_statuses
         )
 
     def _safe_intent(self, query: DirectoryQuery) -> DirectoryIntent:

@@ -44,7 +44,6 @@ def active_person(personio_id: str = "person-1") -> PersonRecord:
         business_email="erika.beispiel@kahle.de",
         business_phone="+49 511 123456",
         employment_status="ACTIVE",
-        employment_type="INTERNAL",
         source_updated_at="2026-08-24T10:15:00Z",
     )
 
@@ -74,7 +73,6 @@ def test_index_uses_isolated_collection_deterministic_id_and_safe_payload():
         "business_email": "erika.beispiel@kahle.de",
         "business_phone": "+49 511 123456",
         "employment_status": "ACTIVE",
-        "employment_type": "INTERNAL",
         "source_updated_at": "2026-08-24T10:15:00Z",
         "exact_display_name": "erika beispiel",
         "exact_email": "erika.beispiel@kahle.de",
@@ -82,6 +80,7 @@ def test_index_uses_isolated_collection_deterministic_id_and_safe_payload():
         "search_text": "Erika Beispiel Serviceberaterin Service Service Hannover Hannover",
     }
     assert all("private" not in key and "salary" not in key for key in point["payload"])
+    assert "employment_type" not in point["payload"]
 
 
 def test_index_physically_deletes_points_by_personio_id():

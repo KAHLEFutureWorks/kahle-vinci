@@ -17,7 +17,7 @@ def main() -> int:
     try:
         client = PersonioClient(PersonioConfig.from_env())
         assessment = client.assess_api()
-        excluded = Counter({"INACTIVE": 0, "EXTERNAL": 0, "INVALID": 0})
+        excluded = Counter({"INACTIVE": 0, "INVALID": 0})
         eligible_count = 0
         for raw_person in client.iter_people():
             person = filter_person(raw_person, assessment.mapping)
@@ -36,17 +36,14 @@ def main() -> int:
     print(f"eligible_count={eligible_count}")
     print(
         "excluded_counts="
-        + ",".join(f"{kind}:{excluded[kind]}" for kind in ("INACTIVE", "EXTERNAL", "INVALID"))
+        + ",".join(f"{kind}:{excluded[kind]}" for kind in ("INACTIVE", "INVALID"))
     )
     return 0
 
 
 def _count_exclusion(raw_person: dict[str, object], mapping: dict[str, str], excluded: Counter[str]) -> None:
     status = str(raw_person.get(mapping.get("employment_status", ""), "")).strip()
-    employment_type = str(raw_person.get(mapping.get("employment_type", ""), "")).strip()
-    if employment_type and employment_type != "INTERNAL":
-        excluded["EXTERNAL"] += 1
-    elif status == "INACTIVE":
+    if status == "INACTIVE":
         excluded["INACTIVE"] += 1
     else:
         excluded["INVALID"] += 1

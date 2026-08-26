@@ -162,7 +162,6 @@ class QdrantDirectoryIndex:
             "business_email": person.business_email,
             "business_phone": person.business_phone,
             "employment_status": person.employment_status,
-            "employment_type": person.employment_type,
             "source_updated_at": person.source_updated_at,
             "exact_display_name": _normalise_text(person.display_name),
             "exact_email": person.business_email.casefold(),
@@ -185,7 +184,5 @@ def _person_from_payload(payload: Mapping[str, object]) -> PersonRecord:
     if any(not isinstance(value, str) or not value for value in values.values()):
         raise RuntimeError("qdrant_response_invalid")
     if values["employment_status"] not in {"ACTIVE", "LEAVE", "ONBOARDING"}:
-        raise RuntimeError("qdrant_response_invalid")
-    if values["employment_type"] != "INTERNAL":
         raise RuntimeError("qdrant_response_invalid")
     return PersonRecord(**values)  # type: ignore[arg-type]

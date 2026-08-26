@@ -15,7 +15,6 @@ class PersonRecord:
     business_email: str
     business_phone: str
     employment_status: Literal["ACTIVE", "LEAVE", "ONBOARDING"]
-    employment_type: Literal["INTERNAL"]
     source_updated_at: str
 
 

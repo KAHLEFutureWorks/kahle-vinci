@@ -659,3 +659,21 @@ nur die visuelle Portalabnahme unter `http://localhost:3004/wissen/`: native
 `rag_chat`-Animation, sichtbare Dokumentquellen, genau ein funktionierender
 Wissensfehler-Link und kein nachträglicher Antwortwechsel. Vor dieser Abnahme
 wird kein Produktionspaket freigegeben.
+
+## Zwölfter Implementierungsschritt: Preferred Name und Beschäftigungsart
+
+Die fachliche Entscheidung vom 26. August 2026 ersetzt die bisherige Annahme
+zu getrennten Vor- und Nachnamen sowie zur Beschäftigungsart. `Name (preferred)`
+ist nun die einzige erforderliche Namensquelle und wird unverändert als
+normalisierter Anzeigename verwendet. Nur für die interne Suchstruktur wird
+deterministisch der letzte Namensteil als Nachname und der gesamte davorstehende
+Teil als Vorname abgeleitet. Leere, einteilige oder fehlerhaft aufgebaute Namen
+werden nicht indexiert.
+
+`first_name`, `last_name` und `employment_type` sind keine erforderlichen
+Personio-Mappings mehr. Die Beschäftigungsart wird weder gelesen noch als
+Filter-, Index- oder Antwortfeld verwendet. Damit werden externe Personen
+bewusst genauso wie interne Personen behandelt. `Last modified` bleibt als
+Pflichtquelle für `source_updated_at` erhalten, weil der Delta-Sync weiterhin
+einen belastbaren Änderungszeitpunkt benötigt. Diese Änderung wurde nur mit
+synthetischen Daten geprüft; es fand kein Live-Zugriff statt.

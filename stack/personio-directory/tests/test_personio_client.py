@@ -46,8 +46,7 @@ def config() -> PersonioConfig:
 def v1_attributes() -> Response:
     return Response(200, {"data": [
         {"key": "id", "label": "ID"},
-        {"key": "first_name", "label": "Vorname"},
-        {"key": "last_name", "label": "Nachname"},
+        {"key": "preferred_name", "label": "Name (preferred)"},
         {"key": "position", "label": "Position"},
         {"key": "department", "label": "Abteilung"},
         {"key": "team", "label": "Team"},
@@ -55,7 +54,6 @@ def v1_attributes() -> Response:
         {"key": "email", "label": "Geschäftliche E-Mail"},
         {"key": "phone", "label": "Geschäftliche Telefonnummer"},
         {"key": "status", "label": "Beschäftigungsstatus"},
-        {"key": "employment_type", "label": "Beschäftigungsart"},
         {"key": "updated_at", "label": "Letzte Änderung"},
     ]})
 
@@ -88,12 +86,12 @@ def test_assessment_prefers_v2_when_all_required_fields_are_useful(config):
         Response(200, {"access_token": "v2-token", "expires_in": 3600}),
         Response(200, {"data": [{
             "id": "person-1",
-            "first_name": "Only",
-            "last_name": "Test",
+            "preferred_name": "Only Test",
             "email": "only.test@example.invalid",
+            "updated_at": "2026-08-24T10:15:00Z",
             "employments": [{
                 "status": "ACTIVE",
-                "employment_type": "INTERNAL",
+                "employment_type": "EXTERNAL",
                 "position": {"name": "Beratung"},
                 "department": {"name": "Service"},
                 "team": {"name": "Nord"},
@@ -108,10 +106,49 @@ def test_assessment_prefers_v2_when_all_required_fields_are_useful(config):
 
     assert assessment.version == "v2"
     assert set(assessment.mapping) >= {
-        "personio_id", "employment_status", "employment_type", "position",
+        "personio_id", "display_name", "employment_status", "position",
         "department", "team", "office", "business_email", "business_phone",
+        "source_updated_at",
     }
+    assert {"first_name", "last_name", "employment_type"}.isdisjoint(assessment.mapping)
     assert assessment.reason_codes == ()
+
+
+def test_v1_assessment_requires_preferred_name_but_not_split_names_or_employment_type(config):
+    session = FakeSession([
+        Response(200, {"access_token": "v2-token", "expires_in": 3600}),
+        Response(200, {"data": []}),
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        v1_attributes(),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+
+    assessment = client.assess_api()
+
+    assert assessment.version == "v1"
+    assert assessment.mapping["display_name"] == "preferred_name"
+    assert {"first_name", "last_name", "employment_type"}.isdisjoint(assessment.mapping)
+
+
+def test_v1_assessment_still_requires_last_modified_for_delta_sync(config):
+    attributes_without_last_modified = v1_attributes()._payload
+    attributes_without_last_modified = {
+        "data": [
+            attribute
+            for attribute in attributes_without_last_modified["data"]
+            if attribute["key"] != "updated_at"
+        ]
+    }
+    session = FakeSession([
+        Response(200, {"access_token": "v2-token", "expires_in": 3600}),
+        Response(200, {"data": []}),
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        Response(200, attributes_without_last_modified),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+
+    with pytest.raises(PersonioError, match="personio_required_fields_unresolved"):
+        client.assess_api()
 
 
 def test_v1_iter_people_uses_bounded_offset_pagination_and_updated_since(config):
@@ -126,7 +163,7 @@ def test_v1_iter_people_uses_bounded_offset_pagination_and_updated_since(config)
     people = list(client.iter_people(updated_since="2026-08-24T00:00:00Z"))
 
     assert len(people) == 100
-    assert people[0] == {"id": "person-0", "display_name": ""}
+    assert people[0] == {"id": "person-0"}
     calls = [call for call in session.calls if call.url.endswith("/v1/company/employees")]
     assert [call.kwargs["params"] for call in calls] == [
         {"limit": 100, "offset": 0, "updated_since": "2026-08-24T00:00:00Z"},
@@ -254,8 +291,9 @@ def test_v2_assessment_resolves_separate_employment_records(config):
     session = FakeSession([
         Response(200, {"access_token": "v2-token", "expires_in": 3600}),
         Response(200, {"data": [{
-            "id": "person-1", "first_name": "Only", "last_name": "Test",
+            "id": "person-1", "preferred_name": "Only Test",
             "email": "only.test@example.invalid",
+            "updated_at": "2026-08-24T10:15:00Z",
         }]}),
         Response(200, {"data": [{
             "status": "ACTIVE", "employment_type": "INTERNAL",
@@ -276,7 +314,9 @@ def test_v2_assessment_accepts_documented_employment_envelope(config):
         Response(200, {
             "_data": [{
                 "id": "synthetic-person-1",
+                "preferred_name": "Synthetic Person",
                 "email": "directory@example.invalid",
+                "updated_at": "2026-08-24T10:15:00Z",
             }],
             "_meta": {"links": {"next": None}},
         }),
@@ -550,8 +590,9 @@ def test_v2_assessment_uses_a_bounded_representative_sample_and_safe_labels(conf
         Response(200, {"access_token": "v2-token", "expires_in": 3600}),
         Response(200, {"data": [
             {
-                "id": "person-1", "first_name": "One", "last_name": "Test",
+                "id": "person-1", "preferred_name": "One Test",
                 "email": "one@example.invalid",
+                "updated_at": "2026-08-24T10:15:00Z",
                 "attributes": [{"key": "work_phone", "label": "Dienstliche Telefonnummer", "value": "hidden"}],
                 "employments": [{
                     "status": "ACTIVE", "employment_type": "INTERNAL",
@@ -560,8 +601,9 @@ def test_v2_assessment_uses_a_bounded_representative_sample_and_safe_labels(conf
                 }],
             },
             {
-                "id": "person-2", "first_name": "Two", "last_name": "Test",
+                "id": "person-2", "preferred_name": "Two Test",
                 "email": "two@example.invalid",
+                "updated_at": "2026-08-24T10:15:00Z",
                 "employments": [{
                     "status": "ACTIVE", "employment_type": "INTERNAL",
                     "position": {"name": "Beratung"}, "department": {"name": "Service"},

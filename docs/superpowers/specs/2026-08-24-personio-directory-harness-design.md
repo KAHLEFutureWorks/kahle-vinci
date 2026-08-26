@@ -1,6 +1,6 @@
 # Personio-Mitarbeiterverzeichnis im KAHLE-Vinci Knowledge Harness
 
-**Stand:** 24. August 2026  
+**Stand:** 26. August 2026
 **Status:** Fachlich freigegeben
 
 ## Ziel
@@ -23,8 +23,10 @@ Personio-Adapter und eine kontrollierte Mehrquellenplanung ergänzt.
 - `LEAVE` wird in der normalen Mitarbeitersuche berücksichtigt.
 - `ONBOARDING` wird synchronisiert, bleibt aber außerhalb ausdrücklich
   formulierter Onboarding-Fragen unsichtbar.
-- `INACTIVE`, ausgeschiedene und externe Personen werden nicht indexiert
-  beziehungsweise beim Vollabgleich entfernt.
+- `INACTIVE` und ausgeschiedene Personen werden nicht indexiert beziehungsweise
+  beim Vollabgleich entfernt.
+- Die Beschäftigungsart wird weder gelesen noch ausgewertet. Externe Personen
+  werden im Verzeichnis genauso behandelt und dargestellt wie interne.
 - Alle angemeldeten OpenWebUI-Rollen `user` und `admin` dürfen die freigegebenen
   Verzeichnisdaten sehen. `pending` erhält keinen Zugriff.
 
@@ -33,19 +35,21 @@ Personio-Adapter und eine kontrollierte Mehrquellenplanung ergänzt.
 Für aktive Personen und `LEAVE`:
 
 - stabile Personio-ID
-- Vorname, Nachname und Anzeigename
+- `Name (preferred)` als einzige Namensquelle und Anzeigename. Für die interne
+  Suchstruktur wird der normalisierte letzte Namensteil als Nachname und der
+  gesamte davorstehende Teil als Vorname abgeleitet.
 - Position
 - Abteilung
 - Team
 - Office beziehungsweise Standort
 - geschäftliche E-Mail-Adresse
 - geschäftliche Telefonnummer
-- Beschäftigungsstatus und Beschäftigungsart als interne Filterfelder
+- Beschäftigungsstatus als internes Filterfeld
 - Zeitstempel der letzten Personio-Änderung und des letzten erfolgreichen Syncs
 
 Für `ONBOARDING` dürfen Antworten ausschließlich folgende Felder enthalten:
 
-- Vorname und Nachname
+- Anzeigename aus `Name (preferred)`
 - zukünftige Position
 - Abteilung beziehungsweise Bereich
 - Team
@@ -283,7 +287,8 @@ Pflichtfälle für alle verfügbaren Vinci-Modelle:
 4. `ONBOARDING` in normaler Suche verbergen.
 5. `ONBOARDING` bei ausdrücklicher Onboarding-Frage mit reduzierten Feldern
    liefern.
-6. `INACTIVE` und externe Personen nicht liefern.
+6. `INACTIVE` nicht liefern; externe Personen wie interne Personen liefern,
+   ohne ihre Beschäftigungsart anzuzeigen.
 7. Zusammenarbeitskaskade Team, Position plus Standort, Abteilung plus Standort
    belegen.
 8. Reine Personenfrage ruft nur `personio_directory` auf.

@@ -46,7 +46,6 @@ def person(
         business_email=f"{first_name.casefold()}.{last_name.casefold()}@kahle.de",
         business_phone="+49 511 123456",
         employment_status=status,  # type: ignore[arg-type]
-        employment_type="INTERNAL",
         source_updated_at="2026-08-24T10:15:00Z",
     )
 
@@ -173,6 +172,7 @@ def test_directory_search_combines_role_and_office_filters_and_uses_stable_perso
     )
     assert evidence.sync_completed_at == "2026-08-24T10:15:00Z"
     assert evidence.stale is False
+    assert "employment_type" not in repr(evidence.claims)
 
 
 def test_team_name_does_not_accidentally_add_an_office_filter():

@@ -184,3 +184,34 @@ These steps were not attempted. The current Codex process had previously not
 inherited the two Windows variables, and this task was explicitly restricted
 from reading them or accessing the live API. No Personio secret, employee value
 or live response was read, printed or persisted.
+
+## Preferred-name and employment-type override
+
+The user-approved 26 August domain decision replaces the earlier split-name
+and internal-only assumptions. The first focused policy cycle failed with
+`3 failed, 11 passed`; after extending the contract across API assessment,
+sync, index and search, the broader red run reported `23 failed, 64 passed`.
+
+The implementation now requires `Name (preferred)` as the sole human-name
+mapping. It normalizes whitespace, uses the final token as `last_name`, uses
+all preceding tokens as `first_name`, and rejects blank, single-token or
+malformed names. Split first/last fields and employment type are no longer API
+requirements. Raw employment type is not inspected by the API adapter, probe,
+policy, sync, index or search code, so synthetic `EXTERNAL` records follow the
+same path as internal records. A focused probe regression failed before that
+last legacy access was removed and passed afterwards. `Last modified` remains
+required for delta sync.
+
+Fresh offline verification after the minimal implementation:
+
+```text
+stack/personio-directory/tests: 100 passed in 0.98s
+stack/tests: 421 passed, 2 failed in 5.69s
+```
+
+The two stack failures are the unchanged worktree infrastructure gaps already
+present at baseline: missing unversioned local files
+`deploy/activate-kahle-open-webui-wissensportal-20260813.sh` and
+`stack/.env.production.example`. Neither file was copied or created, and the
+failures are unrelated to the Personio feature. No live API, environment
+variable or local Compose service was accessed.

@@ -1,5 +1,22 @@
+import pytest
+
 from app.policy import filter_person, public_payload
 from fixtures import MAPPING, raw_person
+
+
+PREFERRED_NAME_MAPPING = {
+    key: value
+    for key, value in MAPPING.items()
+    if key not in {"first_name", "last_name", "employment_type"}
+} | {"display_name": "preferred_name"}
+
+
+def preferred_person(name: object, employment_type: str = "EXTERNAL"):
+    return raw_person("ACTIVE", employment_type) | {
+        "preferred_name": name,
+        "first_name": "must not be used",
+        "last_name": "must not be used",
+    }
 
 
 def test_policy_keeps_active_and_leave_but_hides_onboarding_by_default():
@@ -21,9 +38,9 @@ def test_onboarding_payload_is_reduced_before_evidence_creation():
     }
 
 
-def test_policy_rejects_inactive_and_external_people():
+def test_policy_rejects_inactive_people_but_ignores_external_type():
     assert filter_person(raw_person("INACTIVE", "INTERNAL"), MAPPING) is None
-    assert filter_person(raw_person("ACTIVE", "EXTERNAL"), MAPPING) is None
+    assert filter_person(raw_person("ACTIVE", "EXTERNAL"), MAPPING) is not None
 
 
 def test_policy_rejects_personio_id_mapped_from_a_non_id_source():
@@ -41,10 +58,49 @@ def test_policy_rejects_sensitive_source_mapping_for_any_directory_field():
 
 
 def test_policy_rejects_missing_required_value():
-    raw = raw_person("ACTIVE", "INTERNAL") | {"first_name": ""}
+    raw = raw_person("ACTIVE", "INTERNAL") | {"preferred_name": ""}
 
     assert filter_person(raw, MAPPING) is None
 
 
 def test_policy_rejects_unknown_employment_status():
     assert filter_person(raw_person("SABBATICAL", "INTERNAL"), MAPPING) is None
+
+
+def test_policy_derives_jan_oltmanns_only_from_preferred_name():
+    person = filter_person(preferred_person("  Jan   Oltmanns  "), PREFERRED_NAME_MAPPING)
+
+    assert person is not None
+    assert person.display_name == "Jan Oltmanns"
+    assert person.first_name == "Jan"
+    assert person.last_name == "Oltmanns"
+
+
+def test_policy_uses_last_token_as_last_name_for_multiword_preferred_name():
+    person = filter_person(
+        preferred_person("Max van der Mustermann"),
+        PREFERRED_NAME_MAPPING,
+    )
+
+    assert person is not None
+    assert person.display_name == "Max van der Mustermann"
+    assert person.first_name == "Max van der"
+    assert person.last_name == "Mustermann"
+
+
+@pytest.mark.parametrize("preferred_name", ["", "   ", "Madonna", "Jan 123"])
+def test_policy_rejects_blank_single_token_or_malformed_preferred_name(preferred_name):
+    assert filter_person(
+        preferred_person(preferred_name),
+        PREFERRED_NAME_MAPPING,
+    ) is None
+
+
+def test_policy_includes_external_employee_without_mapping_employment_type():
+    person = filter_person(
+        preferred_person("Erika Beispiel", employment_type="EXTERNAL"),
+        PREFERRED_NAME_MAPPING,
+    )
+
+    assert person is not None
+    assert person.display_name == "Erika Beispiel"

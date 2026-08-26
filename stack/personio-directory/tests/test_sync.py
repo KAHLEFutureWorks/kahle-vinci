@@ -111,6 +111,31 @@ def test_full_sync_deletes_people_missing_from_personio(tmp_path):
     assert state.indexed_people() == {"person-1": "2026-08-24T10:15:00Z"}
 
 
+def test_full_sync_indexes_external_employee_without_employment_type_mapping(tmp_path):
+    mapping = {
+        key: value
+        for key, value in MAPPING.items()
+        if key not in {"first_name", "last_name", "employment_type"}
+    } | {"display_name": "preferred_name"}
+    external = raw_person("ACTIVE", "EXTERNAL") | {
+        "preferred_name": "Jan Oltmanns",
+        "first_name": "must not be used",
+        "last_name": "must not be used",
+    }
+    index = FakeIndex()
+
+    report = DirectorySync(
+        Client([external], mapping=mapping),
+        index,
+        SQLiteSyncState(tmp_path / "personio.sqlite3"),
+    ).run_full()
+
+    assert report.upserted == 1
+    assert index.records["person-1"].display_name == "Jan Oltmanns"
+    assert index.records["person-1"].first_name == "Jan"
+    assert index.records["person-1"].last_name == "Oltmanns"
+
+
 def test_full_sync_reconciles_the_collection_even_when_state_snapshot_is_stale(tmp_path):
     state = SQLiteSyncState(tmp_path / "personio.sqlite3")
     with state.run("full") as run:
@@ -167,7 +192,7 @@ def test_full_sync_is_due_initially_then_after_24_hours(tmp_path):
 def test_full_sync_keeps_existing_person_seen_with_temporarily_malformed_data(tmp_path):
     state = SQLiteSyncState(tmp_path / "personio.sqlite3")
     index = FakeIndex(existing_ids={"person-1"})
-    malformed = raw_person("ACTIVE", "INTERNAL") | {"first_name": ""}
+    malformed = raw_person("ACTIVE", "INTERNAL") | {"preferred_name": "single"}
 
     report = DirectorySync(Client([malformed]), index, state).run_full()
 

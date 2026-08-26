@@ -7,9 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 MAPPING = {
     "personio_id": "id",
-    "first_name": "first_name",
-    "last_name": "last_name",
-    "display_name": "display_name",
+    "display_name": "preferred_name",
     "position": "position",
     "department": "department",
     "team": "team",
@@ -17,7 +15,6 @@ MAPPING = {
     "business_email": "business_email",
     "business_phone": "business_phone",
     "employment_status": "employment_status",
-    "employment_type": "employment_type",
     "source_updated_at": "updated_at",
 }
 
@@ -25,6 +22,7 @@ MAPPING = {
 def raw_person(status: str, employment_type: str) -> dict[str, str]:
     return {
         "id": "person-1",
+        "preferred_name": "Erika Beispiel",
         "first_name": "Erika",
         "last_name": "Beispiel",
         "display_name": "Erika Beispiel",

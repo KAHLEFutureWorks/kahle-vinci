@@ -32,8 +32,6 @@ class ApiAssessment:
 
 _CANONICAL_FIELDS = (
     "personio_id",
-    "first_name",
-    "last_name",
     "display_name",
     "position",
     "department",
@@ -42,19 +40,19 @@ _CANONICAL_FIELDS = (
     "business_email",
     "business_phone",
     "employment_status",
-    "employment_type",
     "source_updated_at",
 )
 _V2_REQUIRED_FIELDS = (
     "personio_id",
+    "display_name",
     "employment_status",
-    "employment_type",
     "position",
     "department",
     "team",
     "office",
     "business_email",
     "business_phone",
+    "source_updated_at",
 )
 _V2_SAMPLE_LIMIT = 10
 _V1_TOKEN_LIFETIME_SECONDS = 24 * 60 * 60
@@ -74,8 +72,7 @@ _SENSITIVE_MARKERS = (
     "tax",
 )
 _V1_ALIASES: dict[str, tuple[str, ...]] = {
-    "first_name": ("first_name", "first name", "vorname"),
-    "last_name": ("last_name", "last name", "nachname"),
+    "display_name": ("name (preferred)",),
     "position": ("position", "job title", "job_position", "rolle"),
     "department": ("department", "abteilung", "bereich"),
     "team": ("team",),
@@ -83,7 +80,6 @@ _V1_ALIASES: dict[str, tuple[str, ...]] = {
     "business_email": ("email", "email address", "e-mail", "geschäftliche e-mail", "dienstliche e-mail"),
     "business_phone": ("phone", "telephone", "telefon", "geschäftliche telefonnummer", "dienstliche telefonnummer"),
     "employment_status": ("status", "employment status", "beschäftigungsstatus"),
-    "employment_type": ("employment_type", "employment type", "beschäftigungsart"),
     "source_updated_at": ("updated_at", "updated at", "last modified", "letzte änderung"),
 }
 
@@ -182,9 +178,7 @@ class PersonioClient:
         available_sources = _v2_available_sources(sample_people)
         mapping = {
             "personio_id": "id",
-            "first_name": "first_name",
-            "last_name": "last_name",
-            "display_name": "display_name",
+            "display_name": "preferred_name",
             "position": "position",
             "department": "department",
             "team": "team",
@@ -192,7 +186,6 @@ class PersonioClient:
             "business_email": "email",
             "business_phone": "business_phone",
             "employment_status": "employment_status",
-            "employment_type": "employment_type",
             "source_updated_at": "updated_at",
         }
         reasons = tuple(
@@ -283,7 +276,7 @@ class PersonioClient:
         return dict(person) | {"employments": _v2_data(payload)}
 
     def _v1_mapping(self, attributes: Mapping[str, str]) -> dict[str, str]:
-        mapping = {"personio_id": "id", "display_name": "display_name"}
+        mapping = {"personio_id": "id"}
         for field, aliases in _V1_ALIASES.items():
             source = _find_alias(attributes, aliases)
             if source:
@@ -453,11 +446,7 @@ def _field_value(value: object) -> str:
 
 
 def _flatten_v1_person(person: Mapping[str, object]) -> dict[str, object]:
-    flattened = {str(key): _field_value(value) for key, value in person.items()}
-    flattened["display_name"] = " ".join(
-        value for value in (flattened.get("first_name", ""), flattened.get("last_name", "")) if value
-    )
-    return flattened
+    return {str(key): _field_value(value) for key, value in person.items()}
 
 
 def _flatten_v2_person(person: Mapping[str, object]) -> dict[str, object]:
@@ -465,17 +454,14 @@ def _flatten_v2_person(person: Mapping[str, object]) -> dict[str, object]:
     employments = person.get("employments")
     if isinstance(employments, list) and employments and isinstance(employments[0], Mapping):
         employment = employments[0]
-    first_name = _field_value(person.get("first_name") or person.get("firstName"))
-    last_name = _field_value(person.get("last_name") or person.get("lastName"))
     return {
         "id": _field_value(person.get("id")),
-        "first_name": first_name,
-        "last_name": last_name,
-        "display_name": " ".join(value for value in (first_name, last_name) if value),
+        "preferred_name": _field_value(
+            person.get("preferred_name") or person.get("preferredName")
+        ),
         "email": _field_value(person.get("email") or person.get("business_email")),
         "business_phone": _field_value(employment.get("business_phone") or person.get("business_phone")),
         "employment_status": _field_value(employment.get("status")),
-        "employment_type": _field_value(employment.get("employment_type") or employment.get("type")),
         "position": _field_value(employment.get("position")),
         "department": _field_value(employment.get("department")),
         "team": _field_value(employment.get("team")),
@@ -490,10 +476,8 @@ def _v2_available_sources(people: list[Mapping[str, object]]) -> set[str]:
     for person in people:
         if "id" in person:
             sources.add("id")
-        if "first_name" in person or "firstName" in person:
-            sources.add("first_name")
-        if "last_name" in person or "lastName" in person:
-            sources.add("last_name")
+        if "preferred_name" in person or "preferredName" in person:
+            sources.add("preferred_name")
         if "email" in person or "business_email" in person:
             sources.add("email")
         if "updated_at" in person:
@@ -506,8 +490,6 @@ def _v2_available_sources(people: list[Mapping[str, object]]) -> set[str]:
                 continue
             if "status" in employment:
                 sources.add("employment_status")
-            if "employment_type" in employment or "type" in employment:
-                sources.add("employment_type")
             for field in ("position", "department", "team", "office", "business_phone"):
                 if field in employment:
                     sources.add(field)
@@ -515,7 +497,6 @@ def _v2_available_sources(people: list[Mapping[str, object]]) -> set[str]:
                 sources.add("business_phone")
             if "updated_at" in employment:
                 sources.add("updated_at")
-    sources.add("display_name")
     return sources
 
 

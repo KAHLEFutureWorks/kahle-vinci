@@ -3,6 +3,14 @@
 Stand: 19. August 2026  
 Quellenbasis: ausschließlich offizielle Personio-Dokumentation und offizielles Personio Help Center
 
+> **Fachliche Aktualisierung vom 26. August 2026:** Für die Umsetzung ist
+> `Name (preferred)` die einzige erforderliche Namensquelle. Vor- und Nachname
+> werden ausschließlich intern daraus abgeleitet. Die Beschäftigungsart wird
+> nicht gelesen, gefiltert oder angezeigt; externe Personen werden wie interne
+> Personen behandelt. Historische Feld- und Filterüberlegungen weiter unten
+> dokumentieren den damaligen Recherchestand, gelten aber nicht mehr als
+> Umsetzungsvorgabe. `Last modified` bleibt für den Delta-Sync verpflichtend.
+
 ## Kurzfazit
 
 Ja, Personio bietet geeignete öffentliche APIs, um ein automatisch gepflegtes Mitarbeiterverzeichnis in KAHLE-Vinci bereitzustellen. Für den ersten produktiven Aufbau ist eine **serverseitige, rein lesende Custom Integration** sinnvoll, die ausschließlich folgende freigegebene Felder abruft:

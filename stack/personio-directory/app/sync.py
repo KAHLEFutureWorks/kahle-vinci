@@ -167,5 +167,4 @@ def _utc_now() -> str:
 
 def _is_explicitly_ineligible(raw: Mapping[str, object], mapping: Mapping[str, str]) -> bool:
     status = raw.get(mapping["employment_status"])
-    employment_type = raw.get(mapping["employment_type"])
-    return status not in {"ACTIVE", "LEAVE", "ONBOARDING"} or employment_type != "INTERNAL"
+    return status not in {"ACTIVE", "LEAVE", "ONBOARDING"}

@@ -60,10 +60,15 @@ Der erfolgreiche Probe zeigt ausschließlich:
 - die aufgelösten kanonischen Feldnamen
 - aggregierte Anzahlen geeigneter und ausgeschlossener Datensätze
 
-Erwartet werden die kanonischen Felder `personio_id`, `first_name`,
-`last_name`, `display_name`, `position`, `department`, `team`, `office`,
-`business_email`, `business_phone`, `employment_status`, `employment_type` und
-`source_updated_at`. Wenn der Probe fehlschlägt oder ein benötigtes
+Erwartet werden die API-Mappings `personio_id`, `display_name`, `position`,
+`department`, `team`, `office`, `business_email`, `business_phone`,
+`employment_status` und `source_updated_at`. `display_name` muss ausschließlich
+auf das Personio-Feld mit der Bezeichnung `Name (preferred)` zeigen;
+`source_updated_at` bleibt für den Delta-Sync über `Last modified` beziehungsweise
+`Letzte Änderung` verpflichtend. Vor- und Nachname werden intern aus dem
+normalisierten Preferred Name abgeleitet und sind keine eigenen API-Mappings.
+Die Beschäftigungsart wird nicht gelesen oder ausgewertet. Wenn der Probe
+fehlschlägt oder ein benötigtes
 Geschäftsfeld nicht eindeutig aufgelöst wird, hier stoppen. Das Mapping wird
 dann anhand der Personio-Attributbezeichnung explizit korrigiert. Dafür niemals
 Beispielwerte oder vollständige API-Antworten protokollieren.
@@ -167,7 +172,9 @@ Für jedes verfügbare Vinci-Modell sind diese 14 fachlichen Prüfungen nötig:
    Standortfrage unsichtbar bleibt.
 5. Mit einer ausdrücklichen Onboarding-Frage ausschließlich Name, zukünftige
    Position, Abteilung, Team und Standort erhalten.
-6. Sicherstellen, dass `INACTIVE` und externe Personen nicht erscheinen.
+6. Sicherstellen, dass `INACTIVE` nicht erscheint und ein geeigneter externer
+   Testfall wie eine interne Person erscheint, ohne Kennzeichnung oder Filterung
+   nach Beschäftigungsart.
 7. Die Zusammenarbeitskaskade für Team, anschließend Position plus Standort
    und anschließend Abteilung plus Standort prüfen. Die Antwort muss ihre
    Grundlage nennen und darf keine tatsächliche Zusammenarbeit behaupten.
