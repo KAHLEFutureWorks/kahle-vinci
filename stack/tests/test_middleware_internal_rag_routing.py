@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 class FakePersonioClient:
     def __init__(self, result: dict[str, Any], *, started=None, release=None):
@@ -192,6 +194,87 @@ def test_supported_onboarding_directory_evidence_is_rendered_without_model_synth
     assert "personio_id" not in answer
 
 
+def test_supported_person_lookup_evidence_is_rendered_without_model_synthesis():
+    query = "Was weißt du alles über Erika Beispiel?"
+    personio = {
+        "status": "ok",
+        "claims": [
+            {
+                "display_name": "Erika Marie Beispiel",
+                "position": "Serviceberaterin",
+                "department": "Service",
+                "team": "Service Hannover",
+                "office": "Hannover",
+                "business_email": "erika.beispiel@kahle.de",
+                "business_phone": "+49 511 123456",
+                "personio_id": "17",
+                "source_id": "P1",
+            }
+        ],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-26T15:44:00Z",
+        "stale": False,
+    }
+    harness = load_python_module(HARNESS, "kahle_harness_person_lookup_direct_answer")
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[{"role": "user", "content": query}],
+        model_id="test-model",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result="",
+        personio_result=personio,
+    )
+
+    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
+    answer = direct_answer(decision, decision.to_dict())
+
+    assert answer.startswith("Im aktuellen Personio-Mitarbeiterverzeichnis:")
+    assert "Erika Marie Beispiel – Serviceberaterin" in answer
+    assert "erika.beispiel@kahle.de" not in answer
+    assert "+49 511" not in answer
+    assert "personio_id" not in answer
+    assert "source_id" not in answer
+
+
+def test_supported_person_contact_evidence_is_rendered_from_personio_only():
+    query = "Wie erreiche ich Erika Beispiel?"
+    personio = {
+        "status": "ok",
+        "claims": [
+            {
+                "display_name": "Erika Beispiel",
+                "position": "Serviceberaterin",
+                "business_email": "erika.beispiel@kahle.de",
+                "business_phone": "+49 511 123456",
+                "personio_id": "17",
+                "source_id": "P1",
+            }
+        ],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-26T15:44:00Z",
+        "stale": False,
+    }
+    harness = load_python_module(HARNESS, "kahle_harness_person_contact_direct_answer")
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[{"role": "user", "content": query}],
+        model_id="test-model",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result="",
+        personio_result=personio,
+    )
+
+    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
+    answer = direct_answer(decision, decision.to_dict())
+
+    assert "erika.beispiel@kahle.de" in answer
+    assert "+49 511 123456" in answer
+    assert "personio_id" not in answer
+    assert "source_id" not in answer
+
+
 def test_general_leadership_ranking_is_fail_closed_even_with_directory_evidence():
     query = "Wer sind die wichtigsten Führungskräfte?"
     personio = {
@@ -265,6 +348,26 @@ def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
     )
 
     assert personio_intent("Was weißt du über Max Mustermann?") == "person_lookup"
+    assert (
+        personio_intent("Was weißt du alles über Max Mustermann?") == "person_lookup"
+    )
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    (
+        ("Wie erreiche ich Erika Beispiel?", "person_lookup"),
+        ("Wie ist die Telefonnummer von Erika Beispiel?", "person_lookup"),
+        ("Wie sind die Kontaktdaten der Serviceleitung Nienburg?", "directory_search"),
+    ),
+)
+def test_current_employee_contact_questions_use_directory_intents(query, expected):
+    personio_intent = load_function_from_middleware("_personio_directory_intent")
+    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
+        "_ascii_fold"
+    )
+
+    assert personio_intent(query) == expected
 
 
 def test_german_wie_haengen_question_uses_person_lookup_intent():

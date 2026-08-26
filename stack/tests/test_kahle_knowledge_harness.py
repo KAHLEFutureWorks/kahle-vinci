@@ -552,6 +552,43 @@ def test_retrieval_plan_allows_onboarding_only_for_explicit_people_lists(query):
     assert plan.required_tools == ("personio_directory",)
 
 
+def test_retrieval_plan_treats_was_weisst_du_alles_ueber_as_person_lookup():
+    harness = load_harness()
+    query = "Was weißt du alles über Erika Beispiel?"
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie erreiche ich Erika Beispiel?",
+        "Wie ist die Telefonnummer von Erika Beispiel?",
+        "Wie sind die Kontaktdaten der Serviceleitung Nienburg?",
+    ),
+)
+def test_retrieval_plan_routes_current_employee_contact_questions_only_to_personio(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+
+
 def test_merge_evidence_keeps_personio_current_data_and_rag_project_relation():
     harness = load_harness()
     rag = (

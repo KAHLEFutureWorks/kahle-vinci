@@ -488,7 +488,8 @@ def _has_named_person_reference(query: str) -> bool:
     return bool(
         re.search(
             r"(?iu)\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|"
-            r"was\s+wei(?:ß|ss)t\s+du\s+über|wie\s+lautet.*?(?:von|für)|"
+            r"was\s+wei(?:ß|ss)t\s+du(?:\s+alles)?\s+über|"
+            r"wie\s+erreiche(?:\s+ich)?|wie\s+lautet.*?(?:von|für)|"
             r"mit\s+wem\s+arbeitet|was\s+hat|wie\s+hängen)\s+"
             r"(?:unser(?:e|en)?\s+)?[A-ZÄÖÜ][\w.-]+\s+[A-ZÄÖÜ][\w.-]+",
             raw,
@@ -508,6 +509,7 @@ def _directory_information_need(query: str) -> bool:
         return True
     contact_or_list_patterns = (
         r"\bansprechpartner\b",
+        r"\bkontaktdaten\b",
         r"\b(?:e-?mail|telefonnummer|durchwahl)\b.*\b(?:von|fur)\b",
         r"\bwie\s+(?:lautet|erreiche)\b.*\b(?:e-?mail|telefon|durchwahl)\b",
         r"\bwer\s+arbeitet\b",

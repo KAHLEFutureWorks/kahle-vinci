@@ -312,7 +312,8 @@ async def _execute_kahle_retrieval_plan(
 
 def _personio_directory_intent(query: str) -> str:
     """Map a directory need to the private API's bounded sub-intent."""
-    folded = _ascii_fold(str(query or ''))
+    raw_query = str(query or '')
+    folded = _ascii_fold(raw_query)
     if (
         'onboard' in folded
         and re.search(r'\b(?:wer|welche|mitarbeiter|personen)\b', folded)
@@ -324,7 +325,15 @@ def _personio_directory_intent(query: str) -> str:
     if re.search(r'\bmit\s+wem\b.*\b(?:arbeitet|zusammen)\b', folded):
         return 'coworker_lookup'
     if re.search(
-        r'\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|was\s+weisst\s+du\s+u(?:e)?ber|'
+        r'(?iu)\b(?:wie\s+erreiche(?:\s+ich)?|'
+        r'wie\s+(?:ist|lautet)\s+die\s+(?:telefonnummer|e-?mail|durchwahl))\s+'
+        r'(?:unser(?:e|en)?\s+)?[A-ZÄÖÜ][\w.-]+\s+[A-ZÄÖÜ][\w.-]+',
+        raw_query,
+    ):
+        return 'person_lookup'
+    if re.search(
+        r'\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|'
+        r'was\s+weisst\s+du(?:\s+alles)?\s+u(?:e)?ber|'
         r'was\s+hat|wie\s+haengen)\b',
         folded,
     ):
@@ -447,6 +456,48 @@ def _knowledge_harness_direct_answer(
                 f"Aktuell sind {len(entries)} Mitarbeiter im Onboarding:\n\n"
                 + "\n".join(entries)
             )
+        return (
+            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
+            'passende freigegebene Information.'
+        )
+    if (
+        tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
+        and evidence.get('status') == 'supported'
+    ):
+        include_contacts = bool(
+            re.search(
+                r'\b(?:kontakt(?:daten)?|erreich\w*|telefon(?:nummer)?|durchwahl|e-?mail)\b',
+                folded_query,
+            )
+        )
+        entries = []
+        for claim in evidence.get('supported_claims') or ():
+            if not isinstance(claim, dict):
+                continue
+            name = str(claim.get('display_name') or '').strip()
+            if not name:
+                continue
+            details = [
+                str(claim.get(field) or '').strip()
+                for field in ('position', 'department', 'team', 'office')
+                if str(claim.get(field) or '').strip()
+            ]
+            contact_details = (
+                [
+                    f"E-Mail: {str(claim.get('business_email') or '').strip()}",
+                    f"Telefon: {str(claim.get('business_phone') or '').strip()}",
+                ]
+                if include_contacts
+                else []
+            )
+            contact_details = [detail for detail in contact_details if not detail.endswith(': ')]
+            entries.append(
+                f"- {name}"
+                + (f" – {' · '.join(details)}" if details else '')
+                + (f" · {' · '.join(contact_details)}" if contact_details else '')
+            )
+        if entries:
+            return "Im aktuellen Personio-Mitarbeiterverzeichnis:\n\n" + "\n".join(entries)
         return (
             'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
             'passende freigegebene Information.'
