@@ -140,6 +140,90 @@ def test_pure_person_query_calls_personio_once_and_never_falls_back_to_rag():
     )
 
 
+def test_supported_onboarding_directory_evidence_is_rendered_without_model_synthesis():
+    query = "Wie viele Mitarbeiter sind aktuell im Onboarding?"
+    personio = {
+        "status": "ok",
+        "claims": [
+            {
+                "display_name": "Nora Neu",
+                "position": "Serviceberaterin",
+                "department": "Service",
+                "team": "Service Hannover",
+                "office": "Hannover",
+                "business_email": "nora.neu@kahle.de",
+                "personio_id": "17",
+                "source_id": "P1",
+            },
+            {
+                "display_name": "Erik Einstieg",
+                "position": "Verkäufer",
+                "department": "Verkauf",
+                "team": "SEAT",
+                "office": "Wedemark",
+                "source_id": "P2",
+            },
+        ],
+        "sources": [
+            {"id": "P1", "kind": "personio_directory"},
+            {"id": "P2", "kind": "personio_directory"},
+        ],
+        "sync_completed_at": "2026-08-26T15:44:00Z",
+        "stale": False,
+    }
+    harness = load_python_module(HARNESS, "kahle_harness_onboarding_direct_answer")
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[{"role": "user", "content": query}],
+        model_id="test-model",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result="",
+        personio_result=personio,
+    )
+
+    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
+    answer = direct_answer(decision, decision.to_dict())
+
+    assert answer.startswith("Aktuell sind 2 Mitarbeiter im Onboarding:")
+    assert "Nora Neu – Serviceberaterin" in answer
+    assert "Erik Einstieg – Verkäufer" in answer
+    assert "nora.neu@kahle.de" not in answer
+    assert "personio_id" not in answer
+
+
+def test_general_leadership_ranking_is_fail_closed_even_with_directory_evidence():
+    query = "Wer sind die wichtigsten Führungskräfte?"
+    personio = {
+        "status": "ok",
+        "claims": [
+            {"display_name": "Erika Beispiel", "position": "Leitung", "source_id": "P1"}
+        ],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-26T15:44:00Z",
+        "stale": False,
+    }
+    harness = load_python_module(HARNESS, "kahle_harness_leadership_direct_answer")
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[{"role": "user", "content": query}],
+        model_id="test-model",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result="",
+        personio_result=personio,
+    )
+
+    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
+    answer = direct_answer(decision, decision.to_dict())
+
+    assert answer == (
+        "Eine Rangliste oder Auswahl wichtiger Führungskräfte kann ich nicht "
+        "verlässlich bestimmen. Personio liefert dafür keine freigegebene Evidenz."
+    )
+    assert "Erika Beispiel" not in answer
+
+
 def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_context():
     execute = load_planned_retrieval_executor()
     query = "Wer davon ist die Führungskraft?"

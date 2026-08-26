@@ -408,6 +408,49 @@ def _knowledge_harness_direct_answer(
 ) -> str:
     retrieval = payload.get('retrieval_plan') or {}
     evidence = payload.get('evidence_bundle') or {}
+    resolved_context = payload.get('resolved_context') or {}
+    query = str(resolved_context.get('retrieval_query') or '')
+    folded_query = (
+        query.casefold()
+        .replace('ä', 'a')
+        .replace('ö', 'o')
+        .replace('ü', 'u')
+        .replace('ß', 'ss')
+    )
+    if re.search(r'\bfuhrungskraft\w*\b', folded_query) and not re.search(
+        r'\b(?:wer|welche)\s+(?:davon|von\s+diesen)\b', folded_query
+    ):
+        return (
+            'Eine Rangliste oder Auswahl wichtiger Führungskräfte kann ich nicht '
+            'verlässlich bestimmen. Personio liefert dafür keine freigegebene Evidenz.'
+        )
+    if (
+        tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
+        and 'onboard' in folded_query
+        and evidence.get('status') == 'supported'
+    ):
+        entries = []
+        for claim in evidence.get('supported_claims') or ():
+            if not isinstance(claim, dict):
+                continue
+            name = str(claim.get('display_name') or '').strip()
+            if not name:
+                continue
+            details = [
+                str(claim.get(field) or '').strip()
+                for field in ('position', 'department', 'team', 'office')
+                if str(claim.get(field) or '').strip()
+            ]
+            entries.append(f"- {name}" + (f" – {' · '.join(details)}" if details else ''))
+        if entries:
+            return (
+                f"Aktuell sind {len(entries)} Mitarbeiter im Onboarding:\n\n"
+                + "\n".join(entries)
+            )
+        return (
+            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
+            'passende freigegebene Information.'
+        )
     if (
         tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
         and evidence.get('status') == 'unsupported'
