@@ -498,6 +498,8 @@ def _has_named_person_reference(query: str) -> bool:
 
 def _directory_information_need(query: str) -> bool:
     folded = _fold(query)
+    if _functional_responsibility_question(folded):
+        return False
     if _explicit_onboarding_people_request(folded):
         return True
     if _has_named_person_reference(query):
@@ -507,6 +509,8 @@ def _directory_information_need(query: str) -> bool:
         r"\b(?:e-?mail|telefonnummer|durchwahl)\b.*\b(?:von|fur)\b",
         r"\bwie\s+(?:lautet|erreiche)\b.*\b(?:e-?mail|telefon|durchwahl)\b",
         r"\bwer\s+arbeitet\b",
+        r"\bwie\s+hei(?:ss)?en\b.*\b(?:serviceassistenz|verkaufer|teiledienst)\w*",
+        r"\bwer\s+ist\s+verkaufer\b.*\b(?:seat|neuwagen|automobil)\b",
         r"\bwelche\s+(?:mitarbeiter(?:innen)?|kolleg(?:en|innen))\b",
         r"\b(?:mitarbeiter(?:innen)?|kolleg(?:en|innen))\s+im\b",
     )
@@ -534,7 +538,19 @@ def _rag_information_need(query: str) -> bool:
         "projekt", "system", "prozess", "arbeitsanweisung", "arbeitsweise",
         "verantwortlichkeit", "verantwortlich", "anleitung",
     )
-    return relation or _is_procedural(query) or any(term in folded for term in rag_terms)
+    return (
+        relation
+        or _functional_responsibility_question(folded)
+        or _is_procedural(query)
+        or any(term in folded for term in rag_terms)
+    )
+
+
+def _functional_responsibility_question(folded_query: str) -> bool:
+    return bool(
+        re.search(r"\bmahnung\w*\b", folded_query)
+        or re.search(r"\bkundenbeschwerd\w*\b", folded_query)
+    )
 
 
 def _intent_kind(query: str) -> str:
@@ -570,6 +586,15 @@ def _information_needs(query: str) -> tuple[InformationNeed, ...]:
     """Describe required evidence before retrieval, independently of the model."""
     folded = _fold(query)
     relation_target = _relation_target(query)
+    if _functional_responsibility_question(folded):
+        return (
+            InformationNeed(
+                kind="functional_responsibility",
+                domain="customer_processes",
+                document_types=("process_description", "responsibility_matrix"),
+                evidence_capabilities=("approved_functional_responsibility",),
+            ),
+        )
     if relation_target:
         return (
             InformationNeed(

@@ -300,6 +300,39 @@ def test_retrieval_plan_uses_required_evidence_sources(query, tools):
     assert plan.required_tool == (tools[0] if len(tools) == 1 else "multi_source")
 
 
+@pytest.mark.parametrize(
+    ("query", "tools", "intent"),
+    (
+        ("Wer arbeitet im Teiledienst in Hannover?", ("personio_directory",), "employee_directory"),
+        ("Wie heißen die Serviceassistenzen in der Wedemark?", ("personio_directory",), "employee_directory"),
+        ("Wer ist Verkäufer von Seat Neuwagen?", ("personio_directory",), "employee_directory"),
+        ("An wen wende ich mich, wenn ein Kunde eine Mahnung erhält?", ("rag_chat",), "internal_knowledge"),
+        ("Wer ist der Ansprechpartner für Kundenbeschwerden?", ("rag_chat",), "internal_knowledge"),
+    ),
+)
+def test_retrieval_plan_separates_employee_lists_from_process_responsibility(
+    query, tools, intent
+):
+    harness = load_harness()
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "groups": ["intern"]},
+        rag_result="KAHLE_RAG_RESULT\nFOUND: false",
+    )
+
+    assert decision.retrieval_plan.required_tools == tools
+    assert decision.user_intent.kind == intent
+    assert all(
+        event["tool"] != "rag_chat"
+        for event in decision.events
+        if event["type"].startswith("retrieval/") and tools == ("personio_directory",)
+    )
+
+
 def test_retrieval_plan_is_model_independent_for_personio_and_rag_needs():
     harness = load_harness()
     query = "Was hat Stefan Schrader mit VSX zu tun?"
