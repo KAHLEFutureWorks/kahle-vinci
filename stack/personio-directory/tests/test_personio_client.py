@@ -6,6 +6,16 @@ import pytest
 
 from app.config import PersonioConfig
 from app.personio import PersonioClient, PersonioError
+from app.policy import filter_person
+from fixtures import MAPPING
+from scripts.personio.probe import _count_exclusion
+
+
+OFFICIAL_V1_MAPPING = MAPPING | {
+    "business_email": "email",
+    "business_phone": "phone",
+    "employment_status": "status",
+}
 
 
 @dataclass
@@ -56,6 +66,33 @@ def v1_attributes() -> Response:
         {"key": "status", "label": "Beschäftigungsstatus"},
         {"key": "updated_at", "label": "Letzte Änderung"},
     ]})
+
+
+def official_v1_person(status: str = "ACTIVE") -> dict[str, object]:
+    values = {
+        "id": 4711,
+        "preferred_name": "Erika Beispiel",
+        "position": "Serviceberaterin",
+        "department": {"type": "Department", "attributes": {"id": 1, "name": "Service"}},
+        "team": {"type": "Team", "attributes": {"id": 2, "name": "Service Hannover"}},
+        "office": {"type": "Office", "attributes": {"id": 3, "name": "Hannover"}},
+        "email": "directory@example.invalid",
+        "phone": "+49 555 000001",
+        "status": status,
+        "updated_at": "2026-08-24T10:15:00Z",
+    }
+    return {
+        "type": "Employee",
+        "attributes": {
+            key: {
+                "label": f"Synthetic {key}",
+                "value": value,
+                "type": "standard",
+                "universal_id": f"universal_{key}",
+            }
+            for key, value in values.items()
+        },
+    }
 
 
 def test_assessment_falls_back_to_v1_when_v2_team_is_not_resolved(config):
@@ -224,6 +261,85 @@ def test_v1_iter_people_uses_bounded_offset_pagination_and_updated_since(config)
         {"limit": 100, "offset": 0, "updated_since": "2026-08-24T00:00:00Z"},
         {"limit": 100, "offset": 100, "updated_since": "2026-08-24T00:00:00Z"},
     ]
+
+
+def test_v1_iter_people_flattens_official_attribute_envelope_for_probe(config):
+    session = FakeSession([
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        Response(200, {"data": [official_v1_person(), official_v1_person("INACTIVE")]}),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+    client._assessment = type(
+        "Assessment", (), {"version": "v1", "mapping": OFFICIAL_V1_MAPPING}
+    )()
+
+    people = list(client.iter_people())
+
+    assert people[0] == {
+        "id": "4711",
+        "preferred_name": "Erika Beispiel",
+        "position": "Serviceberaterin",
+        "department": "Service",
+        "team": "Service Hannover",
+        "office": "Hannover",
+        "email": "directory@example.invalid",
+        "phone": "+49 555 000001",
+        "status": "ACTIVE",
+        "updated_at": "2026-08-24T10:15:00Z",
+    }
+    assert "label" not in repr(people)
+    assert "universal_id" not in repr(people)
+    assert "Synthetic " not in repr(people)
+    assert filter_person(people[0], OFFICIAL_V1_MAPPING) is not None
+    excluded = {"INACTIVE": 0, "INVALID": 0}
+    assert filter_person(people[1], OFFICIAL_V1_MAPPING) is None
+    _count_exclusion(people[1], OFFICIAL_V1_MAPPING, excluded)
+    assert excluded == {"INACTIVE": 1, "INVALID": 0}
+
+
+def test_v1_relationship_without_string_name_flattens_to_empty(config):
+    person = official_v1_person()
+    person["attributes"]["team"]["value"] = {
+        "type": "Team",
+        "attributes": {"id": 2, "name": {"unexpected": "shape"}},
+    }
+    session = FakeSession([
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        Response(200, {"data": [person]}),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+    client._assessment = type(
+        "Assessment", (), {"version": "v1", "mapping": OFFICIAL_V1_MAPPING}
+    )()
+
+    assert list(client.iter_people())[0]["team"] == ""
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        None,
+        [],
+        "not-an-object",
+        {},
+        {"id": []},
+        {"id": {"label": "ID without value"}},
+        {1: {"value": "unsafe"}},
+    ],
+)
+def test_v1_iter_people_skips_malformed_official_attribute_envelopes(
+    config, attributes
+):
+    session = FakeSession([
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        Response(200, {"data": [{"type": "Employee", "attributes": attributes}]}),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+    client._assessment = type(
+        "Assessment", (), {"version": "v1", "mapping": OFFICIAL_V1_MAPPING}
+    )()
+
+    assert list(client.iter_people()) == []
 
 
 def test_v2_iter_people_follows_cursor_links(config):

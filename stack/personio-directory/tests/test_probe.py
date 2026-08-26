@@ -28,3 +28,15 @@ def test_probe_does_not_inspect_or_classify_employment_type():
 
     assert excluded == {"INACTIVE": 0, "INVALID": 1}
     assert "EXTERNAL" not in excluded
+
+
+def test_probe_counts_lowercase_inactive_status_from_live_v1_contract():
+    excluded = Counter({"INACTIVE": 0, "INVALID": 0})
+
+    _count_exclusion(
+        {"employment_status": "inactive"},
+        {"employment_status": "employment_status"},
+        excluded,
+    )
+
+    assert excluded == {"INACTIVE": 1, "INVALID": 0}

@@ -42,7 +42,7 @@ def main() -> int:
 
 
 def _count_exclusion(raw_person: dict[str, object], mapping: dict[str, str], excluded: Counter[str]) -> None:
-    status = str(raw_person.get(mapping.get("employment_status", ""), "")).strip()
+    status = str(raw_person.get(mapping.get("employment_status", ""), "")).strip().upper()
     if status == "INACTIVE":
         excluded["INACTIVE"] += 1
     else:

@@ -7,6 +7,10 @@ _PERSON_FIELDS = frozenset(PersonRecord.__dataclass_fields__)
 _DERIVED_PERSON_FIELDS = frozenset({"first_name", "last_name"})
 _MAPPED_PERSON_FIELDS = _PERSON_FIELDS - _DERIVED_PERSON_FIELDS
 _ALLOWED_STATUSES = frozenset({"ACTIVE", "LEAVE", "ONBOARDING"})
+_REQUIRED_VALUE_FIELDS = frozenset(
+    {"personio_id", "display_name", "employment_status", "source_updated_at"}
+)
+_OPTIONAL_VALUE_FIELDS = _MAPPED_PERSON_FIELDS - _REQUIRED_VALUE_FIELDS
 _PERSONIO_ID_SOURCE = "id"
 _SENSITIVE_SOURCE_MARKERS = (
     "absence",
@@ -44,12 +48,21 @@ def filter_person(
         return None
 
     values = {field: raw.get(source) for field, source in mapping.items()}
-    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+    if any(
+        not isinstance(values[field], str) or not values[field].strip()
+        for field in _REQUIRED_VALUE_FIELDS
+    ):
         return None
+    for field in _OPTIONAL_VALUE_FIELDS:
+        value = values[field]
+        values[field] = value.strip() if isinstance(value, str) else ""
+    for field in _REQUIRED_VALUE_FIELDS:
+        values[field] = values[field].strip()
 
-    status = values["employment_status"]
+    status = values["employment_status"].upper()
     if status not in _ALLOWED_STATUSES:
         return None
+    values["employment_status"] = status
 
     preferred_name = preferred_name_parts(values["display_name"])
     if preferred_name is None:
@@ -58,6 +71,7 @@ def filter_person(
     values["display_name"] = display_name
     values["first_name"] = first_name
     values["last_name"] = last_name
+    values["business_email"] = _kahle_business_email(values["business_email"])
 
     return PersonRecord(**values)  # type: ignore[arg-type]
 
@@ -78,6 +92,18 @@ def _valid_name_part(part: str) -> bool:
     return any(char.isalpha() for char in part) and all(
         char.isalpha() or char in allowed_punctuation for char in part
     )
+
+
+def _kahle_business_email(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    candidate = value.strip().casefold()
+    if candidate.count("@") != 1 or any(char.isspace() for char in candidate):
+        return ""
+    local_part, domain = candidate.split("@", 1)
+    if not local_part or domain != "kahle.de":
+        return ""
+    return candidate
 
 
 def public_payload(

@@ -5,7 +5,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
-from app.index import QdrantDirectoryIndex
+from app.index import QdrantDirectoryIndex, _person_from_payload
 from app.models import PersonRecord
 
 
@@ -81,6 +81,20 @@ def test_index_uses_isolated_collection_deterministic_id_and_safe_payload():
     }
     assert all("private" not in key and "salary" not in key for key in point["payload"])
     assert "employment_type" not in point["payload"]
+
+
+def test_qdrant_read_accepts_empty_optional_directory_fields():
+    person = active_person()
+    payload = QdrantDirectoryIndex._payload(person) | {
+        "position": "",
+        "department": "",
+        "team": "",
+        "office": "",
+        "business_email": "",
+        "business_phone": "",
+    }
+
+    assert _person_from_payload(payload).display_name == person.display_name
 
 
 def test_index_physically_deletes_points_by_personio_id():

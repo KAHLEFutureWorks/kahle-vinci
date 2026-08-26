@@ -63,6 +63,32 @@ def test_policy_rejects_missing_required_value():
     assert filter_person(raw, MAPPING) is None
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["position", "department", "team", "office", "business_email", "business_phone"],
+)
+def test_policy_keeps_person_when_optional_directory_field_is_empty(field):
+    raw = raw_person("ACTIVE", "INTERNAL") | {field: ""}
+
+    assert filter_person(raw, MAPPING) is not None
+
+
+@pytest.mark.parametrize(
+    ("email", "expected"),
+    [
+        ("JAN.OLTMANNS@KAHLE.DE", "jan.oltmanns@kahle.de"),
+        ("private@example.com", ""),
+        ("attack@kahle.de.example.com", ""),
+        ("not-an-email", ""),
+    ],
+)
+def test_policy_keeps_only_business_email_at_exact_kahle_domain(email, expected):
+    person = filter_person(raw_person("ACTIVE", "INTERNAL") | {"business_email": email}, MAPPING)
+
+    assert person is not None
+    assert person.business_email == expected
+
+
 def test_policy_rejects_unknown_employment_status():
     assert filter_person(raw_person("SABBATICAL", "INTERNAL"), MAPPING) is None
 

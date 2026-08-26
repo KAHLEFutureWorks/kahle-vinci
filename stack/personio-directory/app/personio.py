@@ -229,7 +229,9 @@ class PersonioClient:
             for person in people:
                 if not isinstance(person, Mapping):
                     continue
-                yield _flatten_v1_person(person)
+                flattened = _flatten_v1_person(person)
+                if flattened is not None:
+                    yield flattened
             if len(people) < 100:
                 return
             offset += 100
@@ -455,12 +457,37 @@ def _field_value(value: object) -> str:
             resolved = _clean_text(value.get(key))
             if resolved:
                 return resolved
+        attributes = value.get("attributes")
+        if isinstance(attributes, Mapping):
+            return _clean_text(attributes.get("name"))
         return ""
     return _clean_text(value)
 
 
-def _flatten_v1_person(person: Mapping[str, object]) -> dict[str, object]:
-    return {str(key): _field_value(value) for key, value in person.items()}
+def _flatten_v1_person(
+    person: Mapping[str, object]
+) -> dict[str, object] | None:
+    if "attributes" not in person:
+        return {str(key): _field_value(value) for key, value in person.items()}
+
+    attributes = person.get("attributes")
+    if not isinstance(attributes, Mapping) or not attributes:
+        return None
+    flattened: dict[str, object] = {}
+    for key, attribute in attributes.items():
+        if (
+            not isinstance(key, str)
+            or not key.strip()
+            or not isinstance(attribute, Mapping)
+            or "value" not in attribute
+        ):
+            return None
+        value = attribute.get("value")
+        if key == "id" and isinstance(value, int) and not isinstance(value, bool):
+            flattened[key] = str(value)
+        else:
+            flattened[key] = _field_value(value)
+    return flattened
 
 
 def _flatten_v2_person(person: Mapping[str, object]) -> dict[str, object]:

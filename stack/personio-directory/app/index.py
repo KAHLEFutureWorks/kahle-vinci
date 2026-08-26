@@ -181,7 +181,10 @@ def _normalise_text(value: str) -> str:
 def _person_from_payload(payload: Mapping[str, object]) -> PersonRecord:
     fields = PersonRecord.__dataclass_fields__
     values = {field: payload.get(field) for field in fields}
-    if any(not isinstance(value, str) or not value for value in values.values()):
+    optional = {"position", "department", "team", "office", "business_email", "business_phone"}
+    if any(not isinstance(value, str) for value in values.values()) or any(
+        not values[field] for field in fields if field not in optional
+    ):
         raise RuntimeError("qdrant_response_invalid")
     if values["employment_status"] not in {"ACTIVE", "LEAVE", "ONBOARDING"}:
         raise RuntimeError("qdrant_response_invalid")

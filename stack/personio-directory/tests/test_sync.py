@@ -214,7 +214,7 @@ def test_full_sync_is_due_initially_then_after_24_hours(tmp_path):
 def test_full_sync_keeps_existing_person_seen_with_transient_non_name_malformed_data(tmp_path):
     state = SQLiteSyncState(tmp_path / "personio.sqlite3")
     index = FakeIndex(existing_ids={"person-1"})
-    malformed = raw_person("ACTIVE", "INTERNAL") | {"position": ""}
+    malformed = raw_person("ACTIVE", "INTERNAL") | {"updated_at": ""}
 
     report = DirectorySync(Client([malformed]), index, state).run_full()
 

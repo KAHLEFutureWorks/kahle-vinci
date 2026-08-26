@@ -68,6 +68,11 @@ auf das Personio-Feld mit der Bezeichnung `Name (preferred)` zeigen;
 `Last modified` beziehungsweise `Letzte Änderung` verpflichtend. Vor- und
 Nachname werden intern aus dem normalisierten Preferred Name abgeleitet und
 sind keine eigenen API-Mappings.
+Position, Abteilung, Team, Standort, geschäftliche E-Mail und geschäftliche
+Telefonnummer dürfen bei einzelnen Personen leer sein. E-Mail-Adressen werden
+vor der Indexierung normalisiert; ausschließlich die exakte Domain
+`@kahle.de` wird übernommen. Private oder andersartige E-Mail-Domains werden
+verworfen, ohne die Person selbst aus dem Verzeichnis zu entfernen.
 Die Beschäftigungsart wird nicht gelesen oder ausgewertet. Wenn der Probe
 fehlschlägt oder ein benötigtes
 Geschäftsfeld nicht eindeutig aufgelöst wird, hier stoppen. Das Mapping wird
