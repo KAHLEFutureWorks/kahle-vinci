@@ -470,9 +470,9 @@ def _add_matching_field_values(
 
 
 def _contains_controlled_variant(value: str, variants: frozenset[str]) -> bool:
-    """Match only approved role/business stems, including German inflections."""
+    """Match only approved role/business stems inside German compounds."""
     return any(
-        token.startswith(variant) or token.endswith(variant)
+        variant in token
         for token in value.split()
         for variant in variants
     )

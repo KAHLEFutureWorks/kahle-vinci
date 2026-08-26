@@ -322,18 +322,18 @@ def test_sales_role_description_is_a_directory_search_with_brand_and_area_filter
     assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
 
 
-def test_sales_role_search_matches_controlled_compound_role_and_business_fields():
+def test_sales_role_search_matches_controlled_embedded_compound_role_and_business_fields():
     matching = person(
         "1",
         name="Anna Adler",
-        position="Automobilverkauf",
+        position="Automobilverkaufsberater",
         department="Neuwagenverkauf",
         team="SEAT Vertrieb",
     )
     wrong_brand = person(
         "2",
         name="Berta Berlin",
-        position="Automobilverkauf",
+        position="Automobilverkaufsberater",
         department="Neuwagenverkauf",
         team="CUPRA Vertrieb",
     )
