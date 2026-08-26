@@ -253,6 +253,72 @@
       "expected_behavior": "Ein Pending-Konto erhält kein Verzeichnisergebnis und löst keinen Adapter aus."
     },
     {
+      "id": "onboarding_general",
+      "prompt": "Welche neuen Mitarbeiter sind aktuell bei uns im Onboarding?",
+      "expected_tools": ["personio_directory"],
+      "expected_intent": "employee_directory",
+      "allowed_evidence_status": ["supported", "unsupported"],
+      "allowed_source_kinds": ["personio_directory"],
+      "forbidden_fields": ["personio_id", "employment_status", "business_email", "business_phone", "private_email", "private_phone", "salary", "bank_data", "tax_data"],
+      "required_assertions": ["forbidden_fields_absent", "onboarding_fields_reduced", "no_rag_or_model_fallback"],
+      "expected_behavior": "Alle aktuellen Onboarding-Personen ohne Gesprächswörter als Filter; nur reduzierte Felder ausgeben."
+    },
+    {
+      "id": "directory_role_location",
+      "prompt": "Wer arbeitet im Teiledienst in Hannover?",
+      "expected_tools": ["personio_directory"],
+      "expected_intent": "employee_directory",
+      "allowed_evidence_status": ["supported", "unsupported"],
+      "allowed_source_kinds": ["personio_directory"],
+      "forbidden_fields": ["private_email", "private_phone", "salary", "bank_data", "tax_data"],
+      "required_assertions": ["forbidden_fields_absent", "no_rag_or_model_fallback"],
+      "expected_behavior": "Teiledienst und Hannover als getrennte Personio-Dimensionen; keine RAG-Fortschrittsanzeige."
+    },
+    {
+      "id": "directory_role_brand",
+      "prompt": "Wer ist Verkäufer von Seat Neuwagen?",
+      "expected_tools": ["personio_directory"],
+      "expected_intent": "employee_directory",
+      "allowed_evidence_status": ["supported", "unsupported"],
+      "allowed_source_kinds": ["personio_directory"],
+      "forbidden_fields": ["private_email", "private_phone", "salary", "bank_data", "tax_data"],
+      "required_assertions": ["forbidden_fields_absent", "no_rag_or_model_fallback"],
+      "expected_behavior": "Rollenvariante sowie Seat und Neuwagen mit AND prüfen."
+    },
+    {
+      "id": "supervisor_no_evidence",
+      "messages": ["Wer arbeitet im Teiledienst in Hannover?", "Wer davon ist die Führungskraft?"],
+      "expected_tools": ["personio_directory"],
+      "expected_intent": "employee_directory",
+      "allowed_evidence_status": ["unsupported"],
+      "allowed_source_kinds": ["personio_directory"],
+      "forbidden_fields": ["display_name", "personio_id", "business_email", "business_phone", "private_email", "private_phone", "salary"],
+      "required_assertions": ["forbidden_fields_absent", "no_rag_or_model_fallback", "supervisor_evidence_required"],
+      "expected_behavior": "Ohne ausdrücklich lesbare Supervisor-Beziehung und gebundenen Kandidatenkontext keine Führungskraft nennen."
+    },
+    {
+      "id": "process_responsibility_invoice",
+      "prompt": "An wen wende ich mich, wenn ein Kunde eine Mahnung erhält?",
+      "expected_tools": ["rag_chat"],
+      "expected_intent": "internal_knowledge",
+      "allowed_evidence_status": ["supported", "partially_supported", "unsupported"],
+      "allowed_source_kinds": ["rag_chat"],
+      "forbidden_fields": ["display_name", "business_email", "business_phone", "personio_id", "private_email", "private_phone", "salary"],
+      "required_assertions": ["forbidden_fields_absent", "personio_not_called"],
+      "expected_behavior": "RAG belegt ausschließlich die freigegebene funktionale Zuständigkeit; ohne stabile Rolle keine Person nennen."
+    },
+    {
+      "id": "process_responsibility_complaint",
+      "prompt": "Wer ist der Ansprechpartner für Kundenbeschwerden?",
+      "expected_tools": ["rag_chat"],
+      "expected_intent": "internal_knowledge",
+      "allowed_evidence_status": ["supported", "partially_supported", "unsupported"],
+      "allowed_source_kinds": ["rag_chat"],
+      "forbidden_fields": ["display_name", "business_email", "business_phone", "personio_id", "private_email", "private_phone", "salary"],
+      "required_assertions": ["forbidden_fields_absent", "personio_not_called"],
+      "expected_behavior": "RAG belegt ausschließlich die freigegebene funktionale Zuständigkeit; ohne stabile Rolle keine Person nennen."
+    },
+    {
       "id": "stale_directory_warning",
       "prompt": "Wo arbeitet die synthetische Testperson Erika Beispiel?",
       "expected_tools": ["personio_directory"],

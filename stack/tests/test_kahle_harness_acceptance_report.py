@@ -209,6 +209,12 @@ def test_acceptance_matrix_contains_the_original_model_independent_reference_cas
         "empty_personio_no_fallback",
         "pending_directory_denied",
         "stale_directory_warning",
+        "onboarding_general",
+        "directory_role_location",
+        "directory_role_brand",
+        "supervisor_no_evidence",
+        "process_responsibility_invoice",
+        "process_responsibility_complaint",
     }.issubset(case_ids)
     for case in matrix["cases"]:
         assert case["expected_tools"] in (

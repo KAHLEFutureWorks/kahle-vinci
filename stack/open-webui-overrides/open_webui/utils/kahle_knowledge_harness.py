@@ -928,6 +928,19 @@ def _evidence_bundle(rag_result: str, procedural: bool) -> EvidenceBundle:
     )
 
 
+def _functional_responsibility_evidence(rag_result: str) -> EvidenceBundle:
+    """Keep responsibility questions fail-closed until a role-only mapping is approved."""
+    evidence = _evidence_bundle(rag_result, procedural=False)
+    return EvidenceBundle(
+        status="unsupported",
+        missing_information=(
+            "Für diese fachliche Zuständigkeit liegt keine freigegebene, "
+            "eindeutig auf Personio abbildbare Rollen-Zuordnung vor.",
+        ),
+        sources=evidence.sources,
+    )
+
+
 _PERSONIO_CURRENT_FIELDS = frozenset(
     {
         "display_name",
@@ -1278,7 +1291,11 @@ def build_decision(
     if retrieval_plan.required_tools == ("personio_directory",):
         evidence = _personio_evidence(personio_result)
     elif retrieval_plan.required_tools == ("rag_chat",):
-        evidence = _evidence_bundle(rag_result, procedural)
+        evidence = (
+            _functional_responsibility_evidence(rag_result)
+            if _functional_responsibility_question(_fold(retrieval_query))
+            else _evidence_bundle(rag_result, procedural)
+        )
     else:
         evidence = merge_evidence(rag_result, personio_result)
 

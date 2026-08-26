@@ -4,12 +4,20 @@ Stand: 26. August 2026
 
 ## Aktueller Abnahmestand
 
-Die Implementierung und die Offline-Vertragstests sind vorbereitet. Der reale
-read-only API-Probe, der lokale Vollabgleich und die interaktive Abnahme unter
-`http://localhost:3004` sind noch offen. Sie wurden in diesem Arbeitsschritt
-bewusst nicht ausgeführt, weil der laufende Codex-Prozess die erst später
-gesetzten Windows-Variablen zuvor nicht geerbt hatte. Die folgenden Schritte
-müssen deshalb in einer frisch geöffneten PowerShell ausgeführt werden.
+Die Implementierung und die Offline-Vertragstests sind vorbereitet. Der
+datensparsame read-only API-Probe vom 26. August 2026 war erfolgreich. Er
+bestätigt v1 sowie die Feldbezeichnungen für Preferred Name, Position,
+Abteilung, Team, Arbeitsplatz, geschäftliche E-Mail, geschäftliche
+Telefonnummer, Status, Last modified und Supervisor. Der Probe meldete 403
+geeignete und 573 ausgeschlossene Datensätze. In einem zweiten rein
+aggregierten Probe waren 746 Supervisor-Beziehungen als stabile numerische
+Personio-ID vorhanden, ohne ungültige Werte. Es wurden keine Personenwerte,
+Kontakte, IDs oder Secrets protokolliert.
+
+Der lokale Vollabgleich und die interaktive Abnahme unter `http://localhost:3004`
+sind noch offen. Sie müssen in einer frisch geöffneten PowerShell ausgeführt
+werden, damit die Windows-Umgebungsvariablen nur in den gestarteten Prozessen
+weitergereicht werden.
 
 Die Prüfung verändert keine Daten in Personio. Der spätere lokale Sync schreibt
 ausschließlich in den lokalen Zustand und in die getrennte Qdrant-Collection
@@ -62,7 +70,10 @@ Der erfolgreiche Probe zeigt ausschließlich:
 
 Erwartet werden die API-Mappings `personio_id`, `display_name`, `position`,
 `department`, `team`, `office`, `business_email`, `business_phone`,
-`employment_status` und `source_updated_at`. `display_name` muss ausschließlich
+`employment_status` und `source_updated_at`. Zusätzlich ist
+`supervisor_personio_id` optional: Es darf nur aus dem lesbaren Supervisor-Feld
+als stabile Personio-ID übernommen werden. Ein Name, eine E-Mail-Adresse oder
+ein Titel ist dafür kein zulässiger Ersatz. `display_name` muss ausschließlich
 auf das Personio-Feld mit der Bezeichnung `Name (preferred)` zeigen;
 `source_updated_at` bleibt für den Delta-Sync über `Last modified at`,
 `Last modified` beziehungsweise `Letzte Änderung` verpflichtend. Vor- und
@@ -78,6 +89,15 @@ fehlschlägt oder ein benötigtes
 Geschäftsfeld nicht eindeutig aufgelöst wird, hier stoppen. Das Mapping wird
 dann anhand der Personio-Attributbezeichnung explizit korrigiert. Dafür niemals
 Beispielwerte oder vollständige API-Antworten protokollieren.
+
+Eine Folgefrage wie „Wer davon ist die Führungskraft?“ wird nur beantwortet,
+wenn die unmittelbar vorherige reine Verzeichnisfrage erneut genau eine
+Kandidatin oder einen Kandidaten liefert, deren beziehungsweise dessen
+Personio-ID durch die Supervisor-Beziehung mindestens einer anderen gefundenen
+Person explizit bestätigt wird. Fehlt dieser Kontext, fehlt die Beziehung oder
+sind mehrere Personen möglich, bleibt die Antwort bewusst nicht verfügbar.
+Supervisor-Daten werden nicht für Portalrechte oder zusätzliche Wissensrechte
+verwendet.
 
 ## 3. Lokalen Stack kontrolliert starten
 
@@ -168,7 +188,7 @@ Konto mit Rolle `user`, ein Konto mit Rolle `admin` und ein Konto mit Rolle
 `pending` werden benötigt. Reale Personennamen dürfen nur direkt in der
 Oberfläche eingesetzt und nicht in Berichte übernommen werden.
 
-Für jedes verfügbare Vinci-Modell sind diese 14 fachlichen Prüfungen nötig:
+Für jedes verfügbare Vinci-Modell sind diese 17 fachlichen Prüfungen nötig:
 
 1. Eine aktive Person exakt nach vollständigem Namen, Rolle, Standort,
    geschäftlicher Telefonnummer und geschäftlicher E-Mail finden.
@@ -176,7 +196,8 @@ Für jedes verfügbare Vinci-Modell sind diese 14 fachlichen Prüfungen nötig:
 3. Einen geeigneten `LEAVE`-Fall in der normalen Suche finden.
 4. Sicherstellen, dass `ONBOARDING` in einer normalen Rollen- oder
    Standortfrage unsichtbar bleibt.
-5. Mit einer ausdrücklichen Onboarding-Frage ausschließlich Name, zukünftige
+5. Mit einer allgemeinen und einer rollenbezogenen ausdrücklichen
+   Onboarding-Frage ausschließlich Name, zukünftige
    Position, Abteilung, Team und Standort erhalten.
 6. Sicherstellen, dass `INACTIVE` nicht erscheint und ein geeigneter externer
    Testfall wie eine interne Person erscheint, ohne Kennzeichnung oder Filterung
@@ -199,6 +220,18 @@ Für jedes verfügbare Vinci-Modell sind diese 14 fachlichen Prüfungen nötig:
     Veraltet-Kennzeichnung prüfen.
 14. Containerlogs und den sanitisierten Akzeptanzbericht auf Secrets,
     Personennamen, Kontaktdaten, Personio-IDs und Rohbelege prüfen.
+15. Eine Rollen- und Standortliste für Teiledienst in Hannover, eine
+    Serviceassistenzliste für die Wedemark sowie eine Verkäuferliste für Seat
+    Neuwagen prüfen. Jede dieser Fragen darf nur Personio verwenden und keine
+    RAG-Fortschrittsanzeige zeigen.
+16. Direkt danach „Wer davon ist die Führungskraft?“ prüfen. Nur bei einer
+    eindeutigen Supervisor-Evidenz innerhalb der vorherigen Liste darf eine
+    Person genannt werden. Andernfalls muss die Oberfläche klar mitteilen,
+    dass keine freigegebene Führungskraft-Evidenz vorliegt.
+17. Die Fragen zu Mahnung und Kundenbeschwerden prüfen. Beide müssen zunächst
+    RAG für die dokumentierte funktionale Zuständigkeit verwenden. Ohne eine
+    eindeutige, versionierte Rollenabbildung auf Personio darf keine aktuelle
+    Person geraten oder aus einem RAG-Dokument übernommen werden.
 
 Wenn der Personio-Bestand keinen passenden Status- oder Kaskadenfall enthält,
 wird der Fall als `pending` dokumentiert. Es werden keine Personio-Daten nur für

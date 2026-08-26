@@ -334,6 +334,30 @@ def test_retrieval_plan_separates_employee_lists_from_process_responsibility(
     )
 
 
+def test_functional_responsibility_rejects_rag_person_names_without_a_versioned_role_mapping():
+    harness = load_harness()
+    rag_result = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        'EVIDENCE_BUNDLE_JSON: {"schema_version":"kahle.evidence-bundle.v1",'
+        '"status":"supported","supported_claims":[{"source_id":"#1",'
+        '"text":"Eine benannte Person bearbeitet Kundenbeschwerden."}],'
+        '"missing_information":[],"conflicts":[],"sources":[{"number":1,"document_id":"process"}]}'
+    )
+
+    decision = harness.build_decision(
+        query="Wer ist der Ansprechpartner für Kundenbeschwerden?",
+        resolved_query="Wer ist der Ansprechpartner für Kundenbeschwerden?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "groups": ["intern"]},
+        rag_result=rag_result,
+    )
+
+    assert decision.retrieval_plan.required_tools == ("rag_chat",)
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+
+
 def test_retrieval_plan_is_model_independent_for_personio_and_rag_needs():
     harness = load_harness()
     query = "Was hat Stefan Schrader mit VSX zu tun?"
