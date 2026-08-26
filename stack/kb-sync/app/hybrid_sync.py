@@ -42,6 +42,14 @@ class CanonicalIndexDocument:
     source_id: str
     source_url: str
     status: str = "active"
+    domain: str = "internal_general"
+    document_type: str = "knowledge_document"
+    topics: tuple[str, ...] = ()
+    evidence_capabilities: tuple[str, ...] = ("factual_support",)
+    source_provider: str = "legacy_knowledgebase"
+    classification_status: str = "review_required"
+    classification_version: str = ""
+    classification_confidence: float = 0.0
 
     def validate(self, today: date | None = None) -> None:
         today = today or date.today()
@@ -93,6 +101,10 @@ class QdrantHybridClient:
         for field, schema in (
             ("knowledgebase_ids", "keyword"), ("status", "keyword"), ("version_id", "keyword"),
             ("document_id", "keyword"), ("valid_until", "datetime"), ("confidentiality", "keyword"),
+            ("domain", "keyword"), ("document_type", "keyword"),
+            ("topics", "keyword"), ("evidence_capabilities", "keyword"),
+            ("source_provider", "keyword"),
+            ("classification_status", "keyword"),
         ):
             self.request("PUT", f"/collections/{name}/index", json={"field_name": field, "field_schema": schema})
 
@@ -195,6 +207,14 @@ class HybridIndexBuilder:
                     "authority": document.authority,
                     "source_id": document.source_id,
                     "source_url": document.source_url,
+                    "domain": document.domain,
+                    "document_type": document.document_type,
+                    "topics": list(document.topics),
+                    "evidence_capabilities": list(document.evidence_capabilities),
+                    "source_provider": document.source_provider,
+                    "classification_status": document.classification_status,
+                    "classification_version": document.classification_version,
+                    "classification_confidence": document.classification_confidence,
                     "child_id": chunk.child_id,
                     "parent_id": chunk.parent_id,
                     "chunk_order": chunk.order,
@@ -240,6 +260,13 @@ class HybridIndexBuilder:
                     "valid_until": document.valid_until, "confidentiality": document.confidentiality,
                     "authority": document.authority, "source_id": document.source_id,
                     "source_url": document.source_url, "child_id": chunk.child_id,
+                    "domain": document.domain, "document_type": document.document_type,
+                    "topics": list(document.topics),
+                    "evidence_capabilities": list(document.evidence_capabilities),
+                    "source_provider": document.source_provider,
+                    "classification_status": document.classification_status,
+                    "classification_version": document.classification_version,
+                    "classification_confidence": document.classification_confidence,
                     "parent_id": chunk.parent_id, "chunk_order": chunk.order,
                     "heading_path": list(chunk.heading_path), "content": chunk.content,
                     "parent_content": chunk.parent_content, "chunk_kind": chunk.kind,

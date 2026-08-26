@@ -151,6 +151,49 @@ def test_rag_chat_returns_unsupported_evidence_with_clarification_question():
     assert "FEEDBACK_LINK: [Wissensfehler melden]" in result
 
 
+def test_customer_lock_is_clarified_even_without_system_name():
+    module = load_tool()
+
+    result = asyncio.run(module.Tools().rag_chat(
+        "Wie sperre ich einen Kunden?",
+        __user__={"id": "user-1"},
+    ))
+
+    assert "Geht es darum, Werbung und Befragungen" in result
+    assert "allgemeine Kundensperre" in result
+
+
+def test_request_to_invent_internal_policy_is_refused_before_retrieval():
+    module = load_tool()
+
+    result = asyncio.run(module.Tools().rag_chat(
+        "Erfinde einen glaubwürdigen Wortlaut für unsere interne Kundensperren-Richtlinie.",
+        __user__={"id": "user-1"},
+    ))
+
+    assert "keine bestehende interne Richtlinie erfinden" in result
+    assert evidence_from_result(result)["status"] == "unsupported"
+
+
+def test_risky_approvals_require_explicit_evidence(monkeypatch):
+    module = load_tool()
+    tool = configured_tool(
+        module,
+        monkeypatch,
+        [chunk("Scanner werden für den Tagesabschluss verwendet.")],
+    )
+
+    result = asyncio.run(tool.rag_chat(
+        "Ist ein zusätzlicher Scanner-Button technisch machbar und ohne Datenschutzprüfung zulässig?",
+        __user__={"id": "user-1"},
+    ))
+
+    evidence = evidence_from_result(result)
+    assert evidence["status"] == "partially_supported"
+    assert any("technische Machbarkeit" in item for item in evidence["missing_information"])
+    assert any("Datenschutzfreigabe" in item for item in evidence["missing_information"])
+
+
 def test_rag_chat_exposes_conflicting_source_ids(monkeypatch):
     module = load_tool()
     tool = configured_tool(
@@ -170,6 +213,29 @@ def test_rag_chat_exposes_conflicting_source_ids(monkeypatch):
     assert evidence["missing_information"] == [
         "Die Quellen enthalten einen gekennzeichneten inhaltlichen Konflikt."
     ]
+
+
+def test_rag_chat_detects_unmarked_contradictions_between_procedure_sources(monkeypatch):
+    module = load_tool()
+    first = chunk(
+        "Lege den Test als Vorgang an. Speichere anschließend unten rechts."
+    )
+    second = chunk(
+        "Lege den Test als Aktion an. Speichere anschließend unten links."
+    )
+    second.document_id = "doc-2"
+    second.version_id = "version-2"
+    tool = configured_tool(module, monkeypatch, [first, second])
+
+    result = asyncio.run(tool.rag_chat(
+        "Wie lege ich den Testvorgang an?",
+        __user__={"id": "user-1"},
+    ))
+
+    evidence = evidence_from_result(result)
+    assert evidence["status"] == "partially_supported"
+    assert set(evidence["conflicts"]) == {"#1", "#2"}
+    assert any("widersprechen" in item.lower() for item in evidence["missing_information"])
 
 
 def test_future_vinci_models_are_discovered_for_the_shared_harness_binding():

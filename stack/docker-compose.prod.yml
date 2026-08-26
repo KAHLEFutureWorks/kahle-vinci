@@ -86,6 +86,11 @@ services:
     cpus: 0.5
     pids_limit: 128
 
+  personio-directory:
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+
   n8n:
     mem_limit: 1500m
     cpus: 2.0

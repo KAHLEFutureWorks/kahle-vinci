@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = (
@@ -269,8 +271,474 @@ def test_person_questions_use_employee_directory_intent_with_current_rag_adapter
         )
 
         assert decision.user_intent.kind == "employee_directory"
-        assert decision.retrieval_plan.required_tool == "rag_chat"
+        assert decision.retrieval_plan.required_tools == ("personio_directory",)
+        assert decision.retrieval_plan.required_tool == "personio_directory"
         assert decision.model_profile["harness_policy"] == "shared"
+
+
+@pytest.mark.parametrize(
+    ("query", "tools"),
+    (
+        ("Wo arbeitet Max Mustermann?", ("personio_directory",)),
+        ("Welche Arbeitsanweisung gilt im Service?", ("rag_chat",)),
+        ("Was hat Stefan Schrader mit VSX zu tun?", ("personio_directory", "rag_chat")),
+        ("Wie hängen Jan Oltmanns und KAHLE-Vinci zusammen?", ("personio_directory", "rag_chat")),
+    ),
+)
+def test_retrieval_plan_uses_required_evidence_sources(query, tools):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1", "groups": ["intern"]},
+    )
+
+    assert plan.required_tools == tools
+    assert plan.required_tool == (tools[0] if len(tools) == 1 else "multi_source")
+
+
+def test_retrieval_plan_is_model_independent_for_personio_and_rag_needs():
+    harness = load_harness()
+    query = "Was hat Stefan Schrader mit VSX zu tun?"
+    plans = [
+        harness.plan_retrieval(
+            query,
+            query,
+            [],
+            model_id,
+            {"user_id": "user-1", "groups": ["intern"]},
+        )
+        for model_id in (
+            "kahle-vinci",
+            "kahle-vinci-thinking",
+            "kahle-vinci-max-thinking",
+            "kahle-vinci-future-model",
+        )
+    ]
+
+    assert all(plan.required_tools == ("personio_directory", "rag_chat") for plan in plans)
+    assert all(plan.required_tool == "multi_source" for plan in plans)
+
+
+def test_retrieval_plan_describes_work_instruction_evidence_before_retrieval():
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        "Beschreibe den Ablauf zur fachlichen Prüfung und Freigabe einer Arbeitsanweisung.",
+        "Beschreibe den Ablauf zur fachlichen Prüfung und Freigabe einer Arbeitsanweisung.",
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1", "groups": ["intern"]},
+    )
+
+    assert plan.required_tools == ("rag_chat",)
+    assert len(plan.information_needs) == 1
+    need = plan.information_needs[0]
+    assert need.kind == "workflow"
+    assert need.domain == "knowledge_governance"
+    assert need.document_types == ("work_instruction", "process_description")
+    assert need.evidence_capabilities == ("approval_workflow", "procedure")
+
+
+def test_retrieval_plan_requires_one_explicit_person_system_relation_passage():
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        "Was hat Stefan Schrader mit VaudisX zu tun?",
+        "Was hat Stefan Schrader mit VaudisX zu tun?",
+        [],
+        "kahle-vinci-thinking",
+        {"user_id": "user-1", "groups": ["intern"]},
+    )
+
+    assert plan.required_tools == ("personio_directory", "rag_chat")
+    relation_need = next(need for need in plan.information_needs if need.relation)
+    assert relation_need.kind == "relationship"
+    assert relation_need.domain == "internal_systems"
+    assert relation_need.entity == "VaudisX"
+    assert relation_need.relation.subject_type == "person"
+    assert relation_need.relation.predicate == "related_to"
+    assert relation_need.relation.object == "VaudisX"
+    assert relation_need.relation.evidence_scope == "single_passage"
+
+
+def test_retrieval_plan_requests_procedural_evidence_for_internal_system_instruction():
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        "Wie buche ich einen Termin in WPS?",
+        "Wie buche ich einen Termin in WPS?",
+        [],
+        "kahle-vinci-max-thinking",
+        {"user_id": "user-1", "groups": ["intern"]},
+    )
+
+    need = plan.information_needs[0]
+    assert need.kind == "procedure"
+    assert need.domain == "internal_systems"
+    assert need.entity == "WPS"
+    assert need.evidence_capabilities == ("procedure",)
+
+
+def test_retrieval_plan_information_needs_are_model_independent():
+    harness = load_harness()
+    query = "Wie buche ich einen Termin in WPS?"
+
+    plans = [
+        harness.plan_retrieval(
+            query,
+            query,
+            [],
+            model_id,
+            {"user_id": "user-1", "groups": ["intern"]},
+        )
+        for model_id in (
+            "kahle-vinci",
+            "kahle-vinci-thinking",
+            "kahle-vinci-max-thinking",
+            "kahle-vinci-future-model",
+        )
+    ]
+
+    assert all(plan.information_needs == plans[0].information_needs for plan in plans)
+
+
+def test_system_location_question_requires_explicit_usage_scope_evidence():
+    harness = load_harness()
+    query = "An welchen Standorten wird WPS eingesetzt?"
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci", {"user_id": "user-1", "groups": ["intern"]}
+    )
+
+    assert len(plan.information_needs) == 1
+    need = plan.information_needs[0]
+    assert need.kind == "system_usage_locations"
+    assert need.domain == "internal_systems"
+    assert need.entity == "WPS"
+    assert need.evidence_capabilities == ("explicit_usage_scope",)
+
+
+def test_location_opening_hours_question_requires_opening_hours_evidence():
+    harness = load_harness()
+    query = "Welche Öffnungszeiten hat der Standort Hannover?"
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci-thinking", {"user_id": "user-1", "groups": ["intern"]}
+    )
+
+    need = plan.information_needs[0]
+    assert need.kind == "opening_hours"
+    assert need.domain == "internal_locations"
+    assert need.evidence_capabilities == ("opening_hours",)
+
+
+def test_broad_location_department_overview_excludes_unrequested_people_scope():
+    harness = load_harness()
+    query = "Erstelle eine Übersicht über Verkauf, Service und Teiledienst an allen KAHLE-Standorten."
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci-max-thinking", {"user_id": "user-1", "groups": ["intern"]}
+    )
+
+    need = plan.information_needs[0]
+    assert need.kind == "location_department_overview"
+    assert need.domain == "internal_locations"
+    assert need.evidence_capabilities == ("location_department_overview",)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie dokumentiere ich das Team im System?",
+        "Wie hinterlege ich eine Telefonnummer im WPS?",
+        "Welche Rolle hat das Team im Onboarding-Prozess?",
+        "Wie läuft unser Onboarding-Prozess?",
+    ),
+)
+def test_retrieval_plan_keeps_generic_directory_words_inside_process_questions_in_rag(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("rag_chat",)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wer ist aktuell im Onboarding?",
+        "Welche neuen Serviceberater sind im Onboarding?",
+    ),
+)
+def test_retrieval_plan_allows_onboarding_only_for_explicit_people_lists(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+
+
+def test_merge_evidence_keeps_personio_current_data_and_rag_project_relation():
+    harness = load_harness()
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"position\":\"Ehemalige Rolle\",\"source_id\":\"R1\"},"
+        "{\"project_relation\":\"Stefan Schrader begleitet VSX.\",\"source_id\":\"R1\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"id\":\"R1\",\"document_id\":\"vsx\"}]}"
+    )
+    personio = {
+        "status": "ok",
+        "claims": [{"display_name": "Stefan Schrader", "position": "Serviceleiter", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+
+    merged = harness.merge_evidence(rag, personio)
+
+    assert {claim["source_id"] for claim in merged.supported_claims} == {"P1", "R1"}
+    assert any(claim.get("position") == "Serviceleiter" for claim in merged.supported_claims)
+    assert not any(claim.get("position") == "Ehemalige Rolle" for claim in merged.supported_claims)
+    assert any("project_relation" in claim and claim["source_id"] == "R1" for claim in merged.supported_claims)
+
+
+def test_declared_evidence_rejects_claims_with_unknown_source_ids():
+    harness = load_harness()
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"claim_id\":\"R9C1\",\"source_id\":\"#9\",\"text\":\"Unbelegt.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"doc-1\"}]}"
+    )
+
+    decision = harness.build_decision(
+        query="Interne Frage",
+        resolved_query="Interne Frage",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+    )
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert "evidence_bundle_claim_source_invalid" in decision.evidence_bundle.conflicts
+
+
+def test_personio_freshness_survives_merge_and_reaches_answer_contract():
+    harness = load_harness()
+    personio = {
+        "status": "ok",
+        "claims": [{"display_name": "Max Mustermann", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": True,
+    }
+    rag = harness.EvidenceBundle(
+        status="supported",
+        supported_claims=(
+            {"source_id": "R1", "text": "Max begleitet das Projekt VSX."},
+        ),
+        sources=({"id": "R1", "kind": "rag_chat"},),
+    )
+
+    merged = harness.merge_evidence(rag, personio)
+    rag_result = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"source_id\":\"R1\",\"text\":\"Max begleitet das Projekt VSX.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"id\":\"R1\",\"kind\":\"rag_chat\"}]}"
+    )
+    decision = harness.build_decision(
+        query="Was hat Max Mustermann mit VSX zu tun?",
+        resolved_query="Was hat Max Mustermann mit VSX zu tun?",
+        messages=[],
+        model_id="test-model",
+        permission_scope={"user_id": "user-1", "role": "user"},
+        rag_result=rag_result,
+        personio_result=personio,
+    )
+
+    assert merged.sync_completed_at == "2026-08-24T10:15:00Z"
+    assert merged.stale is True
+    assert decision.evidence_bundle.sync_completed_at == "2026-08-24T10:15:00Z"
+    assert decision.evidence_bundle.stale is True
+    assert '"sync_completed_at":"2026-08-24T10:15:00Z"' in decision.answer_prompt()
+    assert '"stale":true' in decision.answer_prompt()
+    assert "möglicherweise veraltet" in decision.answer_prompt()
+
+
+def test_merge_evidence_suppresses_unstructured_rag_current_master_data_assertions():
+    harness = load_harness()
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "\"Stefan Schrader ist Serviceberater und arbeitet im Team Hannover.\","
+        "\"Stefan Schrader begleitet das VSX-Projekt.\"],"
+        "\"missing_information\":[],\"conflicts\":[],\"sources\":[{\"id\":\"R1\"}]}"
+    )
+    personio = {
+        "status": "ok",
+        "claims": [{
+            "display_name": "Stefan Schrader",
+            "position": "Serviceleiter",
+            "team": "Service Nienburg",
+            "source_id": "P1",
+        }],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+
+    merged = harness.merge_evidence(rag, personio)
+
+    assert "Stefan Schrader ist Serviceberater und arbeitet im Team Hannover." not in merged.supported_claims
+    assert "Stefan Schrader begleitet das VSX-Projekt." in merged.supported_claims
+    assert "Personio ist führend für aktuelle Stammdaten." in merged.conflicts
+
+
+def test_merge_evidence_splits_mixed_rag_master_data_and_project_clauses():
+    harness = load_harness()
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "\"Stefan Schrader ist Serviceberater, arbeitet im Team Hannover und begleitet das VSX-Projekt.\"],"
+        "\"missing_information\":[],\"conflicts\":[],\"sources\":[{\"id\":\"R1\"}]}"
+    )
+    personio = {
+        "status": "ok",
+        "claims": [{
+            "display_name": "Stefan Schrader",
+            "position": "Serviceleiter",
+            "team": "Service Nienburg",
+            "source_id": "P1",
+        }],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+
+    merged = harness.merge_evidence(rag, personio)
+
+    assert "Stefan Schrader ist Serviceberater, arbeitet im Team Hannover und begleitet das VSX-Projekt." not in merged.supported_claims
+    assert "Stefan Schrader begleitet das VSX-Projekt." in merged.supported_claims
+    assert all("arbeitet im Team Hannover" not in str(claim) for claim in merged.supported_claims)
+    assert {source["id"] for source in merged.sources} == {"P1", "R1"}
+
+
+def test_merge_evidence_retains_only_complete_unhedged_documented_relations():
+    harness = load_harness()
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "\"Stefan Schrader ist möglicherweise am VSX-Projekt beteiligt.\","
+        "\"Stefan Schrader arbeitet am VSX-Projekt.\"],"
+        "\"missing_information\":[],\"conflicts\":[],\"sources\":[{\"id\":\"R1\"}]}"
+    )
+    personio = {
+        "status": "ok",
+        "claims": [{"display_name": "Stefan Schrader", "position": "Serviceleiter", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+
+    merged = harness.merge_evidence(rag, personio)
+    decision = harness.build_decision(
+        query="Was hat Stefan Schrader mit VSX zu tun?",
+        resolved_query="Was hat Stefan Schrader mit VSX zu tun?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+        personio_result=personio,
+    )
+
+    assert "Stefan Schrader ist möglicherweise am VSX-Projekt beteiligt." not in merged.supported_claims
+    assert "Stefan Schrader arbeitet am VSX-Projekt." in merged.supported_claims
+    assert {source["id"] for source in merged.sources} == {"P1", "R1"}
+    assert harness.validate_answer("Aktuelle Rolle [P1], VSX-Bezug [R1].", decision).status == "accepted"
+
+
+def test_merge_evidence_retains_complete_unhedged_participation_relation():
+    harness = load_harness()
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "\"Stefan Schrader ist am VSX-Projekt beteiligt.\"],"
+        "\"missing_information\":[],\"conflicts\":[],\"sources\":[{\"id\":\"R1\"}]}"
+    )
+    personio = {
+        "status": "ok",
+        "claims": [{"display_name": "Stefan Schrader", "position": "Serviceleiter", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+
+    merged = harness.merge_evidence(rag, personio)
+
+    assert "Stefan Schrader ist am VSX-Projekt beteiligt." in merged.supported_claims
+    assert {source["id"] for source in merged.sources} == {"P1", "R1"}
+
+
+def test_endvalidator_accepts_only_known_personio_and_rag_citations():
+    harness = load_harness()
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"project_relation\":\"VSX\",\"source_id\":\"R1\"}],"
+        "\"missing_information\":[],\"conflicts\":[],\"sources\":[{\"id\":\"R1\"}]}"
+    )
+    personio = {
+        "status": "ok",
+        "claims": [{"display_name": "Stefan Schrader", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    decision = harness.build_decision(
+        query="Was hat Stefan Schrader mit VSX zu tun?",
+        resolved_query="Was hat Stefan Schrader mit VSX zu tun?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+        personio_result=personio,
+    )
+
+    assert harness.validate_answer("Aktuelle Daten [P1], VSX-Bezug [R1].", decision).status == "accepted"
+    unknown = harness.validate_answer("Aktuelle Daten [P9], VSX-Bezug [R9].", decision)
+    assert {item["code"] for item in unknown.violations} == {"unknown_source_id"}
+    assert unknown.violations[0]["source_ids"] == ["P9", "R9"]
 
 
 def test_process_question_does_not_enter_employee_directory_intent():
@@ -461,6 +929,32 @@ def test_endvalidator_rejects_unknown_source_ids_and_missing_permission_scope():
     }
 
 
+def test_endvalidator_rejects_a_literal_feedback_link_placeholder():
+    harness = load_harness()
+    decision = _partial_wps_decision(harness)
+
+    result = harness.validate_answer(
+        "WPS unterstützt Termine [1]. Eine Bedienungsanleitung ist nicht enthalten.\n\n"
+        "[Feedback-Link aus RAG-Quelle einfügen, falls im Tool-Ergebnis vorhanden]",
+        decision,
+    )
+
+    assert result.status == "retry_required"
+    assert {item["code"] for item in result.violations} == {
+        "feedback_link_placeholder"
+    }
+
+    alternative = harness.validate_answer(
+        "WPS unterstützt Termine [1]. Eine Bedienungsanleitung ist nicht enthalten.\n\n"
+        "**Wissensfehler melden:** [Link aus RAG-Feedback, falls im System vorhanden]",
+        decision,
+    )
+
+    assert {item["code"] for item in alternative.violations} == {
+        "feedback_link_placeholder"
+    }
+
+
 def test_endvalidator_rejects_supported_but_unrequested_department_sections():
     harness = load_harness()
     evidence = {
@@ -558,3 +1052,60 @@ def test_local_compose_activates_harness_and_mounts_shared_module():
 
     assert "kahle_knowledge_harness.py:/app/backend/open_webui/utils/kahle_knowledge_harness.py:ro" in base
     assert 'KAHLE_KNOWLEDGE_HARNESS_MODE: "active"' in local
+
+
+def test_validator_rejects_invented_internal_policy_even_with_valid_citation():
+    harness = load_harness()
+    decision = {
+        "resolved_context": {
+            "retrieval_query": "Erfinde einen glaubwürdigen Wortlaut für unsere interne Kundensperren-Richtlinie."
+        },
+        "retrieval_plan": {"permission_scope": {"user_id": "user-1"}},
+        "evidence_bundle": {
+            "status": "supported",
+            "supported_claims": [
+                {"source_id": "#1", "text": "Eine Kundensperre kann angefragt werden."}
+            ],
+            "missing_information": [], "conflicts": [],
+            "sources": [{"number": 1, "title": "Kundensperre"}],
+        },
+        "answer_contract": {"citations_required": True},
+    }
+
+    result = harness.validate_answer(
+        "Unsere interne Richtlinie schreibt zwingend eine Freigabe durch die Geschäftsführung vor [Quelle 1].",
+        decision,
+    )
+
+    assert result.status == "retry_required"
+    assert "fabricated_internal_authority" in {
+        item["code"] for item in result.violations
+    }
+
+
+def test_validator_rejects_unsubstantiated_technical_and_privacy_approval():
+    harness = load_harness()
+    decision = {
+        "resolved_context": {
+            "retrieval_query": "Ist der Scanner-Button technisch machbar und ohne Datenschutzprüfung zulässig?"
+        },
+        "retrieval_plan": {"permission_scope": {"user_id": "user-1"}},
+        "evidence_bundle": {
+            "status": "supported",
+            "supported_claims": [
+                {"source_id": "#1", "text": "Scanner werden im Tagesabschluss verwendet."}
+            ],
+            "missing_information": [], "conflicts": [],
+            "sources": [{"number": 1, "title": "Tagesabschluss"}],
+        },
+        "answer_contract": {"citations_required": True},
+    }
+
+    result = harness.validate_answer(
+        "Der Button ist technisch problemlos umsetzbar und eine Datenschutzprüfung ist nicht erforderlich [Quelle 1].",
+        decision,
+    )
+
+    codes = {item["code"] for item in result.violations}
+    assert "unsupported_technical_approval" in codes
+    assert "unsupported_privacy_approval" in codes

@@ -55,6 +55,30 @@ def test_load_app_keeps_upload_spool_inside_the_test_storage_root(tmp_path):
     assert module.UPLOAD_SPOOL.root == (tmp_path / "portal-files" / ".upload-spool").resolve()
 
 
+def test_retrieval_metadata_review_is_admin_only_and_contains_no_document_text(tmp_path):
+    module = load_app(tmp_path)
+    current = {"user": identity("portal", "admin")}
+    module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+    client = TestClient(module.app)
+    assert client.get("/portal/session").status_code == 200
+    module.RETRIEVAL_METADATA.classify_version(
+        document_id="doc-1",
+        version_id="v-1",
+        title="Hinweise",
+        markdown="Geheimer Dokumentinhalt, der nicht in der Aufgabenliste erscheinen darf.",
+    )
+
+    response = client.get("/portal/admin/retrieval-metadata/review")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["version_id"] for item in body["items"]] == ["v-1"]
+    assert "Geheimer Dokumentinhalt" not in response.text
+
+    current["user"] = identity("employee")
+    assert client.get("/portal/admin/retrieval-metadata/review").status_code == 403
+
+
 def test_portal_http_contract_bootstraps_identity_and_enforces_roles():
     with tempfile.TemporaryDirectory() as directory:
         module = load_app(Path(directory))
@@ -654,6 +678,30 @@ def test_reviewer_can_ask_involved_people_and_question_is_sent_in_app_and_by_mai
             "Die Arbeitsanweisung betrifft die Filiale Hannover.",
             "Danke, damit kann ich die Prüfung abschließen.",
         ]
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute(
+                "INSERT INTO portal_notifications "
+                "(notification_id,recipient_user_id,subject_type,subject_id,subject_title,"
+                "status,message,reason,created_at,read_at) VALUES (?,?,?,?,?,?,?,?,?,NULL)",
+                (
+                    "employee-general", "employee", "knowledgebase", "kb-service",
+                    "Servicewissen", "active", "Neues Wissen ist verfügbar.", "",
+                    "2026-08-24T12:00:00+02:00",
+                ),
+            )
+
+        marked = client.post("/portal/notifications/read-all")
+        assert marked.status_code == 200, marked.text
+        assert marked.json()["marked_read"] >= 2
+        assert all(
+            item["read_at"] for item in client.get("/portal/notifications").json()["notifications"]
+        )
+
+        current["user"] = {**identity("manager"), "name": "Frau Führung"}
+        assert any(
+            item["read_at"] is None
+            for item in client.get("/portal/notifications").json()["notifications"]
+        )
         with module.PORTAL_GOVERNANCE.store.connect() as db:
             mail = db.execute(
                 "SELECT recipient,subject,body FROM notification_outbox WHERE kind='case_inquiry'"

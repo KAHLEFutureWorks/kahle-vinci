@@ -23,17 +23,25 @@ TOOLS_DIR = ROOT / "stack" / "open-webui-tools"
 FUNCTIONS_DIR = ROOT / "stack" / "open-webui-functions"
 PROMPTS_DIR = ROOT / "stack" / "open-webui-prompts"
 
+KAHLE_VINCI_MAX_MODEL_ID = "kahle-vinci-max-thinking"
+KAHLE_VINCI_MAX_BASE_MODEL_ID = os.environ.get(
+    "KAHLE_VINCI_MAX_BASE_MODEL_ID", "Qwen/Qwen3.5-397B-A17B"
+)
 KAHLE_VINCI_MODEL_IDS = [
     "vinci-2-clone-clone-clone",
     "kahle-vinci-thinking",
-    "kahle-vinci-max-thinking",
+    KAHLE_VINCI_MAX_MODEL_ID,
 ]
 KAHLE_VINCI_MODEL_NAMES = {
     "kahle-vinci",
     "kahle-vinci-thinking",
     "kahle-vinci-max-thinking",
 }
-KAHLE_VINCI_BASE_MODEL_IDS = ["mistralai/Mistral-Small-24B-Instruct", "openai/gpt-oss-120b"]
+KAHLE_VINCI_BASE_MODEL_IDS = [
+    "mistralai/Mistral-Small-24B-Instruct",
+    "openai/gpt-oss-120b",
+    KAHLE_VINCI_MAX_BASE_MODEL_ID,
+]
 PUBLIC_MODEL_IDS = KAHLE_VINCI_MODEL_IDS + KAHLE_VINCI_BASE_MODEL_IDS
 PUBLIC_TOOL_IDS = [
     "kahle_tasks",
@@ -399,8 +407,8 @@ FUNCTION_DEFINITIONS = {
         "name": "KAHLE Toolcall Guard",
         "path": FUNCTIONS_DIR / "kahle_toolcall_guard.py",
         "type": "filter",
-        "description": "Outlet-Filter gegen Pseudo-Toolcalls und unbelegte interne Folgeantworten.",
-        "version": "0.3.0",
+        "description": "Technischer Outlet-Filter gegen Pseudo-Toolcalls, unsichere Dateiaktionen und sichtbares Reasoning; keine inhaltliche Umschreibung von Wissensantworten.",
+        "version": "0.4.0",
         "is_global": 1,
     },
 }
@@ -574,6 +582,80 @@ def shared_vinci_tool_ids() -> list[str]:
     return ["rag_chat", "kahle_tasks", "kahle_workflow"]
 
 
+def ensure_max_vinci_models(con: sqlite3.Connection, now: int) -> dict[str, bool]:
+    """Create only missing Max runtime rows and preserve existing configuration."""
+    base_created = False
+    model_created = False
+    base = con.execute(
+        "select id from model where id = ?", (KAHLE_VINCI_MAX_BASE_MODEL_ID,)
+    ).fetchone()
+    if not base:
+        con.execute(
+            """
+            insert into model
+                (id, user_id, base_model_id, name, meta, params,
+                 created_at, updated_at, is_active)
+            values (?, ?, null, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                KAHLE_VINCI_MAX_BASE_MODEL_ID,
+                "system",
+                KAHLE_VINCI_MAX_BASE_MODEL_ID,
+                json.dumps(
+                    {
+                        "profile_image_url": "/static/favicon.png",
+                        "description": None,
+                        "capabilities": None,
+                        "knowledge": None,
+                        "hidden": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                "{}",
+                now,
+                now,
+            ),
+        )
+        base_created = True
+
+    maximum = con.execute(
+        "select id from model where id = ?", (KAHLE_VINCI_MAX_MODEL_ID,)
+    ).fetchone()
+    if not maximum:
+        template = con.execute(
+            "select user_id, meta, params from model where id = ?",
+            ("kahle-vinci-thinking",),
+        ).fetchone()
+        owner = str(template["user_id"] or "system") if template else "system"
+        meta = load_json(template["meta"], {}) if template else {}
+        params = load_json(template["params"], {}) if template else {}
+        meta = dict(meta)
+        params = dict(params)
+        meta["description"] = (
+            "KAHLE-Vinci fuer besonders komplexe Aufgaben mit gemeinsamem Wissens-Harness."
+        )
+        con.execute(
+            """
+            insert into model
+                (id, user_id, base_model_id, name, meta, params,
+                 created_at, updated_at, is_active)
+            values (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                KAHLE_VINCI_MAX_MODEL_ID,
+                owner,
+                KAHLE_VINCI_MAX_BASE_MODEL_ID,
+                "KAHLE-Vinci-Max-Thinking",
+                json.dumps(meta, ensure_ascii=False),
+                json.dumps(params, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        model_created = True
+    return {"base_created": base_created, "model_created": model_created}
+
+
 def ensure_admin_model(con: sqlite3.Connection, now: int) -> None:
     existing = con.execute("select id from model where id = ?", (ADMIN_MODEL_ID,)).fetchone()
     prompt_path = PROMPTS_DIR / "kahle-vinci-admin-systemprompt.md"
@@ -698,6 +780,8 @@ def main() -> int:
             print(f"Registered KAHLE component: {args.only}")
             return 0
 
+        max_registration = ensure_max_vinci_models(con, now)
+
         prompts = {
             "vinci-2-clone-clone-clone": PROMPTS_DIR / "kahle-vinci-systemprompt.md",
             "kahle-vinci-thinking": PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md",
@@ -741,6 +825,11 @@ def main() -> int:
     print("Registered KAHLE tools: " + ", ".join(TOOL_DEFINITIONS))
     print("Registered KAHLE functions: " + ", ".join(FUNCTION_DEFINITIONS))
     print(f"Attached shared Vinci harness tools to {', '.join(resolved_vinci_model_ids)}")
+    if max_registration["base_created"] or max_registration["model_created"]:
+        print(
+            "Created missing Max runtime rows: "
+            f"base={max_registration['base_created']}, model={max_registration['model_created']}"
+        )
     print(f"Ensured admin model: {ADMIN_MODEL_ID}")
     if tools_prompt_updated:
         print("Updated global tools function-calling prompt")

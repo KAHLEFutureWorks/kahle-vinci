@@ -39,7 +39,16 @@ def rag_result(*, status, claims=(), missing=(), sources=(), context=""):
     )
 
 
-def decision(harness, query, result, *, model="kahle-vinci", user_id="user-1", messages=None):
+def decision(
+    harness,
+    query,
+    result,
+    *,
+    model="kahle-vinci",
+    user_id="user-1",
+    messages=None,
+    personio_result=None,
+):
     return harness.build_decision(
         query=query,
         resolved_query=query,
@@ -47,6 +56,7 @@ def decision(harness, query, result, *, model="kahle-vinci", user_id="user-1", m
         model_id=model,
         permission_scope={"user_id": user_id, "groups": ["intern"]},
         rag_result=result,
+        personio_result=personio_result,
     )
 
 
@@ -79,21 +89,31 @@ def test_reference_matrix_unknown_system_without_and_with_real_instructions():
 
 def test_reference_matrix_person_directory_is_ready_for_future_personio_adapter():
     harness = load_harness()
-    result = rag_result(
-        status="supported",
-        claims=({"source_id": "#3", "text": "Thomas Keller ist Geschäftsführer."},),
-        sources=({"number": 3, "document_id": "contacts"},),
-    )
+    result = rag_result(status="unsupported", missing=("Keine Dokumentquelle nötig.",))
+    personio = {
+        "status": "ok",
+        "claims": [{"display_name": "Thomas Keller", "position": "Geschäftsführer", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
 
     for model in (
         "kahle-vinci", "kahle-vinci-thinking", "kahle-vinci-max-thinking",
         "kahle-vinci-future",
     ):
-        current = decision(harness, "Wer ist Thomas Keller?", result, model=model)
+        current = decision(
+            harness,
+            "Wer ist Thomas Keller?",
+            result,
+            model=model,
+            personio_result=personio,
+        )
         assert current.user_intent.kind == "employee_directory"
-        assert current.retrieval_plan.required_tool == "rag_chat"
+        assert current.retrieval_plan.required_tools == ("personio_directory",)
+        assert current.retrieval_plan.required_tool == "personio_directory"
         assert harness.validate_answer(
-            "Thomas Keller ist Geschäftsführer [3].", current
+            "Thomas Keller ist Geschäftsführer [P1].", current
         ).status == "accepted"
 
 
@@ -167,3 +187,12 @@ def test_reference_matrix_runtime_metrics_contract_is_persisted_by_middleware():
     ):
         assert f"'{field}'" in middleware
     assert "'kahle_harness_metrics': metadata['kahle_harness_metrics']" in middleware
+
+
+def test_model_prompts_leave_canonical_feedback_link_delivery_to_the_harness():
+    for filename in (
+        "kahle-vinci-systemprompt.md",
+        "kahle-vinci-thinking-systemprompt.md",
+    ):
+        prompt = (ROOT / "open-webui-prompts" / filename).read_text(encoding="utf-8")
+        assert "Wenn RAG_Chat `FEEDBACK_LINK` liefert" not in prompt

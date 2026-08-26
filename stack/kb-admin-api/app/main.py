@@ -70,6 +70,7 @@ try:
     from .document_authority import AuthorityError, DocumentAuthorityService
     from .rag_metadata import RAGMetadataWriter
     from .content_classification import ContentConfidentialityClassifier
+    from .retrieval_metadata import RetrievalMetadataStore
     from .restricted_terms import RestrictedTermError, RestrictedTermService
     from .global_analysis import (
         CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
@@ -93,6 +94,7 @@ except ImportError:  # pragma: no cover
     from document_authority import AuthorityError, DocumentAuthorityService
     from rag_metadata import RAGMetadataWriter
     from content_classification import ContentConfidentialityClassifier
+    from retrieval_metadata import RetrievalMetadataStore
     from restricted_terms import RestrictedTermError, RestrictedTermService
     from global_analysis import (
         CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
@@ -176,6 +178,8 @@ GLOBAL_ANALYZER = GlobalDocumentAnalyzer(
     IonosEmbeddingProvider(IONOS_BASE_URL, IONOS_API_KEY, EMBEDDING_MODEL) if IONOS_API_KEY else None,
 )
 PORTAL_FILES_ROOT = Path(os.getenv("KB_PORTAL_FILES_ROOT", "/portal-data/files"))
+RETRIEVAL_METADATA = RetrievalMetadataStore(PORTAL_DB_PATH)
+RETRIEVAL_METADATA_BACKFILL = RETRIEVAL_METADATA.backfill(PORTAL_FILES_ROOT)
 UPLOAD_JOBS = UploadJobService(PORTAL_GOVERNANCE.store)
 UPLOAD_SPOOL = UploadSpool(PORTAL_FILES_ROOT / ".upload-spool")
 RAG_METADATA = RAGMetadataWriter(PORTAL_GOVERNANCE.store, PORTAL_FILES_ROOT)
@@ -329,6 +333,13 @@ class PortalRestrictedTermRequest(BaseModel):
 class PortalAutoActivationRequest(BaseModel):
     enabled: bool
     reason: str = Field(..., min_length=3, max_length=2000)
+
+
+class PortalRetrievalMetadataConfirmationRequest(BaseModel):
+    domain: str = Field(..., min_length=3, max_length=80)
+    document_type: str = Field(..., min_length=3, max_length=80)
+    topics: list[str] = Field(default_factory=list, max_length=20)
+    evidence_capabilities: list[str] = Field(..., min_length=1, max_length=20)
 
 
 class PortalMigrationMetadataRequest(BaseModel):
@@ -943,6 +954,7 @@ def _trigger_reindex(collection: str, relative_path: str = "") -> dict[str, Any]
 
 
 def _trigger_hybrid_reindex() -> dict[str, Any]:
+    RETRIEVAL_METADATA.backfill(PORTAL_FILES_ROOT)
     try:
         response = requests.post(
             f"{KB_SYNC_URL}/reindex-all",
@@ -959,6 +971,7 @@ def _trigger_hybrid_reindex() -> dict[str, Any]:
 
 def _trigger_hybrid_version_sync(version_id: str) -> dict[str, Any]:
     """Publish one canonical version; full rebuilds are reserved for maintenance."""
+    _classify_retrieval_metadata_version(version_id)
     try:
         response = requests.post(
             f"{KB_SYNC_URL}/hybrid/versions/sync",
@@ -997,6 +1010,31 @@ def _archived_version_files(document_id: str, version_id: str) -> tuple[Path, li
         raise HTTPException(status_code=404, detail="archived_version_not_available") from exc
     originals = [item for item in version_root.glob("original.*") if item.is_file()]
     return version_root, originals, version_root / "rag.md"
+
+
+def _classify_retrieval_metadata_version(version_id: str) -> bool:
+    """Refresh portal-side retrieval metadata without changing ``rag.md``."""
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        row = db.execute(
+            """SELECT v.version_id,v.document_id,d.title
+               FROM document_versions v
+               JOIN canonical_documents d ON d.document_id=v.document_id
+               WHERE v.version_id=?""",
+            (version_id,),
+        ).fetchone()
+    if not row:
+        return False
+    markdown_path = PORTAL_FILES_ROOT / row["document_id"] / version_id / "rag.md"
+    if not markdown_path.is_file():
+        return False
+    raw = markdown_path.read_bytes()
+    return RETRIEVAL_METADATA.classify_version(
+        document_id=row["document_id"],
+        version_id=version_id,
+        title=row["title"],
+        markdown=raw.decode("utf-8-sig", errors="replace"),
+        content_sha256=hashlib.sha256(raw).hexdigest(),
+    )
 
 
 def _document_summary(path: Path, collection: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -2716,6 +2754,25 @@ def portal_mark_notification_read(
     return {"marked_read": cursor.rowcount}
 
 
+@app.post("/portal/notifications/read-all")
+def portal_mark_all_notifications_read(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, int]:
+    read_at = datetime.now().astimezone().isoformat()
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        case_cursor = db.execute(
+            "UPDATE portal_case_notifications SET read_at=? "
+            "WHERE recipient_user_id=? AND read_at IS NULL",
+            (read_at, identity["user_id"]),
+        )
+        general_cursor = db.execute(
+            "UPDATE portal_notifications SET read_at=? "
+            "WHERE recipient_user_id=? AND read_at IS NULL",
+            (read_at, identity["user_id"]),
+        )
+    return {"marked_read": case_cursor.rowcount + general_cursor.rowcount}
+
+
 def _admin_emails() -> list[str]:
     with PORTAL_GOVERNANCE.store.connect() as db:
         return [row["email"] for row in db.execute(
@@ -3517,6 +3574,45 @@ def portal_admin_dashboard(
     except requests.RequestException:
         result["index"] = {"ok": False, "error": "unavailable"}
     return result
+
+
+@app.get("/portal/admin/retrieval-metadata/review")
+def portal_admin_retrieval_metadata_review(
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"items": RETRIEVAL_METADATA.review_required()}
+
+
+@app.put("/portal/admin/retrieval-metadata/{version_id}/confirm")
+def portal_admin_confirm_retrieval_metadata(
+    version_id: str,
+    payload: PortalRetrievalMetadataConfirmationRequest,
+    identity: dict[str, Any] = Depends(require_portal_identity),
+) -> dict[str, Any]:
+    if identity["role"] not in {"admin", "portal_admin"}:
+        raise HTTPException(status_code=403, detail="admin_required")
+    try:
+        metadata = RETRIEVAL_METADATA.confirm(
+            version_id=version_id,
+            domain=payload.domain,
+            document_type=payload.document_type,
+            topics=tuple(payload.topics),
+            evidence_capabilities=tuple(payload.evidence_capabilities),
+            actor_user_id=identity["user_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    with PORTAL_GOVERNANCE.store.connect() as db:
+        active = db.execute(
+            "SELECT 1 FROM canonical_documents WHERE active_version_id=?",
+            (version_id,),
+        ).fetchone()
+    indexing = _trigger_hybrid_version_sync(version_id) if active else {"ok": True, "skipped": "inactive"}
+    if not indexing.get("ok"):
+        raise HTTPException(status_code=503, detail="retrieval_metadata_index_failed")
+    return {"metadata": metadata, "indexing": indexing}
 
 
 @app.post("/portal/admin/migration/inventory")

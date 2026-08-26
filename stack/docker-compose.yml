@@ -124,12 +124,16 @@ services:
       KB_ADMIN_MAINTENANCE_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
       KB_SYNC_URL: http://kb-sync:8093
       HYBRID_COLLECTION_ALIAS: vinci_knowledge
+      KAHLE_KNOWLEDGE_HARNESS_MODE: ${KAHLE_KNOWLEDGE_HARNESS_MODE:-active}
+      PERSONIO_DIRECTORY_URL: http://personio-directory:8094
+      PERSONIO_DIRECTORY_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
     volumes:
       - open-webui:/app/backend/data
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/knowledgebases:/knowledgebases:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/kb-sync-state:/kb-sync-state:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/routers/openai.py:/app/backend/open_webui/routers/openai.py:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/kahle_knowledge_harness.py:/app/backend/open_webui/utils/kahle_knowledge_harness.py:ro"
+      - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/personio_directory_client.py:/app/backend/open_webui/utils/personio_directory_client.py:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/middleware.py:/app/backend/open_webui/utils/middleware.py:ro"
       - "${KAHLE_ROOT:?KAHLE_ROOT is required}/stack/open-webui-overrides/open_webui/utils/misc.py:/app/backend/open_webui/utils/misc.py:ro"
     depends_on:
@@ -138,6 +142,8 @@ services:
       owui-file-proxy:
         condition: service_healthy
       qdrant:
+        condition: service_started
+      personio-directory:
         condition: service_started
     networks:
       - appnet
@@ -474,6 +480,42 @@ services:
     networks:
       - appnet
 
+  personio-directory:
+    build:
+      context: ./personio-directory
+      dockerfile: Dockerfile
+    container_name: personio-directory
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      PERSONIO_CLIENT_ID: ${PERSONIO_CLIENT_ID:?PERSONIO_CLIENT_ID is required}
+      PERSONIO_API: ${PERSONIO_API:?PERSONIO_API is required}
+      PERSONIO_DIRECTORY_INTERNAL_API_KEY: ${OWUI_FILE_PROXY_API_KEY:?OWUI_FILE_PROXY_API_KEY is required}
+      PERSONIO_DIRECTORY_QDRANT_URL: http://qdrant:6333
+      PERSONIO_DIRECTORY_STATE_DB_PATH: /state/personio-directory.sqlite3
+      PERSONIO_DIRECTORY_SYNC_INTERVAL_SECONDS: ${PERSONIO_DIRECTORY_SYNC_INTERVAL_SECONDS:-900}
+    expose:
+      - "8094"
+    volumes:
+      - personio_directory_state:/state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8094/health', timeout=5).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    depends_on:
+      qdrant:
+        condition: service_started
+    networks:
+      - appnet
+
   n8n:
     image: n8nio/n8n:2.16.1
     container_name: n8n
@@ -584,6 +626,7 @@ volumes:
   open-webui:
     name: open-webui
   academy_provisioner_state: {}
+  personio_directory_state: {}
   qdrant_data: {}
   document_worker_data: {}
   clamav_data: {}

@@ -72,6 +72,20 @@ def test_core_vinci_prompts_do_not_forward_marketing_opt_out_to_privacy():
         assert "Finanzdaten" in prompt, file_name
 
 
+def test_core_vinci_prompts_redirect_email_drafts_to_mailer():
+    prompt_root = ROOT / "open-webui-prompts"
+    for file_name in (
+        "kahle-vinci-systemprompt.md",
+        "kahle-vinci-thinking-systemprompt.md",
+    ):
+        prompt = (prompt_root / file_name).read_text(encoding="utf-8")
+
+        assert "Mailer-Vinci" in prompt, file_name
+        assert "selbst keinen Mailentwurf" in prompt, file_name
+        assert "keine Wissenssuche" in prompt, file_name
+        assert "technische Machbarkeit als ungeprueft" in prompt, file_name
+
+
 if __name__ == "__main__":
     test_all_vinci_prompts_handle_empty_starter_prompts()
     test_registered_suggestion_prompts_start_guided_input_flow()

@@ -854,6 +854,7 @@ function KnowledgePortalContent() {
       if (typeof window === "undefined") return "overview";
       const params = new URLSearchParams(window.location.search);
       if (params.get("document")) return "documents";
+      if (params.get("notifications")) return "notifications";
       return params.get("feedback") ? "feedback" : "overview";
     }),
     [error, setError] = useState(""),
@@ -956,6 +957,18 @@ function KnowledgePortalContent() {
     );
     try {
       await api(`/portal/notifications/${notificationId}/read`, { method: "POST" });
+    } catch (cause) {
+      setError(friendlyError(cause, "Mitteilungen konnten nicht als gelesen markiert werden"));
+      await refresh();
+    }
+  }
+  async function markAllNotificationsRead() {
+    const readAt = new Date().toISOString();
+    setNotifications((current) =>
+      current.map((item) => item.read_at ? item : { ...item, read_at: readAt }),
+    );
+    try {
+      await api("/portal/notifications/read-all", { method: "POST" });
     } catch (cause) {
       setError(friendlyError(cause, "Mitteilungen konnten nicht als gelesen markiert werden"));
       await refresh();
@@ -1076,7 +1089,11 @@ function KnowledgePortalContent() {
           <Tasks tasks={tasks} jobs={decisionJobs} kbs={reviewKbs} session={session} done={refresh} />
         )}
         {tab === "notifications" && (
-          <Notifications items={notifications} onRead={markNotificationRead} />
+          <Notifications
+            items={notifications}
+            onRead={markNotificationRead}
+            onReadAll={markAllNotificationsRead}
+          />
         )}
         {tab === "documents" && (
           <DocumentList
@@ -1137,9 +1154,11 @@ function KnowledgePortalContent() {
 function Notifications({
   items,
   onRead,
+  onReadAll,
 }: {
   items: PortalNotification[];
   onRead: (notificationId: string) => Promise<void>;
+  onReadAll: () => Promise<void>;
 }) {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replies, setReplies] = useState<Record<string, string>>({});
@@ -1147,6 +1166,7 @@ function Notifications({
   const [message, setMessage] = useState("");
   const [openHistory, setOpenHistory] = useState<Record<string, boolean>>({});
   const [history, setHistory] = useState<Record<string, NotificationThreadMessage[]>>({});
+  const unreadCount = items.filter((item) => !item.read_at).length;
 
   async function sendReply(item: PortalNotification) {
     const answer = (replies[item.notification_id] || "").trim();
@@ -1184,11 +1204,18 @@ function Notifications({
 
   return (
     <section className="wp-page">
-      <Title
-        eyebrow="Änderungen am Wissensbestand"
-        title="Mitteilungen"
-        text="Hier siehst du Freigaben sowie Änderungen an Dokumenten und Wissensbereichen, die dich betreffen."
-      />
+      <div className="wp-notification-heading">
+        <Title
+          eyebrow="Änderungen am Wissensbestand"
+          title="Mitteilungen"
+          text="Hier siehst du Freigaben sowie Änderungen an Dokumenten und Wissensbereichen, die dich betreffen."
+        />
+        {unreadCount > 0 && (
+          <button type="button" className="wp-secondary" onClick={() => void onReadAll()}>
+            Alles als gelesen markieren
+          </button>
+        )}
+      </div>
       {message && <p className="wp-alert" role="status">{message}</p>}
       {items.length ? (
         <div className="wp-doc-list">

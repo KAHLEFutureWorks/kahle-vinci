@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -21,6 +22,30 @@ def load_module():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def test_run_async_tool_works_inside_a_running_event_loop():
+    module = load_module()
+
+    async def value():
+        return "rag-result"
+
+    async def invoke_sync_bridge():
+        return module._run_async_tool(value())
+
+    assert asyncio.run(invoke_sync_bridge()) == "rag-result"
+
+
+def test_presentation_context_is_not_treated_as_powerpoint_file_request():
+    module = load_module()
+
+    assert module._is_powerpoint_request(
+        "Schreibe mir einen Text, den ich in einer Präsentation verwenden kann."
+    ) is False
+    assert module._is_powerpoint_request(
+        "Erstelle mir daraus bitte eine PowerPoint-Präsentation."
+    ) is True
+    assert module._is_powerpoint_request("Erzeuge eine PPTX-Datei mit fünf Folien.") is True
 
 
 def test_guard_expands_short_marketing_reply_from_customer_lock_clarification():
@@ -215,7 +240,7 @@ def test_fillable_ki_permission_request_never_uses_generic_docx_export():
         module._create_file = original_create
 
 
-def test_successful_rag_source_replaces_false_no_internal_knowledge_answer():
+def test_successful_rag_source_does_not_rewrite_completed_answer():
     module = load_module()
     original_synthesize = module._synthesize_rag_answer
     try:
@@ -256,13 +281,15 @@ def test_successful_rag_source_replaces_false_no_internal_knowledge_answer():
         }
         result = module.Filter().outlet(body, __metadata__=metadata)
 
-        assert "Volkswagen und Audi Service [#1]" in result["messages"][-1]["content"]
-        assert "keine Informationen" not in result["messages"][-1]["content"]
+        assert result["messages"][-1]["content"] == (
+            "Ich habe keine Informationen ueber den Standort Nienburg. "
+            "Bitte waehle einen anderen Standort aus."
+        )
     finally:
         module._synthesize_rag_answer = original_synthesize
 
 
-def test_negative_rag_source_replaces_thinking_model_hallucination():
+def test_negative_rag_source_does_not_rewrite_completed_answer():
     module = load_module()
     rag_text = (
         "KAHLE_RAG_RESULT\n"
@@ -291,7 +318,10 @@ def test_negative_rag_source_replaces_thinking_model_hallucination():
 
     result = module.Filter().outlet(body)
 
-    assert result["messages"][-1]["content"] == "Dazu habe ich kein internes Wissen."
+    assert result["messages"][-1]["content"] == (
+        "Öffne im WPS den Werkstatt-Kalender, wähle Ressourcen aus "
+        "und versende anschließend automatisch eine SMS."
+    )
 
 
 def test_successful_but_unanswerable_rag_context_stays_fail_closed():
@@ -318,7 +348,7 @@ def test_successful_but_unanswerable_rag_context_stays_fail_closed():
         module._synthesize_rag_answer = original_synthesize
 
 
-def test_current_raw_rag_context_is_parsed_and_always_regrounded():
+def test_current_raw_rag_context_is_parsed_without_outlet_regrounding():
     module = load_module()
     original_synthesize = module._synthesize_rag_answer
     try:
@@ -351,7 +381,9 @@ def test_current_raw_rag_context_is_parsed_and_always_regrounded():
 
         assert "WPS/DA ist" in module._rag_context_text(rag_text)
         result = module.Filter().outlet(body)
-        assert result["messages"][-1]["content"] == "Dazu habe ich kein internes Wissen."
+        assert result["messages"][-1]["content"] == (
+            "Öffne den Kalender und aktiviere automatische SMS."
+        )
     finally:
         module._synthesize_rag_answer = original_synthesize
 
@@ -543,7 +575,7 @@ def test_source_chip_answer_is_grounded_against_context_line_by_line():
     assert "automatisch eine SMS" not in retained
 
 
-def test_negative_rag_result_keeps_feedback_link_after_guard_replacement():
+def test_negative_rag_result_keeps_answer_and_source_metadata_unchanged():
     module = load_module()
     rag_text = (
         "KAHLE_RAG_RESULT\nFOUND: false\n"
@@ -566,13 +598,10 @@ def test_negative_rag_result_keeps_feedback_link_after_guard_replacement():
         ],
     }
 
-    answer = module.Filter().outlet(body)["messages"][-1]["content"]
+    result = module.Filter().outlet(body)["messages"][-1]
 
-    assert answer.startswith("Dazu habe ich kein internes Wissen.")
-    assert answer.endswith(
-        "[Wissensfehler melden]"
-        "(/wissen/?feedback=1&chat_id=chat-2&message_id=message-2)"
-    )
+    assert result["content"] == "Eine unbelegte Antwort."
+    assert result["sources"][0]["document"] == [rag_text]
 
 
 def test_wps_system_overview_does_not_answer_procedural_question():
@@ -618,7 +647,7 @@ def test_every_procedural_answer_step_needs_a_source_mark():
     assert module._grounded_answer_has_source_marks(fully_cited) is True
 
 
-def test_rag_clarification_replaces_model_answer():
+def test_rag_clarification_does_not_replace_completed_answer():
     module = load_module()
     rag_text = (
         "KAHLE_RAG_RESULT\nFOUND: false\n"
@@ -642,11 +671,11 @@ def test_rag_clarification_replaces_model_answer():
 
     result = module.Filter().outlet(body)
     assert result["messages"][-1]["content"] == (
-        "Für welchen Standort und welchen Bereich brauchst du die Öffnungszeiten?"
+        "Hier ist die vollständige Liste aller Standorte."
     )
 
 
-def test_rag_guided_response_replaces_model_answer():
+def test_rag_guided_response_does_not_replace_completed_answer():
     module = load_module()
     guided_answer = (
         "Bitte wende dich mit der Kundennummer und dem Grund der gewünschten Sperre "
@@ -673,7 +702,9 @@ def test_rag_guided_response_replaces_model_answer():
     }
 
     result = module.Filter().outlet(body)
-    assert result["messages"][-1]["content"] == guided_answer
+    assert result["messages"][-1]["content"] == (
+        "Öffne die Kundenverwaltung und ändere den Status."
+    )
 
 
 def test_active_harness_keeps_completed_rag_answer_unchanged():
@@ -781,9 +812,41 @@ class Tools:
                 os.environ["WEBUI_DB_PATH"] = previous
 
 
+def test_active_personio_only_harness_never_triggers_outlet_rag_refresh():
+    module = load_module()
+    original_call = module._call_rag_chat_tool
+    answer = (
+        "Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine "
+        "passende freigegebene Information."
+    )
+    try:
+        module._call_rag_chat_tool = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Personio-only retrieval must not fall back to RAG")
+        )
+        body = {
+            "messages": [
+                {"role": "user", "content": "Wer ist Max Mustermann?"},
+                {"role": "assistant", "content": answer},
+            ]
+        }
+
+        result = module.Filter().outlet(
+            body,
+            __metadata__={
+                "kahle_knowledge_harness_active": True,
+                "kahle_retrieval_tools": ["personio_directory"],
+            },
+            __user__={"id": "user-1", "role": "user"},
+        )
+
+        assert result["messages"][-1]["content"] == answer
+    finally:
+        module._call_rag_chat_tool = original_call
 
 
-def test_internal_followup_without_toolcall_is_refreshed_from_rag():
+
+
+def test_internal_followup_without_toolcall_is_not_refreshed_by_outlet():
     module = load_module()
     original_call = module._call_rag_chat_tool
     original_synthesize = module._synthesize_rag_answer
@@ -804,9 +867,7 @@ def test_internal_followup_without_toolcall_is_refreshed_from_rag():
     try:
         def fake_call(query, messages, user=None):
             captured["query"] = query
-            captured["messages"] = messages
-            captured["user"] = user
-            return rag_text
+            raise AssertionError("Der Outlet-Filter darf keinen RAG-Abruf starten.")
 
         module._call_rag_chat_tool = fake_call
         module._synthesize_rag_answer = lambda request_text, source, user_name="": (
@@ -851,12 +912,12 @@ def test_internal_followup_without_toolcall_is_refreshed_from_rag():
         result = module.Filter().outlet(body)
         answer = result["messages"][-1]
 
-        assert captured["query"] == "Was sind die 5 Dimensionen, die im A1a bewertet werden?"
-        assert len(captured["messages"]) == 3
-        assert "Governance & Verantwortlichkeiten" in answer["content"]
-        assert "Technische Infrastruktur" not in answer["content"]
-        assert answer["sources"][-1]["source"]["name"] == "rag_chat/rag_chat"
-        assert answer["sources"][-1]["document"] == [rag_text]
+        assert captured == {}
+        assert answer["content"] == (
+            "Governance, Mitarbeitende, Datenmanagement, "
+            "Technische Infrastruktur und Compliance."
+        )
+        assert "sources" not in answer
     finally:
         module._call_rag_chat_tool = original_call
         module._synthesize_rag_answer = original_synthesize

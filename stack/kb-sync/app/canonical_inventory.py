@@ -78,6 +78,9 @@ def load_portal_inventory(db_path: Path, files_root: Path, *, today: date | None
         has_metadata = bool(connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_metadata'"
         ).fetchone())
+        has_retrieval_metadata = bool(connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_retrieval_metadata'"
+        ).fetchone())
         authority_fields = (
             "COALESCE(meta.authority_type, 'information_or_training') authority_type, "
             "COALESCE(meta.authority_level, 6) authority_level"
@@ -85,14 +88,34 @@ def load_portal_inventory(db_path: Path, files_root: Path, *, today: date | None
             "'information_or_training' authority_type, 6 authority_level"
         )
         metadata_join = "LEFT JOIN document_metadata meta ON meta.document_id=d.document_id" if has_metadata else ""
+        retrieval_fields = (
+            "COALESCE(rmeta.domain, 'internal_general') domain, "
+            "COALESCE(rmeta.document_type, 'knowledge_document') document_type, "
+            "COALESCE(rmeta.topics_json, '[]') topics_json, "
+            "COALESCE(rmeta.evidence_capabilities_json, '[\"factual_support\"]') evidence_capabilities_json, "
+            "COALESCE(rmeta.source_provider, 'knowledge_portal') source_provider, "
+            "COALESCE(rmeta.classification_status, 'review_required') classification_status, "
+            "COALESCE(rmeta.classifier_version, '') classification_version, "
+            "COALESCE(rmeta.confidence, 0.0) classification_confidence"
+            if has_retrieval_metadata else
+            "'internal_general' domain, 'knowledge_document' document_type, '[]' topics_json, "
+            "'[\"factual_support\"]' evidence_capabilities_json, 'knowledge_portal' source_provider, "
+            "'review_required' classification_status, '' classification_version, 0.0 classification_confidence"
+        )
+        retrieval_join = (
+            "LEFT JOIN document_retrieval_metadata rmeta ON rmeta.version_id=v.version_id"
+            if has_retrieval_metadata else ""
+        )
         rows = connection.execute(f"""
             SELECT d.document_id, d.title, u.email AS owner_email, d.confidentiality,
-                   {authority_fields}, v.version_id, v.valid_from, v.valid_until,
+                   {authority_fields}, {retrieval_fields},
+                   v.version_id, v.valid_from, v.valid_until,
                    GROUP_CONCAT(p.knowledgebase_id) AS knowledgebase_ids
             FROM canonical_documents d
             JOIN portal_users u ON u.user_id = d.owner_user_id
             {metadata_join}
             JOIN document_versions v ON v.version_id = d.active_version_id AND v.status = 'active'
+            {retrieval_join}
             JOIN document_publications p ON p.document_id = d.document_id AND p.status = 'active'
             GROUP BY d.document_id, v.version_id
             ORDER BY d.document_id, v.version_id
@@ -112,11 +135,24 @@ def load_portal_inventory(db_path: Path, files_root: Path, *, today: date | None
             confidentiality=row["confidentiality"] or "internal",
             authority=f"{row['authority_level']}:{row['authority_type']}",
             source_id=row["version_id"], source_url=f"/wissen/api/portal/sources/{row['version_id']}", status="active",
+            domain=row["domain"], document_type=row["document_type"],
+            topics=tuple(json.loads(row["topics_json"] or "[]")),
+            evidence_capabilities=tuple(json.loads(row["evidence_capabilities_json"] or "[]")),
+            source_provider=row["source_provider"],
+            classification_status=row["classification_status"],
+            classification_version=row["classification_version"],
+            classification_confidence=float(row["classification_confidence"] or 0.0),
         )
         document.validate(today)
         digest.update(row["version_id"].encode("utf-8"))
         digest.update(hashlib.sha256(markdown.encode("utf-8")).digest())
         digest.update(row["knowledgebase_ids"].encode("utf-8"))
+        digest.update(row["domain"].encode("utf-8"))
+        digest.update(row["document_type"].encode("utf-8"))
+        digest.update(row["topics_json"].encode("utf-8"))
+        digest.update(row["evidence_capabilities_json"].encode("utf-8"))
+        digest.update(row["classification_status"].encode("utf-8"))
+        digest.update(row["classification_version"].encode("utf-8"))
         documents.append(document)
     return CanonicalInventory(tuple(documents), (), digest.hexdigest())
 

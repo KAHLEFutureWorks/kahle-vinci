@@ -1,8 +1,8 @@
 """
 title: KAHLE Toolcall Guard
 author: local
-version: 0.3.0
-description: Repariert sichtbare Pseudo-Toolcalls und sichtbares Reasoning als letzte Sicherheitsschicht.
+version: 0.4.0
+description: Technische letzte Sicherheitsschicht fuer Pseudo-Toolcalls, Dateiaktionen und sichtbares Reasoning; schreibt Wissensantworten nicht um.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import time
 import unicodedata
 import asyncio
 import ast
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -219,7 +220,14 @@ def _infer_output_format_from_request(text: str) -> str:
 
 def _is_powerpoint_request(text: str) -> bool:
     lower = (text or "").lower()
-    return any(marker in lower for marker in ("powerpoint", "pptx", "praesentation", "präsentation", "folien", "slides"))
+    if any(marker in lower for marker in ("powerpoint", "pptx")):
+        return True
+    presentation_term = r"(?:pr(?:ä|ae)sentation|folien?|slides?)"
+    creation_term = r"(?:erstell(?:e|en|t)?|generier(?:e|en|t)?|erzeug(?:e|en|t)?|bau(?:e|en|t)?|mach(?:e|en|t)?|als\s+datei\s+ausgeb(?:e|en))"
+    return bool(
+        re.search(rf"\b{creation_term}\b.{{0,80}}\b{presentation_term}\b", lower)
+        or re.search(rf"\b{presentation_term}\b.{{0,80}}\b{creation_term}\b", lower)
+    )
 
 
 def _pptx_disabled_message() -> str:
@@ -1970,14 +1978,18 @@ def _normalize_kb_diagnostics_params(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_async_tool(coro: Any) -> Any:
+    """Run an async tool from the synchronous filter without leaking coroutines.
+
+    OpenWebUI can invoke the synchronous outlet while its event loop is already
+    running.  A second loop cannot run in that same thread, so use one short
+    worker thread in that case.
+    """
     try:
-        return asyncio.run(coro)
+        asyncio.get_running_loop()
     except RuntimeError:
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="kahle-rag") as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def _call_kb_diagnostics_tool(tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -2124,7 +2136,11 @@ def _expand_customer_lock_followup(
         "allgemein", "kundensperre", "komplett", "vollstandig",
         "zweiteres", "zweite option",
     )):
-        return "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis?"
+        return (
+            "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? Falls dafür "
+            "keine freigegebene Anleitung vorliegt: Welche freigegebene "
+            "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
+        )
     return current
 
 
@@ -2254,69 +2270,6 @@ class Filter:
                     _set_message_content(message, formatted)
                 continue
 
-            rag_source_outcome = _extract_rag_source_outcome(message, __metadata__)
-            rag_content_owned_by_harness = bool(
-                isinstance(__metadata__, dict)
-                and __metadata__.get("kahle_knowledge_harness_active")
-                and rag_source_outcome
-            )
-            if not rag_content_owned_by_harness and rag_source_outcome == "clarification":
-                _set_message_content(
-                    message,
-                    _extract_rag_clarification(message, __metadata__)
-                    or "Bitte grenze deine Frage noch etwas genauer ein.",
-                )
-                continue
-            if not rag_content_owned_by_harness and rag_source_outcome == "guided":
-                _set_message_content(
-                    message,
-                    _extract_rag_guided_response(message, __metadata__)
-                    or "Bitte wende dich an datenschutz@kahle.de.",
-                )
-                continue
-            if not rag_content_owned_by_harness and rag_source_outcome == "missing":
-                answer = "Dazu habe ich kein internes Wissen."
-                feedback = _extract_rag_feedback_from_message(message, __metadata__)
-                if feedback:
-                    answer = f"{answer}\n\n{feedback}"
-                _set_message_content(message, answer)
-                continue
-
-            successful_rag_source = _extract_successful_rag_source(message, __metadata__)
-            if successful_rag_source and not rag_content_owned_by_harness:
-                user_name = ""
-                if isinstance(__user__, dict):
-                    user_name = str(__user__.get("name") or __user__.get("email") or "").strip()
-                _set_message_content(
-                    message,
-                    _rag_answer_text(
-                        request_text,
-                        successful_rag_source,
-                        user_name,
-                        candidate_answer=content,
-                    ),
-                )
-                continue
-
-
-            if (
-                index == len(messages) - 1
-                and not successful_rag_source
-                and not rag_content_owned_by_harness
-                and _needs_rag_refresh(request_text, messages, index)
-            ):
-                rag_text = _call_rag_chat_tool(request_text, messages[:index], __user__)
-                if re.search(r"^FOUND:\s*true\s*$", rag_text, re.IGNORECASE | re.MULTILINE):
-                    user_name = ""
-                    if isinstance(__user__, dict):
-                        user_name = str(__user__.get("name") or __user__.get("email") or "").strip()
-                    _set_message_content(message, _rag_answer_text(request_text, rag_text, user_name))
-                    _attach_rag_source(message, rag_text)
-                    continue
-                if rag_text and re.search(r"^FOUND:\s*false\s*$", rag_text, re.IGNORECASE | re.MULTILINE):
-                    _set_message_content(message, "Dazu habe ich kein internes Wissen.")
-                    _attach_rag_source(message, rag_text)
-                    continue
             if index == len(messages) - 1 and TASK_LIST_RE.search(request_text or ""):
                 status = "open" if re.search(r"\boffen|offene|offenen\b", request_text or "", re.IGNORECASE) else ""
                 tasks = _list_tasks_for_user(_task_user_id(__user__), status=status or "open")

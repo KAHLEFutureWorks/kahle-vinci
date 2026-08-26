@@ -76,3 +76,54 @@ def test_mailer_answer_command_replies_from_recipient_perspective():
     assert "aus Sicht des Empfaengers" in prompt
     assert "nicht an die Person aus der Anrede" in prompt
     assert "Frage den Absender nicht nach Informationen, die er von uns anfordert" in prompt
+
+
+def test_mailer_always_collects_four_inputs_before_first_draft():
+    prompt = _prompt()
+
+    assert "vor dem ersten Entwurf immer genau vier nummerierte Rueckfragen" in prompt
+    assert "1. Ziel und gewuenschte Wirkung" in prompt
+    assert "2. Fehlende Sachinformationen" in prompt
+    assert "3. Gewuenschter naechster Schritt" in prompt
+    assert "4. Intern oder extern sowie formell oder informell" in prompt
+
+
+def test_mailer_defines_kahle_style_for_all_four_communication_modes():
+    prompt = _prompt()
+
+    for mode in (
+        "Intern und informell",
+        "Intern und formell",
+        "Extern und informell",
+        "Extern und formell",
+    ):
+        assert mode in prompt
+    for generic_phrase in (
+        "ich hoffe, diese Nachricht erreicht Sie wohlbehalten",
+        "ich wuerde mich freuen, wenn",
+        "wir wuerden uns freuen, wenn",
+        "hiermit moechte ich",
+    ):
+        assert generic_phrase.lower() in prompt.lower()
+    assert "Verbotene Floskeln" in prompt
+    assert "Bitte pruefen Sie den Vorschlag bis" in prompt
+    assert "Koennen wir das am" in prompt
+
+
+def test_mailer_keeps_uncertain_user_facts_uncertain_in_the_draft():
+    prompt = _prompt()
+
+    assert "Bestaetigte Angaben" in prompt
+    assert "Unbestaetigte Angaben" in prompt
+    assert "nicht in eine Tatsache" in prompt
+    assert "ob die Funktion freigegeben ist" in prompt
+
+
+def test_mailer_default_output_is_a_clean_mail_without_internal_work_notes():
+    prompt = _prompt()
+    standard_output = prompt.split("Standardausgabe:", 1)[1].split("Qualitaetsregeln:", 1)[0]
+
+    assert "**Annahmen**" not in standard_output
+    assert "**Fehlende Informationen**" not in standard_output
+    assert "**Pruefhinweis**" not in standard_output
+    assert "Nur wenn eine kritische Angabe offen bleibt" in standard_output

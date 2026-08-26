@@ -63,6 +63,32 @@ def test_rebuild_writes_dense_sparse_acl_and_source_payload_before_alias_switch(
     assert report["chunks"] >= 1
 
 
+def test_rebuild_projects_portal_sidecar_metadata_into_every_chunk():
+    qdrant = Qdrant()
+    HybridIndexBuilder(qdrant, Embeddings()).rebuild([
+        canonical(
+            domain="internal_systems",
+            document_type="work_instruction",
+            topics=("WPS",),
+            evidence_capabilities=("procedure",),
+            source_provider="knowledge_portal",
+            classification_status="inferred",
+            classification_version="kahle.retrieval-metadata.v1",
+            classification_confidence=.95,
+        )
+    ], today=date(2026, 8, 6))
+
+    payload = qdrant.points[0]["payload"]
+    assert payload["domain"] == "internal_systems"
+    assert payload["document_type"] == "work_instruction"
+    assert payload["topics"] == ["WPS"]
+    assert payload["evidence_capabilities"] == ["procedure"]
+    assert payload["source_provider"] == "knowledge_portal"
+    assert payload["classification_status"] == "inferred"
+    assert payload["classification_version"] == "kahle.retrieval-metadata.v1"
+    assert payload["classification_confidence"] == .95
+
+
 def test_incremental_sync_only_embeds_one_document_and_switches_visibility_fail_closed():
     qdrant = IncrementalQdrant()
     report = HybridIndexBuilder(qdrant, Embeddings()).sync_document(canonical(), today=date(2026, 8, 6))

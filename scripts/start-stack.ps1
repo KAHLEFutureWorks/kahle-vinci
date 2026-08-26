@@ -29,6 +29,20 @@ if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("IONOS_AP
   }
 }
 
+# Personio credentials are intentionally stored as user-scoped environment
+# variables instead of in repository files or the generic credential store.
+# A long-running Codex/PowerShell process may not have inherited them yet.
+$importedPersonioVariables = @()
+foreach ($name in @("PERSONIO_CLIENT_ID", "PERSONIO_API")) {
+  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+    $userValue = [Environment]::GetEnvironmentVariable($name, "User")
+    if (-not [string]::IsNullOrWhiteSpace($userValue)) {
+      Set-Item -Path "Env:$name" -Value $userValue
+      $importedPersonioVariables += $name
+    }
+  }
+}
+
 $requiredSecrets = @(
   "IONOS_API_KEY",
   "WEBUI_SECRET_KEY",
@@ -127,5 +141,8 @@ try {
   }
   if ($importedIonosApiToken) {
     Remove-Item -Path "Env:IONOS_API_TOKEN" -ErrorAction SilentlyContinue
+  }
+  foreach ($name in $importedPersonioVariables) {
+    Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
   }
 }

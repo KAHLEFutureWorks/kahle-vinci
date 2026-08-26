@@ -265,6 +265,8 @@ test("shows named read notifications and groups searchable documents by knowledg
   ]);
   assert.match(portal, /item\.document_title/);
   assert.match(portal, /\/portal\/notifications\/\$\{notificationId\}\/read/);
+  assert.match(portal, /\/portal\/notifications\/read-all/);
+  assert.match(portal, />\s*Alles als gelesen markieren\s*</);
   assert.doesNotMatch(portal, /nextTab !== "notifications"[\s\S]*?\/portal\/notifications\/read/);
   assert.match(portal, /className=\{`wp-notification-card/);
   assert.match(portal, /notifications\.filter\(\(item\) => !item\.read_at\)/);
@@ -279,6 +281,7 @@ test("shows named read notifications and groups searchable documents by knowledg
   assert.match(portal, /const searchable = document\.title\.toLocaleLowerCase/);
   assert.match(portal, /className="wp-notification-title"/);
   assert.match(portal, /params\.get\("document"\).*return "documents"/s);
+  assert.match(portal, /params\.get\("notifications"\).*return "notifications"/s);
   assert.match(portal, /focusedDocumentId=\{focusedDocumentId\}/);
   assert.match(portal, /id=\{`portal-document-\$\{doc\.document_id\}`\}/);
   assert.match(portal, />Antworten</);

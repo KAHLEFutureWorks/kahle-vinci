@@ -550,3 +550,112 @@ Als Nächstes ist KAHLE-Vinci-Max-Thinking lokal zu registrieren und durch
 dieselbe Matrix zu führen. Bis dahin bleibt dieses Modell für Mitarbeitende und
 Führungskräfte ehrlich als `unavailable` ausgewiesen. Erst ein vollständig
 grüner Bericht darf die Vorbereitung eines Rolloutpakets auslösen.
+
+## Elfter Implementierungsschritt: Personio-Verzeichnis und Mehrquellenabnahme
+
+Die bisherige Akzeptanzmatrix war noch auf den reinen Dokumentpfad begrenzt.
+Selbst Personenfragen erwarteten darin `rag_chat` und verwiesen nur auf einen
+späteren Personio-Adapter. Dieser Zwischenstand ist mit der produktiven
+Mehrquellenplanung nicht mehr gültig. Der historische Bericht mit 40
+Zuordnungen bleibt als Nachweis für den damaligen RAG-Stand erhalten, ist aber
+kein Release-Nachweis für das Personio-Verzeichnis.
+
+Die Matrix unter
+`scripts/openwebui/kahle-harness-acceptance-matrix.json` beschreibt jetzt für
+jeden Fall die exakte Werkzeugmenge, den erwarteten Intent, zulässige
+Evidenzstatus, zulässige Quellenarten, verbotene Felder und boolesche
+Prüfverträge. Reine aktuelle Stammdatenfragen erwarten ausschließlich
+`personio_directory`. Reine Prozessfragen erwarten ausschließlich `rag_chat`.
+Mischfragen erwarten beide Adapter. Eigene Fälle decken Verzeichnisfilter,
+Onboarding-Sichtbarkeit und Feldreduktion, die drei Stufen der
+Zusammenarbeitskaskade, den fehlenden Personio-Treffer ohne Rückfall, den
+`pending`-Zugriff und einen veralteten Sync ab.
+
+Die Matrix verwendet nur synthetische Testbezeichnungen. Reale Namen,
+Kontaktdaten und Fragen werden ausschließlich interaktiv eingegeben. Der
+erweiterte Reporter verwirft Antworttext, Fragen, Personio-IDs, Kontaktwerte und
+Rohbelege auch dann, wenn ein Runner sie versehentlich mitsendet. Pro Fall
+bleiben nur Fall-ID, Modell-ID, erwartete und tatsächliche Werkzeuge, Intent,
+Evidenzstatus, Quellenarten, Validierungsstatus, Laufzeit und die ausdrücklich
+vereinbarten booleschen Assertions erhalten. Ein reiner Verzeichnisfall mit
+zusätzlichem RAG-Aufruf und eine Mischfrage mit nur einem Adapter schlagen
+deterministisch fehl.
+
+Der fokussierte Offline-Vertrag umfasst elf bestandene Reporttests. Darin ist
+auch ein Negativtest enthalten, der synthetische Namen, E-Mail-Adresse,
+Telefonnummer, Personio-ID und Rohbeleg in die Eingabe einstreut und nachweist,
+dass keiner dieser Werte im Bericht erscheint.
+
+Ein nachgelagerter Review hat außerdem die Matrix als einzige Vertrauensquelle
+für Modelle, Profile und Pflichtfälle festgeschrieben. Externe Laufdateien
+können diese drei Mengen weder ersetzen noch erweitern. Leere Laufdaten,
+fehlende Modellläufe, nicht autorisierte Profile und unvollständige Fälle
+führen zu einem Exitcode ungleich null. Manipulierte Namen, E-Mail-Adressen und
+Kennungen in Modell-, Profil- oder Fallfeldern werden nicht in Abdeckung,
+Ergebnisse oder Fehlergründe übernommen. Der Datenschutztest verwendet nun
+zusätzlich eine konkrete synthetische Telefonnummer.
+
+Ein späterer read-only Probe meldete ausschließlich den bereinigten Fehlercode
+`personio_response_invalid` und machte eine Abweichung im aktuellen v2-Envelope
+sichtbar. Der Client unterstützt deshalb zusätzlich `_data`,
+`_meta.links.next.href` sowie `_data` für getrennte Employment-Antworten. Die
+bisherigen `data`- und `links.next`-Formen bleiben kompatibel. Fremde
+Cursor-Hosts, fehlerhafte Linkformen und übergroße Antworten werden weiterhin
+abgewiesen; unvollständige v2-Felddaten führen zur sicheren v1-Bewertung statt
+zur Ausgabe der Stichprobendaten. Die Abdeckung erfolgt ausschließlich mit
+synthetischen Datensätzen; während des Fixes fand kein weiterer Live-Zugriff
+statt.
+
+Der genaue Ablauf für den read-only API-Probe, den kontrollierten lokalen Sync,
+aggregierte Zustands- und Qdrant-Prüfungen sowie die 14 interaktiven Pflichtfälle
+steht in `docs/operations/personio-directory.md`. Reale Credentials wurden in
+diesem Implementierungsschritt weder gelesen noch verwendet. Ein erneut
+erfolgreicher read-only API-Probe, Vollsync und die Abnahme unter
+`http://localhost:3004` bleiben deshalb offen. Ein Produktionsrollout ist bis
+zu diesem Nachweis gesperrt.
+
+## Elfter Implementierungsschritt: Max-Parität und belastbare Abnahmeverträge
+
+`KAHLE-Vinci-Max-Thinking` wird nun idempotent durch dasselbe lokale
+Registrierungsskript bereitgestellt. Fehlen das ausgeblendete Basismodell oder
+das Vinci-Modell, werden ausschließlich diese Zeilen ergänzt; vorhandene
+Konfigurationen bleiben unverändert. Anschließend erhalten Vinci, Thinking,
+Max-Thinking und künftige Vinci-Modell-IDs weiterhin denselben Harness-,
+Werkzeug- und Berechtigungspfad. Die Registrierungs- und Berichtsfunktionen sind
+durch eigene Regressionstests abgesichert.
+
+Frontend-äquivalente Max-Läufe wurden mit dem Mitarbeitenden- und dem
+Führungskraft-Schulungskonto ausgeführt. Belegt sind die allgemeine
+Anleitungsenthaltung am fiktiven System FooDesk, Personeninformationen,
+Prozessübersicht, die Gesprächsauflösung `TD in NIE`, Öffnungszeiten in
+Nienburg sowie die Unterscheidung der Werbe-/Befragungssperre von einer
+allgemeinen Kundensperre. Der vorhandene DSE-/Vaudis-Folgeturn liefert dabei
+den systemneutralen Positivfall für eine ausreichend dokumentierte Anleitung;
+es existiert weiterhin keine WPS-Sonderlogik.
+
+Für den Max-Berechtigungsvergleich wurde das Leserecht des
+Mitarbeitendenkontos für `Richtlinien und Arbeitsanweisungen` nur während eines
+einzelnen Laufs deaktiviert. Der Lauf lieferte `unsupported`, null Quellen und
+keine geschützten Schritte. Der gleichwertige Führungskraftlauf lieferte die
+zwei freigegebenen Arbeitsanweisungen. Der gesicherte Ausgangszustand
+`can_read=1, can_upload=1` wurde im `finally`-Pfad wiederhergestellt und danach
+erneut aus der Datenbank gelesen.
+
+Ein Max-Prozesslauf deckte außerdem eine alte konkurrierende Zuständigkeit auf:
+Der Modellprompt verlangte selbst die Ausgabe des Feedback-Links, obwohl der
+gemeinsame Harness den kanonischen Link bereits deterministisch ausliefert.
+Diese Prompt-Anweisung ist für Vinci und Thinking entfernt und wirkt über die
+gemeinsame Modellregistrierung auch für Max. Die Endprüfung erkennt zusätzlich
+ausformulierte Feedback-Link-Platzhalter, schreibt sie nicht um und sendet
+stattdessen einen strukturierten Wiederholungsauftrag. Ein realer Wiederholungslauf
+belegt zwei Validierungsversuche, einen Retry, akzeptierte Auslieferung,
+kanonische Dokumentquellen und keinen Link-Platzhalter.
+
+Der Akzeptanzreport verlangt nun pro Referenzfall explizite fachliche
+Assertion-Ergebnisse und prüft Evidenzstatus, Intent sowie Modellparität für
+Evidenzstatus, fachlichen Kern und Quellen-IDs. Fehlende manuelle Aussagen
+werden dadurch nicht mehr still als bestanden gewertet. Offen bleibt bewusst
+nur die visuelle Portalabnahme unter `http://localhost:3004/wissen/`: native
+`rag_chat`-Animation, sichtbare Dokumentquellen, genau ein funktionierender
+Wissensfehler-Link und kein nachträglicher Antwortwechsel. Vor dieser Abnahme
+wird kein Produktionspaket freigegeben.

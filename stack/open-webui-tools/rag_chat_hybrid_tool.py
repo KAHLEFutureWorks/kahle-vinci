@@ -110,10 +110,17 @@ def _expand_kahle_query_aliases(query):
 def _clarification_for_query(query):
     """Ask for the required scope instead of returning an arbitrary long list."""
     value = str(query or "").strip().casefold()
+    if (
+        re.search(r"\b(?:erfind|fingier|dicht)\w*", value)
+        and re.search(r"\b(?:richtlinie|policy|arbeitsanweisung|vorgabe|regelung)\w*", value)
+    ):
+        return (
+            "Ich kann keine bestehende interne Richtlinie erfinden. "
+            "Ich kann nur einen ausdrücklich als Entwurf gekennzeichneten Vorschlag erstellen."
+        )
     customer_lock = (
         re.search(r"\b(?:kunde|kunden)(?:\b|(?=sperr|entsperr))", value)
         and re.search(r"(?:\b(?:sperr|entsperr)\w*|\bkunden(?:sperr|entsperr)\w*)", value)
-        and re.search(r"\b(?:vaudis|vaudisx|dse)\b", value)
     )
     marketing_scope = re.search(
         r"\b(?:werbung|werbewiderspruch|befragung(?:en)?|kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
@@ -126,10 +133,17 @@ def _clarification_for_query(query):
     )
     if customer_lock and not marketing_scope and not general_scope:
         return (
-            "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
-            "oder um eine allgemeine Kundensperre in Vaudis?"
+            "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+            "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+            "Kundensperre in Vaudis für einen anderen Standort?"
         )
     if not re.search(r"\b(?:öffnungszeiten|oeffnungszeiten|öffnungszeit|oeffnungszeit)\b", value):
+        return ""
+    complete_scope = (
+        re.search(r"\b(?:alle|allen|sämtliche|saemtliche)\s+(?:kahle[- ]?)?standort\w*\b", value)
+        and all(department in value for department in ("verkauf", "service", "teiledienst"))
+    )
+    if complete_scope:
         return ""
     locations = (
         "hannover", "wunstorf", "neustadt", "rübenberge", "ruebenberge",
@@ -144,31 +158,84 @@ def _clarification_for_query(query):
 
 
 def _guided_response_for_query(query):
-    """Return deterministic next steps for clarified high-risk internal intents.
+    """Keep operational next steps source-driven through RAG."""
+    return ""
 
-    The actual marketing opt-out process remains source-driven through RAG.
-    A general customer lock has deliberately no operational how-to in Vinci;
-    the user must contact data protection with the two required facts.
-    """
-    value = str(query or "").strip().casefold()
-    customer_lock = (
-        re.search(r"\b(?:kunde|kunden)(?:\b|(?=sperr|entsperr))", value)
-        and re.search(r"(?:\b(?:sperr|entsperr)\w*|\bkunden(?:sperr|entsperr)\w*)", value)
-        and re.search(r"\b(?:vaudis|vaudisx|dse)\b", value)
+
+def _filter_evidence_chunks(query, chunks):
+    """Reject passages that cannot carry the relationship asked for."""
+    folded_query = _fold_evidence_text(query)
+
+    def passage(chunk):
+        return _fold_evidence_text("\n".join((
+            str(getattr(chunk, "title", "") or ""),
+            " > ".join(str(item) for item in (getattr(chunk, "heading_path", ()) or ())),
+            str(getattr(chunk, "parent_content", "") or ""),
+        )))
+
+    selected = list(chunks or [])
+    if (
+        re.search(r"\barbeitsanweisung\w*\b", folded_query)
+        and re.search(r"\b(?:pruf|freigab|veroffentlich|ablauf|prozess)\w*\b", folded_query)
+    ):
+        release = (
+            "release-paket", "releasepaket", "kryptografische signatur",
+            "prufsumme", "client akzeptiert", "software-update", "updates",
+        )
+        workflow = (
+            "arbeitsanweisung", "wissensportal", "dokument", "upload",
+            "fachlich", "veroffentlich",
+        )
+        selected = [
+            chunk for chunk in selected
+            if not (
+                any(marker in passage(chunk) for marker in release)
+                and not any(marker in passage(chunk) for marker in workflow)
+            )
+        ]
+
+    relationship = re.search(
+        r"\b(?:support|ansprechpartner|zustandig|zustandigkeit|betreut|verantwortlich)\w*\b",
+        folded_query,
     )
-    general_scope = re.search(
-        r"\b(?:allgemein(?:e|en|er)?|vollstaendig(?:e|en|er)?|vollständig(?:e|en|er)?|"
-        r"verkaufssperre|auftragssperre|finanzsperre)\b",
-        value,
+    system_match = re.search(
+        r"\b(?:support\w*\s+(?:fur|von)|fur\s+den\s+technischen\s+support\s+von)\s+"
+        r"([a-z0-9][a-z0-9_-]*)",
+        folded_query,
     )
-    if not customer_lock or not general_scope:
-        return ""
-    return (
-        "Bitte wende dich mit der Kundennummer und dem Grund der gewünschten "
-        "Sperre an [datenschutz@kahle.de](mailto:datenschutz@kahle.de?"
-        "subject=Allgemeine%20Kundensperre%20in%20Vaudis&"
-        "body=Kundennummer%3A%20%0AGrund%20der%20gew%C3%BCnschten%20Sperre%3A%20)."
-    )
+    if relationship and system_match:
+        system = system_match.group(1)
+        relation = re.compile(
+            r"\b(?:support|ansprechpartner|zustandig|zustandigkeit|betreut|verantwortlich)\w*\b"
+        )
+        selected = [
+            chunk for chunk in selected
+            if system in passage(chunk) and relation.search(passage(chunk))
+        ]
+
+    if (
+        "kundensperre" in folded_query
+        and re.search(r"\b(?:allgemein|vollstandig|verkaufssperre|auftragssperre|finanzsperre)\w*\b", folded_query)
+    ):
+        marketing = (
+            "werbung", "werbewiderspruch", "befragung", "kontaktfreigabe",
+            "hersteller-zufriedenheitsbefragung", "hersteller zufriedenheitsbefragung",
+        )
+        general = (
+            "allgemeine kundensperre", "vollstandige kundensperre",
+            "verkaufssperre", "auftragssperre", "finanzsperre",
+        )
+        selected = [
+            chunk for chunk in selected
+            if any(marker in passage(chunk) for marker in general)
+            or (
+                "datenschutz" in passage(chunk)
+                and any(marker in passage(chunk) for marker in (
+                    "sperranfrage", "sperrenanfrage",
+                ))
+            )
+        ]
+    return selected
 
 
 def _rag_answer_instruction(query):
@@ -190,6 +257,21 @@ def _rag_answer_instruction(query):
             "Leite keine allgemeine Kundensperre und keine Felder, Register oder Datenkategorien "
             "aus anderen Vaudis-Handbuchtreffern ab. Nenne insbesondere besondere Merkmale oder "
             "Finanzdaten nur, wenn die einschlägige Quelle zum Werbewiderspruch dies ausdrücklich verlangt. "
+        )
+    folded = (
+        str(query or "").casefold()
+        .replace("ä", "ae").replace("ö", "oe")
+        .replace("ü", "ue").replace("ß", "ss")
+    )
+    if (
+        "standort" in folded
+        and all(department in folded for department in ("verkauf", "service", "teiledienst"))
+    ):
+        instruction += (
+            "Beschränke die Übersicht auf die ausdrücklich angefragten Standorte und Bereiche. "
+            "Nenne keine Personen, Ansprechpartner, Unternehmenshistorie oder sonstigen Zusatzdaten, "
+            "wenn danach nicht gefragt wurde. Verallgemeinere Angaben eines einzelnen Standorts nicht "
+            "auf andere Standorte. "
         )
     return instruction
 
@@ -236,15 +318,82 @@ def _context_has_procedure(context):
     return sum(bool(re.search(pattern, value)) for pattern in patterns) >= 3
 
 
+def _detected_conflict_source_ids(source_items):
+    """Detect explicit mutually exclusive procedure instructions."""
+    folded = [
+        (source.get("number"), _fold_evidence_text(source.get("evidence_text")))
+        for source in source_items
+        if source.get("number") and source.get("evidence_text")
+    ]
+    opposites = (
+        (r"\bunten\s+rechts\b", r"\bunten\s+links\b"),
+        (r"\boben\s+rechts\b", r"\boben\s+links\b"),
+        (r"\bals\s+vorgang\b", r"\bals\s+aktion\b"),
+        (r"\bvorgang\s+anleg\w*", r"\baktion\s+anleg\w*"),
+    )
+    conflicts = set()
+    for index, (left_number, left_text) in enumerate(folded):
+        for right_number, right_text in folded[index + 1:]:
+            if any(
+                (re.search(left, left_text) and re.search(right, right_text))
+                or (re.search(right, left_text) and re.search(left, right_text))
+                for left, right in opposites
+            ):
+                conflicts.update((f"#{left_number}", f"#{right_number}"))
+    return sorted(conflicts, key=lambda value: int(value.lstrip("#")))
+
+
+def _claim_evidence_spans(query, passage):
+    """Select exact relevant sentences; never synthesize a claim across passages."""
+    sentences = [
+        sentence.strip()
+        for sentence in re.findall(r"[^.!?\n]+[.!?]?", str(passage or ""))
+        if sentence.strip()
+    ]
+    if not sentences:
+        return []
+    stopwords = {
+        "aber", "dass", "eine", "einen", "einer", "fuer", "kahle", "oder",
+        "sind", "ueber", "unter", "unser", "unsere", "unseren", "unserer",
+        "vollstaendig", "welche", "wer", "wie", "wird", "zustandig",
+    }
+    query_terms = {
+        term for term in re.findall(r"[a-z0-9]{3,}", _fold_evidence_text(query))
+        if term not in stopwords
+    }
+    scored = []
+    for position, sentence in enumerate(sentences):
+        terms = set(re.findall(r"[a-z0-9]{3,}", _fold_evidence_text(sentence)))
+        scored.append((len(query_terms.intersection(terms)), position, sentence))
+    best = max(score for score, _position, _sentence in scored)
+    if best <= 0:
+        return sentences[:1]
+    return [
+        sentence for score, _position, sentence in scored
+        if score == best
+    ][:3]
+
+
 def _evidence_bundle(query, context="", sources=None, missing_information=None):
     source_items = list(sources or [])
     missing = list(missing_information or [])
     claims = []
     for source in source_items:
         number = source.get("number")
-        claim = str(source.get("evidence_text") or "").strip()
-        if number and claim:
-            claims.append({"source_id": f"#{number}", "text": claim[:1000]})
+        passage = str(source.get("evidence_text") or "").strip()
+        if number and passage:
+            for claim_index, claim in enumerate(_claim_evidence_spans(query, passage), 1):
+                claims.append({
+                    "claim_id": f"R{number}C{claim_index}",
+                    "source_id": f"#{number}",
+                    "text": claim[:1000],
+                    "evidence_span": claim[:1000],
+                    "document_id": source.get("document_id"),
+                    "version_id": source.get("version_id"),
+                    "claim_type": (
+                        (source.get("evidence_capabilities") or ["factual_support"])[0]
+                    ),
+                })
     clean_sources = [
         {key: value for key, value in source.items() if key != "evidence_text"}
         for source in source_items
@@ -254,6 +403,11 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
         for source in source_items
         if source.get("number") and source.get("conflict")
     ]
+    detected_conflicts = _detected_conflict_source_ids(source_items)
+    conflicts = sorted(
+        set(conflicts) | set(detected_conflicts),
+        key=lambda value: int(value.lstrip("#")),
+    )
     if not source_items:
         status = "unsupported"
     else:
@@ -261,13 +415,29 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
         if conflicts:
             status = "partially_supported"
             missing.append(
-                "Die Quellen enthalten einen gekennzeichneten inhaltlichen Konflikt."
+                "Die Quellen widersprechen sich in einem angefragten Ablauf."
+                if detected_conflicts
+                else "Die Quellen enthalten einen gekennzeichneten inhaltlichen Konflikt."
             )
         if _procedural_evidence_intent(query) and not _context_has_procedure(context):
             status = "partially_supported"
             missing.append(
                 "Die Quellen bestätigen das Thema, enthalten aber keine ausreichende Anleitung."
             )
+        folded_query = _fold_evidence_text(query)
+        folded_context = _fold_evidence_text(context)
+        if re.search(r"\b(?:machbar|umsetzbar|realisierbar|technisch moglich)\b", folded_query) and not re.search(
+            r"\b(?:machbar|umsetzbar|realisierbar|technisch moglich|technisch freigegeben)\b",
+            folded_context,
+        ):
+            status = "partially_supported"
+            missing.append("Die technische Machbarkeit ist in den Quellen nicht bestätigt.")
+        if "datenschutz" in folded_query and re.search(r"\b(?:ohne|keine|nicht)\b", folded_query) and not (
+            "datenschutz" in folded_context
+            and re.search(r"\b(?:freigabe|prufung|bedenken|zulassig)\w*", folded_context)
+        ):
+            status = "partially_supported"
+            missing.append("Eine Datenschutzfreigabe ist in den Quellen nicht bestätigt.")
     return {
         "schema_version": "kahle.evidence-bundle.v1",
         "status": status,
@@ -320,7 +490,7 @@ class Tools:
     def __init__(self):
         self.valves = self.Valves()
 
-    async def rag_chat(self, query: str = "", __user__: dict | None = None, __chat_id__: str = "", __message_id__: str = "") -> str:
+    async def rag_chat(self, query: str = "", __user__: dict | None = None, __chat_id__: str = "", __message_id__: str = "", __metadata__: dict | None = None) -> str:
         """Durchsucht ausschließlich freigegebenes Wissen, das der angemeldete Nutzer lesen darf."""
         query = _expand_kahle_query_aliases(_sanitize_rag_query(query))
         started_at = time.monotonic()
@@ -367,7 +537,15 @@ class Tools:
                 IonosReranker(base_url, api_key, self.valves.RERANKER_MODEL),
                 timeout=int(self.valves.TIMEOUT_S), minimum_rerank_score=self.valves.MINIMUM_RERANK_SCORE,
             )
-            chunks = retriever.retrieve(query, dense, scope)
+            information_needs = (
+                (__metadata__ or {}).get("_kahle_information_needs")
+                if isinstance(__metadata__, dict) else None
+            )
+            chunks = retriever.retrieve(
+                query, dense, scope,
+                information_needs=(information_needs if isinstance(information_needs, list) else None),
+            )
+            chunks = _filter_evidence_chunks(query, chunks)
         except Exception as exc:
             error_code = (
                 str(exc).strip()
@@ -396,6 +574,18 @@ class Tools:
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
                 "knowledgebase_ids": list(chunk.knowledgebase_ids),
+                "domain": getattr(chunk, "domain", "internal_general"),
+                "document_type": getattr(chunk, "document_type", "knowledge_document"),
+                "topics": list(getattr(chunk, "topics", ()) or ()),
+                "evidence_capabilities": list(
+                    getattr(chunk, "evidence_capabilities", ()) or ()
+                ),
+                "source_provider": getattr(chunk, "source_provider", "knowledge_portal"),
+                "classification_status": getattr(chunk, "classification_status", "review_required"),
+                "classification_version": getattr(chunk, "classification_version", ""),
+                "classification_confidence": float(
+                    getattr(chunk, "classification_confidence", 0) or 0
+                ),
                 "evidence_text": chunk.parent_content,
             })
         joined_context = "\n\n".join(context)

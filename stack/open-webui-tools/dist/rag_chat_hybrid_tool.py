@@ -51,6 +51,14 @@ class RetrievedChunk:
     conflict: bool
     retrieval_score: float
     rerank_score: float
+    domain: str = "internal_general"
+    document_type: str = "knowledge_document"
+    topics: tuple[str, ...] = ()
+    evidence_capabilities: tuple[str, ...] = ()
+    source_provider: str = "knowledge_portal"
+    classification_status: str = "review_required"
+    classification_version: str = ""
+    classification_confidence: float = 0.0
 class SparseQueryEncoder(Protocol):
     def encode_query(self, query: str) -> dict[str, list[int] | list[float]]: ...
 class Reranker(Protocol):
@@ -88,16 +96,27 @@ _TITLE_STOPWORDS = {
     "fur", "im", "in", "mit", "oder", "steht", "und", "unser", "unsere",
     "unserer", "von", "was", "wer", "zu", "kahle", "gruppe", "dokument", "datei",
     "du", "uber", "weisst", "weiss", "weit", "kennt", "kennst", "ist", "sind",
+    "aktuell", "gultig", "gilt", "fassung", "version", "welche",
 }
 def _title_terms(value: str) -> set[str]:
     normalized = unicodedata.normalize("NFKD", value or "")
     folded = normalized.encode("ascii", "ignore").decode().casefold()
     terms = set(re.findall(r"[a-z0-9]+", folded))
+    terms |= {term[:-1] for term in terms if len(term) >= 9 and term.endswith("s")}
     return {
         term for term in terms
         if len(term) >= 2 and term not in _TITLE_STOPWORDS
         and not re.fullmatch(r"v?\d+", term)
     }
+def _employee_directory_priority(title: str) -> int:
+    terms = _title_terms(title)
+    if "personio" in terms:
+        return 3
+    if "mitarbeiterverzeichnis" in terms or "personalverzeichnis" in terms:
+        return 2
+    if "kontakte" in terms and ("rollen" in terms or "ansprechpartner" in terms):
+        return 1
+    return 0
 def focused_document_ids(query: str, candidates: list[dict[str, Any]]) -> set[str]:
     """Detect a naturally named document without guessing from one generic word.
 
@@ -106,13 +125,20 @@ def focused_document_ids(query: str, candidates: list[dict[str, Any]]) -> set[st
     still benefits from document diversity.
     """
     query_terms = _title_terms(query)
+    version_intent = bool(re.search(
+        r"\b(?:aktuell\w*|gultig\w*|fassung|version)\b",
+        unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold(),
+    ))
     matches: list[tuple[int, float, str]] = []
     for point in candidates:
         payload = point.get("payload") or {}
         document_id = str(payload.get("document_id") or "")
         title_terms = _title_terms(str(payload.get("title") or ""))
         shared = query_terms.intersection(title_terms)
-        if document_id and len(shared) >= 2:
+        if document_id and (
+            len(shared) >= 2
+            or (version_intent and len(shared) == 1 and len(next(iter(shared))) >= 8)
+        ):
             matches.append((len(shared), len(shared) / max(1, len(title_terms)), document_id))
     if not matches and 2 <= len(query_terms) <= 4:
         # Short entity/role questions often name a person or function that is
@@ -130,6 +156,17 @@ def focused_document_ids(query: str, candidates: list[dict[str, Any]]) -> set[st
                 matches.append((len(query_terms), 1.0, document_id))
     if not matches:
         return set()
+    directory_priority = {
+        str((point.get("payload") or {}).get("document_id") or ""):
+            _employee_directory_priority(str((point.get("payload") or {}).get("title") or ""))
+        for point in candidates
+    }
+    best_directory_priority = max(directory_priority.get(document_id, 0) for *_score, document_id in matches)
+    if best_directory_priority:
+        matches = [
+            match for match in matches
+            if directory_priority.get(match[2], 0) == best_directory_priority
+        ]
     best = max((count, coverage) for count, coverage, _document_id in matches)
     return {
         document_id for count, coverage, document_id in matches
@@ -187,6 +224,94 @@ def rerank_candidate_count(query: str, candidate_count: int, *, result_limit: in
     if opening_hours_all_locations_intent(query):
         return min(candidate_count, 50)
     return min(candidate_count, result_limit * 3)
+def required_evidence_capabilities(query: str) -> tuple[str, ...]:
+    """Derive hard evidence requirements for pre-rerank candidate selection."""
+    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
+    approval_workflow = "arbeitsanweisung" in folded and all(
+        any(term in folded for term in alternatives)
+        for alternatives in (
+            ("pruf", "kontroll"),
+            ("freigab", "freigeb", "genehmig"),
+            ("veroffentlich", "publizier"),
+        )
+    )
+    if approval_workflow:
+        return ("approval_workflow", "procedure")
+    relationship = bool(
+        re.search(r"\bwas\s+hat\s+.+\s+mit\s+.+\s+zu\s+tun\b", folded)
+        or re.search(
+            r"\b(?:support|ansprechpartner|zustandig|zustandigkeit|betreut|verantwortlich)\w*\b",
+            folded,
+        )
+    )
+    if relationship:
+        return ("explicit_relationship",)
+    procedural = bool(re.search(
+        r"\bwie\s+(?:kann|muss|soll|darf|gehe|verfahre|funktioniert|"
+        r"bedien|nutz|verwend|richt|beantrag|aender|pfleg|meld|fuehr|"
+        r"oeffn|waehl|trag|gib|erfass|speicher|bestaetig|erstell|plan|buch|sperr)\w*\b",
+        folded,
+    ))
+    return ("procedure",) if procedural else ()
+def pre_rerank_metadata_filter(
+    query: str,
+    candidates: list[dict[str, Any]],
+    information_needs: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Drop sources that cannot prove the requested kind of claim."""
+    planned = {
+        str(capability)
+        for need in information_needs or ()
+        if isinstance(need, dict) and need.get("kind") != "directory_record"
+        for capability in need.get("evidence_capabilities") or ()
+        if str(capability)
+    }
+    # ``factual_support`` is the base contract, not a specialized hard filter.
+    # A procedure or system overview can still support ordinary factual claims.
+    planned.discard("factual_support")
+    required = planned or set(required_evidence_capabilities(query))
+    if not required:
+        return candidates
+    trusted = [
+        point for point in candidates
+        if (point.get("payload") or {}).get("classification_status") in {"confirmed", "inferred"}
+        and float((point.get("payload") or {}).get("classification_confidence") or 0) >= 0.8
+    ]
+    if not trusted:
+        return candidates
+    selected = [
+        point for point in trusted
+        if required.issubset(set((point.get("payload") or {}).get("evidence_capabilities") or ()))
+    ]
+    if "explicit_usage_scope" in required:
+        folded_query = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
+        entity_match = re.search(
+            r"\b(?:wird|werden|ist|sind)\s+([a-z0-9][a-z0-9.-]{1,30})\b",
+            folded_query,
+        )
+        entity = entity_match.group(1) if entity_match else ""
+        if entity:
+            selected = [
+                point for point in selected
+                if _passage_has_explicit_usage_scope(point, entity)
+            ]
+    return selected
+def _passage_has_explicit_usage_scope(point: dict[str, Any], entity: str) -> bool:
+    payload = point.get("payload") or {}
+    text = "\n".join((
+        str(payload.get("title") or ""),
+        " > ".join(str(item) for item in (payload.get("heading_path") or ())),
+        str(payload.get("parent_content") or payload.get("content") or ""),
+    ))
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
+    for segment in re.split(r"(?<=[.!?])\s+|\n+", folded):
+        if entity not in set(re.findall(r"[a-z0-9.-]+", segment)):
+            continue
+        if not re.search(r"\b(?:eingesetzt|genutzt|verwendet|verfugbar|ausgerollt)\w*\b", segment):
+            continue
+        if re.search(r"\b(?:standort|filial)\w*\b", segment):
+            return True
+    return False
 def _opening_hours_location_matches(
     point: dict[str, Any], location: tuple[str, ...],
 ) -> bool:
@@ -204,10 +329,14 @@ def _opening_hours_location_matches(
         .encode("ascii", "ignore").decode().casefold()
     )
     folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
-    has_hours = (
-        "offnungszeiten" in folded
-        or "oeffnungszeiten" in folded
-        or bool(re.search(r"\bmo\s*[-–]\s*fr\b", folded))
+    # A document index that merely names "Öffnungszeiten" is not evidence for
+    # opening hours. Require at least one literal day/time expression so the
+    # model receives the substantive section rather than the document header.
+    has_hours = bool(
+        re.search(r"\b(?:mo(?:ntag)?|di(?:enstag)?|mi(?:ttwoch)?|do(?:nnerstag)?|"
+                  r"fr(?:eitag)?|sa(?:mstag)?|so(?:nntag)?)\b[^\n]{0,80}"
+                  r"\b\d{1,2}(?::\d{2})?\s*(?:uhr)?\b", folded)
+        or re.search(r"\b\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}\b", folded)
     )
     return has_hours and all(token in folded_identity for token in location)
 def missing_opening_hours_locations(
@@ -235,6 +364,33 @@ def diversify_opening_hours_locations(
         if len(selected) >= result_limit:
             break
     return selected
+def select_exact_location_opening_hours(
+    query: str,
+    reranked: list[tuple[int, float]],
+    candidates: list[dict[str, Any]],
+    *,
+    result_limit: int,
+) -> list[tuple[int, float]]:
+    """Keep literal hours for the one location named by the user.
+
+    A low global rerank score must not discard an exact location-and-hours
+    passage after the document and ACL scope have already been resolved.
+    """
+    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
+    if not ("offnungszeiten" in folded or "oeffnungszeiten" in folded):
+        return []
+    locations = [
+        location for location in _OPENING_HOURS_LOCATIONS
+        if all(token in folded for token in location)
+    ]
+    if len(locations) != 1:
+        return []
+    location = locations[0]
+    return [
+        (index, score) for index, score in reranked
+        if 0 <= index < len(candidates)
+        and _opening_hours_location_matches(candidates[index], location)
+    ][:result_limit]
 def _authority_level(point: dict[str, Any]) -> int:
     value = str((point.get("payload") or {}).get("authority") or "6")
     try:
@@ -436,7 +592,8 @@ class QdrantHybridRetriever:
 
     def retrieve(self, query: str, dense_vector: list[float], scope: RetrievalScope,
                  *, candidate_limit: int = 50, result_limit: int = 8,
-                 today: date | None = None) -> list[RetrievedChunk]:
+                 today: date | None = None,
+                 information_needs: list[dict[str, Any]] | None = None) -> list[RetrievedChunk]:
         if not query.strip() or not dense_vector:
             raise RetrievalError("query_and_dense_vector_required")
         if not 30 <= candidate_limit <= 50 or not 5 <= result_limit <= 8:
@@ -490,6 +647,9 @@ class QdrantHybridRetriever:
         ]
         if opening_hours_all_locations_intent(query):
             candidates = self._complete_opening_hours_locations(candidates, acl)
+        candidates = pre_rerank_metadata_filter(query, candidates, information_needs)
+        if not candidates:
+            return []
         identifiers = explicit_source_identifiers(query)
         if identifiers:
             candidates = [
@@ -556,8 +716,13 @@ class QdrantHybridRetriever:
             )
             if focused_ids and document_overview_intent(query) else []
         )
+        exact_opening_hours = select_exact_location_opening_hours(
+            query, reranked, candidates, result_limit=result_limit,
+        )
         if overview_selection:
             candidates, ranked_selection = merge_overview_chapters(candidates, overview_selection)
+        elif exact_opening_hours:
+            ranked_selection = exact_opening_hours
         elif opening_hours_all_locations_intent(query):
             ranked_selection = diversify_opening_hours_locations(
                 reranked, candidates, result_limit=result_limit,
@@ -586,6 +751,14 @@ class QdrantHybridRetriever:
                 source_id=payload["source_id"], source_url=payload["source_url"], valid_until=payload["valid_until"],
                 authority=payload.get("authority") or "", conflict=bool(payload.get("conflict")),
                 retrieval_score=float(point.get("score") or 0), rerank_score=float(score),
+                domain=payload.get("domain") or "internal_general",
+                document_type=payload.get("document_type") or "knowledge_document",
+                topics=tuple(payload.get("topics") or ()),
+                evidence_capabilities=tuple(payload.get("evidence_capabilities") or ()),
+                source_provider=payload.get("source_provider") or "knowledge_portal",
+                classification_status=payload.get("classification_status") or "review_required",
+                classification_version=payload.get("classification_version") or "",
+                classification_confidence=float(payload.get("classification_confidence") or 0),
             ))
         return selected
 
@@ -804,10 +977,17 @@ def _expand_kahle_query_aliases(query):
 def _clarification_for_query(query):
     """Ask for the required scope instead of returning an arbitrary long list."""
     value = str(query or "").strip().casefold()
+    if (
+        re.search(r"\b(?:erfind|fingier|dicht)\w*", value)
+        and re.search(r"\b(?:richtlinie|policy|arbeitsanweisung|vorgabe|regelung)\w*", value)
+    ):
+        return (
+            "Ich kann keine bestehende interne Richtlinie erfinden. "
+            "Ich kann nur einen ausdrücklich als Entwurf gekennzeichneten Vorschlag erstellen."
+        )
     customer_lock = (
         re.search(r"\b(?:kunde|kunden)(?:\b|(?=sperr|entsperr))", value)
         and re.search(r"(?:\b(?:sperr|entsperr)\w*|\bkunden(?:sperr|entsperr)\w*)", value)
-        and re.search(r"\b(?:vaudis|vaudisx|dse)\b", value)
     )
     marketing_scope = re.search(
         r"\b(?:werbung|werbewiderspruch|befragung(?:en)?|kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
@@ -820,10 +1000,17 @@ def _clarification_for_query(query):
     )
     if customer_lock and not marketing_scope and not general_scope:
         return (
-            "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
-            "oder um eine allgemeine Kundensperre in Vaudis?"
+            "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+            "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+            "Kundensperre in Vaudis für einen anderen Standort?"
         )
     if not re.search(r"\b(?:öffnungszeiten|oeffnungszeiten|öffnungszeit|oeffnungszeit)\b", value):
+        return ""
+    complete_scope = (
+        re.search(r"\b(?:alle|allen|sämtliche|saemtliche)\s+(?:kahle[- ]?)?standort\w*\b", value)
+        and all(department in value for department in ("verkauf", "service", "teiledienst"))
+    )
+    if complete_scope:
         return ""
     locations = (
         "hannover", "wunstorf", "neustadt", "rübenberge", "ruebenberge",
@@ -836,31 +1023,82 @@ def _clarification_for_query(query):
         "Teiledienst) brauchst du die Öffnungszeiten?"
     )
 def _guided_response_for_query(query):
-    """Return deterministic next steps for clarified high-risk internal intents.
+    """Keep operational next steps source-driven through RAG."""
+    return ""
+def _filter_evidence_chunks(query, chunks):
+    """Reject passages that cannot carry the relationship asked for."""
+    folded_query = _fold_evidence_text(query)
 
-    The actual marketing opt-out process remains source-driven through RAG.
-    A general customer lock has deliberately no operational how-to in Vinci;
-    the user must contact data protection with the two required facts.
-    """
-    value = str(query or "").strip().casefold()
-    customer_lock = (
-        re.search(r"\b(?:kunde|kunden)(?:\b|(?=sperr|entsperr))", value)
-        and re.search(r"(?:\b(?:sperr|entsperr)\w*|\bkunden(?:sperr|entsperr)\w*)", value)
-        and re.search(r"\b(?:vaudis|vaudisx|dse)\b", value)
+    def passage(chunk):
+        return _fold_evidence_text("\n".join((
+            str(getattr(chunk, "title", "") or ""),
+            " > ".join(str(item) for item in (getattr(chunk, "heading_path", ()) or ())),
+            str(getattr(chunk, "parent_content", "") or ""),
+        )))
+
+    selected = list(chunks or [])
+    if (
+        re.search(r"\barbeitsanweisung\w*\b", folded_query)
+        and re.search(r"\b(?:pruf|freigab|veroffentlich|ablauf|prozess)\w*\b", folded_query)
+    ):
+        release = (
+            "release-paket", "releasepaket", "kryptografische signatur",
+            "prufsumme", "client akzeptiert", "software-update", "updates",
+        )
+        workflow = (
+            "arbeitsanweisung", "wissensportal", "dokument", "upload",
+            "fachlich", "veroffentlich",
+        )
+        selected = [
+            chunk for chunk in selected
+            if not (
+                any(marker in passage(chunk) for marker in release)
+                and not any(marker in passage(chunk) for marker in workflow)
+            )
+        ]
+
+    relationship = re.search(
+        r"\b(?:support|ansprechpartner|zustandig|zustandigkeit|betreut|verantwortlich)\w*\b",
+        folded_query,
     )
-    general_scope = re.search(
-        r"\b(?:allgemein(?:e|en|er)?|vollstaendig(?:e|en|er)?|vollständig(?:e|en|er)?|"
-        r"verkaufssperre|auftragssperre|finanzsperre)\b",
-        value,
+    system_match = re.search(
+        r"\b(?:support\w*\s+(?:fur|von)|fur\s+den\s+technischen\s+support\s+von)\s+"
+        r"([a-z0-9][a-z0-9_-]*)",
+        folded_query,
     )
-    if not customer_lock or not general_scope:
-        return ""
-    return (
-        "Bitte wende dich mit der Kundennummer und dem Grund der gewünschten "
-        "Sperre an [datenschutz@kahle.de](mailto:datenschutz@kahle.de?"
-        "subject=Allgemeine%20Kundensperre%20in%20Vaudis&"
-        "body=Kundennummer%3A%20%0AGrund%20der%20gew%C3%BCnschten%20Sperre%3A%20)."
-    )
+    if relationship and system_match:
+        system = system_match.group(1)
+        relation = re.compile(
+            r"\b(?:support|ansprechpartner|zustandig|zustandigkeit|betreut|verantwortlich)\w*\b"
+        )
+        selected = [
+            chunk for chunk in selected
+            if system in passage(chunk) and relation.search(passage(chunk))
+        ]
+
+    if (
+        "kundensperre" in folded_query
+        and re.search(r"\b(?:allgemein|vollstandig|verkaufssperre|auftragssperre|finanzsperre)\w*\b", folded_query)
+    ):
+        marketing = (
+            "werbung", "werbewiderspruch", "befragung", "kontaktfreigabe",
+            "hersteller-zufriedenheitsbefragung", "hersteller zufriedenheitsbefragung",
+        )
+        general = (
+            "allgemeine kundensperre", "vollstandige kundensperre",
+            "verkaufssperre", "auftragssperre", "finanzsperre",
+        )
+        selected = [
+            chunk for chunk in selected
+            if any(marker in passage(chunk) for marker in general)
+            or (
+                "datenschutz" in passage(chunk)
+                and any(marker in passage(chunk) for marker in (
+                    "sperranfrage", "sperrenanfrage",
+                ))
+            )
+        ]
+    return selected
 def _rag_answer_instruction(query):
     """Return query-specific grounding rules without replacing retrieval."""
     value = str(query or "").strip().casefold()
@@ -880,6 +1118,21 @@ def _rag_answer_instruction(query):
             "Leite keine allgemeine Kundensperre und keine Felder, Register oder Datenkategorien "
             "aus anderen Vaudis-Handbuchtreffern ab. Nenne insbesondere besondere Merkmale oder "
             "Finanzdaten nur, wenn die einschlägige Quelle zum Werbewiderspruch dies ausdrücklich verlangt. "
+        )
+    folded = (
+        str(query or "").casefold()
+        .replace("ä", "ae").replace("ö", "oe")
+        .replace("ü", "ue").replace("ß", "ss")
+    )
+    if (
+        "standort" in folded
+        and all(department in folded for department in ("verkauf", "service", "teiledienst"))
+    ):
+        instruction += (
+            "Beschränke die Übersicht auf die ausdrücklich angefragten Standorte und Bereiche. "
+            "Nenne keine Personen, Ansprechpartner, Unternehmenshistorie oder sonstigen Zusatzdaten, "
+            "wenn danach nicht gefragt wurde. Verallgemeinere Angaben eines einzelnen Standorts nicht "
+            "auf andere Standorte. "
         )
     return instruction
 def _fold_evidence_text(value):
@@ -918,15 +1171,78 @@ def _context_has_procedure(context):
         r"\bspeicher\w*", r"\bbestaetig\w*", r"\berstell\w*",
     )
     return sum(bool(re.search(pattern, value)) for pattern in patterns) >= 3
+def _detected_conflict_source_ids(source_items):
+    """Detect explicit mutually exclusive procedure instructions."""
+    folded = [
+        (source.get("number"), _fold_evidence_text(source.get("evidence_text")))
+        for source in source_items
+        if source.get("number") and source.get("evidence_text")
+    ]
+    opposites = (
+        (r"\bunten\s+rechts\b", r"\bunten\s+links\b"),
+        (r"\boben\s+rechts\b", r"\boben\s+links\b"),
+        (r"\bals\s+vorgang\b", r"\bals\s+aktion\b"),
+        (r"\bvorgang\s+anleg\w*", r"\baktion\s+anleg\w*"),
+    )
+    conflicts = set()
+    for index, (left_number, left_text) in enumerate(folded):
+        for right_number, right_text in folded[index + 1:]:
+            if any(
+                (re.search(left, left_text) and re.search(right, right_text))
+                or (re.search(right, left_text) and re.search(left, right_text))
+                for left, right in opposites
+            ):
+                conflicts.update((f"#{left_number}", f"#{right_number}"))
+    return sorted(conflicts, key=lambda value: int(value.lstrip("#")))
+def _claim_evidence_spans(query, passage):
+    """Select exact relevant sentences; never synthesize a claim across passages."""
+    sentences = [
+        sentence.strip()
+        for sentence in re.findall(r"[^.!?\n]+[.!?]?", str(passage or ""))
+        if sentence.strip()
+    ]
+    if not sentences:
+        return []
+    stopwords = {
+        "aber", "dass", "eine", "einen", "einer", "fuer", "kahle", "oder",
+        "sind", "ueber", "unter", "unser", "unsere", "unseren", "unserer",
+        "vollstaendig", "welche", "wer", "wie", "wird", "zustandig",
+    }
+    query_terms = {
+        term for term in re.findall(r"[a-z0-9]{3,}", _fold_evidence_text(query))
+        if term not in stopwords
+    }
+    scored = []
+    for position, sentence in enumerate(sentences):
+        terms = set(re.findall(r"[a-z0-9]{3,}", _fold_evidence_text(sentence)))
+        scored.append((len(query_terms.intersection(terms)), position, sentence))
+    best = max(score for score, _position, _sentence in scored)
+    if best <= 0:
+        return sentences[:1]
+    return [
+        sentence for score, _position, sentence in scored
+        if score == best
+    ][:3]
 def _evidence_bundle(query, context="", sources=None, missing_information=None):
     source_items = list(sources or [])
     missing = list(missing_information or [])
     claims = []
     for source in source_items:
         number = source.get("number")
-        claim = str(source.get("evidence_text") or "").strip()
-        if number and claim:
-            claims.append({"source_id": f"#{number}", "text": claim[:1000]})
+        passage = str(source.get("evidence_text") or "").strip()
+        if number and passage:
+            for claim_index, claim in enumerate(_claim_evidence_spans(query, passage), 1):
+                claims.append({
+                    "claim_id": f"R{number}C{claim_index}",
+                    "source_id": f"#{number}",
+                    "text": claim[:1000],
+                    "evidence_span": claim[:1000],
+                    "document_id": source.get("document_id"),
+                    "version_id": source.get("version_id"),
+                    "claim_type": (
+                        (source.get("evidence_capabilities") or ["factual_support"])[0]
+                    ),
+                })
     clean_sources = [
         {key: value for key, value in source.items() if key != "evidence_text"}
         for source in source_items
@@ -936,6 +1252,11 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
         for source in source_items
         if source.get("number") and source.get("conflict")
     ]
+    detected_conflicts = _detected_conflict_source_ids(source_items)
+    conflicts = sorted(
+        set(conflicts) | set(detected_conflicts),
+        key=lambda value: int(value.lstrip("#")),
+    )
     if not source_items:
         status = "unsupported"
     else:
@@ -943,13 +1264,29 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
         if conflicts:
             status = "partially_supported"
             missing.append(
-                "Die Quellen enthalten einen gekennzeichneten inhaltlichen Konflikt."
+                "Die Quellen widersprechen sich in einem angefragten Ablauf."
+                if detected_conflicts
+                else "Die Quellen enthalten einen gekennzeichneten inhaltlichen Konflikt."
             )
         if _procedural_evidence_intent(query) and not _context_has_procedure(context):
             status = "partially_supported"
             missing.append(
                 "Die Quellen bestätigen das Thema, enthalten aber keine ausreichende Anleitung."
             )
+        folded_query = _fold_evidence_text(query)
+        folded_context = _fold_evidence_text(context)
+        if re.search(r"\b(?:machbar|umsetzbar|realisierbar|technisch moglich)\b", folded_query) and not re.search(
+            r"\b(?:machbar|umsetzbar|realisierbar|technisch moglich|technisch freigegeben)\b",
+            folded_context,
+        ):
+            status = "partially_supported"
+            missing.append("Die technische Machbarkeit ist in den Quellen nicht bestätigt.")
+        if "datenschutz" in folded_query and re.search(r"\b(?:ohne|keine|nicht)\b", folded_query) and not (
+            "datenschutz" in folded_context
+            and re.search(r"\b(?:freigabe|prufung|bedenken|zulassig)\w*", folded_context)
+        ):
+            status = "partially_supported"
+            missing.append("Eine Datenschutzfreigabe ist in den Quellen nicht bestätigt.")
     return {
         "schema_version": "kahle.evidence-bundle.v1",
         "status": status,
@@ -996,7 +1333,7 @@ class Tools:
     def __init__(self):
         self.valves = self.Valves()
 
-    async def rag_chat(self, query: str = "", __user__: dict | None = None, __chat_id__: str = "", __message_id__: str = "") -> str:
+    async def rag_chat(self, query: str = "", __user__: dict | None = None, __chat_id__: str = "", __message_id__: str = "", __metadata__: dict | None = None) -> str:
         """Durchsucht ausschließlich freigegebenes Wissen, das der angemeldete Nutzer lesen darf."""
         query = _expand_kahle_query_aliases(_sanitize_rag_query(query))
         started_at = time.monotonic()
@@ -1043,7 +1380,15 @@ class Tools:
                 IonosReranker(base_url, api_key, self.valves.RERANKER_MODEL),
                 timeout=int(self.valves.TIMEOUT_S), minimum_rerank_score=self.valves.MINIMUM_RERANK_SCORE,
             )
-            chunks = retriever.retrieve(query, dense, scope)
+            information_needs = (
+                (__metadata__ or {}).get("_kahle_information_needs")
+                if isinstance(__metadata__, dict) else None
+            )
+            chunks = retriever.retrieve(
+                query, dense, scope,
+                information_needs=(information_needs if isinstance(information_needs, list) else None),
+            )
+            chunks = _filter_evidence_chunks(query, chunks)
         except Exception as exc:
             error_code = (
                 str(exc).strip()
@@ -1072,6 +1417,18 @@ class Tools:
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
                 "knowledgebase_ids": list(chunk.knowledgebase_ids),
+                "domain": getattr(chunk, "domain", "internal_general"),
+                "document_type": getattr(chunk, "document_type", "knowledge_document"),
+                "topics": list(getattr(chunk, "topics", ()) or ()),
+                "evidence_capabilities": list(
+                    getattr(chunk, "evidence_capabilities", ()) or ()
+                ),
+                "source_provider": getattr(chunk, "source_provider", "knowledge_portal"),
+                "classification_status": getattr(chunk, "classification_status", "review_required"),
+                "classification_version": getattr(chunk, "classification_version", ""),
+                "classification_confidence": float(
+                    getattr(chunk, "classification_confidence", 0) or 0
+                ),
                 "evidence_text": chunk.parent_content,
             })
         joined_context = "\n\n".join(context)

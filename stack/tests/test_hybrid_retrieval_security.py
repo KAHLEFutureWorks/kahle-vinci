@@ -1,6 +1,8 @@
 import importlib.util
 import ast
+import json
 import re
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -23,14 +25,70 @@ def load_tool_helpers(*names):
         / "rag_chat_hybrid_tool.py"
     )
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    dependencies = set()
+    if set(names).intersection({"_filter_evidence_chunks", "_claim_evidence_spans"}):
+        dependencies.add("_fold_evidence_text")
     nodes = [
         item
         for item in tree.body
-        if isinstance(item, ast.FunctionDef) and item.name in set(names)
+        if isinstance(item, ast.FunctionDef) and item.name in set(names) | dependencies
     ]
     namespace = {"re": re}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source_path), "exec"), namespace)
     return tuple(namespace[name] for name in names)
+
+
+def test_claim_evidence_uses_exact_relevant_sentences_instead_of_whole_documents():
+    (claim_spans,) = load_tool_helpers("_claim_evidence_spans")
+    passage = (
+        "VaudisX wird zur Kundenpflege genutzt. "
+        "Für den technischen Support von VaudisX ist Max Mustermann zuständig. "
+        "Microsoft 365 ist ebenfalls verfügbar."
+    )
+
+    spans = claim_spans(
+        "Wer ist für den technischen Support von VaudisX zuständig?", passage,
+    )
+
+    assert spans == [
+        "Für den technischen Support von VaudisX ist Max Mustermann zuständig."
+    ]
+
+
+def test_evidence_bundle_carries_claim_span_and_source_sidecar_metadata():
+    tool_path = Path(__file__).resolve().parents[1] / "open-webui-tools" / "rag_chat_hybrid_tool.py"
+    spec = importlib.util.spec_from_file_location("rag_claim_contract", tool_path)
+    tool = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(tool)
+    sentence = "Für den technischen Support von VaudisX ist Max Mustermann zuständig."
+
+    bundle = tool._evidence_bundle(
+        "Wer ist für den technischen Support von VaudisX zuständig?",
+        sentence,
+        [{
+            "number": 1,
+            "document_id": "doc-1",
+            "version_id": "v-1",
+            "domain": "internal_systems",
+            "document_type": "responsibility_matrix",
+            "evidence_capabilities": ["explicit_relationship"],
+            "source_provider": "knowledge_portal",
+            "evidence_text": sentence,
+        }],
+    )
+
+    assert bundle["supported_claims"] == [{
+        "claim_id": "R1C1",
+        "source_id": "#1",
+        "text": sentence,
+        "evidence_span": sentence,
+        "document_id": "doc-1",
+        "version_id": "v-1",
+        "claim_type": "explicit_relationship",
+    }]
+    assert bundle["sources"][0]["domain"] == "internal_systems"
+    assert "evidence_text" not in bundle["sources"][0]
 
 
 def test_rag_query_sanitizer_removes_forwarded_openwebui_context_prompt():
@@ -56,14 +114,142 @@ def test_generic_opening_hours_query_requires_location_clarification():
     assert clarification("Wie sind die Öffnungszeiten in Hannover?") == ""
 
 
+def test_complete_all_location_opening_hours_scope_needs_no_redundant_clarification():
+    (clarification,) = load_tool_helpers("_clarification_for_query")
+
+    assert clarification(
+        "Nenne die Öffnungszeiten für Verkauf, Service und Teiledienst an allen "
+        "KAHLE-Standorten."
+    ) == ""
+
+
+def test_work_instruction_workflow_drops_unrelated_software_release_evidence():
+    (filter_chunks,) = load_tool_helpers("_filter_evidence_chunks")
+    chunks = [
+        type("Chunk", (), {
+            "title": "KAHLE Speak Nutzer Kontext",
+            "heading_path": ("Updates", "Signierter Freigabeprozess"),
+            "parent_content": (
+                "Release-Pakete werden mit Prüfsummen und einer kryptografischen "
+                "Signatur abgesichert. Der Client akzeptiert nur passende Freigaben."
+            ),
+        })(),
+        type("Chunk", (), {
+            "title": "Wissensportal Nutzer Kontext",
+            "heading_path": ("Dokumente", "Freigabestufen"),
+            "parent_content": (
+                "Eine neue Arbeitsanweisung wird hochgeladen, fachlich geprüft, "
+                "freigegeben und danach im Wissensportal veröffentlicht."
+            ),
+        })(),
+    ]
+
+    selected = filter_chunks(
+        "Beschreibe den Ablauf zur fachlichen Prüfung, Freigabe und Veröffentlichung "
+        "einer neuen Arbeitsanweisung.",
+        chunks,
+    )
+
+    assert [chunk.title for chunk in selected] == ["Wissensportal Nutzer Kontext"]
+
+
+def test_person_system_support_requires_one_passage_that_expressly_links_both():
+    (filter_chunks,) = load_tool_helpers("_filter_evidence_chunks")
+    chunks = [
+        type("Chunk", (), {
+            "title": "Wichtige Kontakte",
+            "heading_path": ("IT",),
+            "parent_content": "Jan Oltmanns ist CRM-Manager und AI-Officer.",
+        })(),
+        type("Chunk", (), {
+            "title": "Systemlandkarte",
+            "heading_path": ("VaudisX",),
+            "parent_content": "VaudisX wird zur Kundenpflege und Rechnungserstellung genutzt.",
+        })(),
+    ]
+
+    assert filter_chunks(
+        "Wer ist bei KAHLE für den technischen Support von VaudisX zuständig?",
+        chunks,
+    ) == []
+
+
+def test_person_system_support_keeps_explicit_relationship_passage():
+    (filter_chunks,) = load_tool_helpers("_filter_evidence_chunks")
+    explicit = type("Chunk", (), {
+        "title": "Systemkontakte",
+        "heading_path": ("VaudisX", "Support"),
+        "parent_content": "Für den technischen Support von VaudisX ist Max Mustermann zuständig.",
+    })()
+
+    assert filter_chunks(
+        "Wer ist bei KAHLE für den technischen Support von VaudisX zuständig?",
+        [explicit],
+    ) == [explicit]
+
+
+def test_general_customer_lock_drops_marketing_only_evidence():
+    (filter_chunks,) = load_tool_helpers("_filter_evidence_chunks")
+    chunks = [type("Chunk", (), {
+        "title": "Temporäre Sperrung Hersteller-Zufriedenheitsbefragungen",
+        "heading_path": ("DSE", "Befragungssperre"),
+        "parent_content": (
+            "Über die DSE-Kontaktfreigaben werden Werbung und automatisierte "
+            "Herstellerbefragungen zeitweise gesperrt."
+        ),
+    })()]
+
+    assert filter_chunks(
+        "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis?",
+        chunks,
+    ) == []
+
+
+def test_general_customer_lock_drops_system_overview_without_lock_or_contact_evidence():
+    (filter_chunks,) = load_tool_helpers("_filter_evidence_chunks")
+    chunks = [type("Chunk", (), {
+        "title": "KAHLE Systemlandkarte",
+        "heading_path": ("Service-Systeme",),
+        "parent_content": (
+            "VaudisX ist ein internes DMS-System zur Kundenpflege und "
+            "Rechnungserstellung."
+        ),
+    })()]
+
+    assert filter_chunks(
+        "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis und wer ist "
+        "dafür als Datenschutz-Anlaufstelle zuständig?",
+        chunks,
+    ) == []
+
+
+def test_general_customer_lock_keeps_explicit_privacy_contact_for_lock_requests():
+    (filter_chunks,) = load_tool_helpers("_filter_evidence_chunks")
+    contact = type("Chunk", (), {
+        "title": "KAHLE Vinci Nutzer Kontext",
+        "heading_path": ("Hilfe und Datenschutz",),
+        "parent_content": (
+            "Bei Datenschutz-, Lösch- oder Werbesperrenanfragen wende dich an "
+            "datenschutz@kahle.de."
+        ),
+    })()
+
+    assert filter_chunks(
+        "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis und wer ist "
+        "dafür als Datenschutz-Anlaufstelle zuständig?",
+        [contact],
+    ) == [contact]
+
+
 def test_ambiguous_customer_lock_query_requires_purpose_clarification():
     clarification, guided = load_tool_helpers(
         "_clarification_for_query", "_guided_response_for_query",
     )
 
     assert clarification("Wie sperre ich einen Kunden in Vaudis?") == (
-        "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
-        "oder um eine allgemeine Kundensperre in Vaudis?"
+        "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+        "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+        "Kundensperre in Vaudis für einen anderen Standort?"
     )
     assert guided("Wie sperre ich einen Kunden in Vaudis?") == ""
 
@@ -90,22 +276,28 @@ def test_marketing_opt_out_instruction_blocks_unrelated_vaudis_fields():
     assert "Werbewiderspruch" in value
     assert "besondere Merkmale" in value
     assert "Finanzdaten" in value
+
+
+def test_location_department_overview_instruction_excludes_unrequested_people_and_cross_site_inference():
+    (instruction,) = load_tool_helpers("_rag_answer_instruction")
+
+    value = instruction(
+        "Erstelle eine Übersicht über Verkauf, Service und Teiledienst an allen KAHLE-Standorten."
+    )
+
+    assert "Nenne keine Personen" in value
+    assert "Verallgemeinere Angaben eines einzelnen Standorts nicht" in value
     assert "nicht" in value
 
 
-def test_general_customer_lock_routes_to_data_protection_with_minimal_fields():
+def test_general_customer_lock_requires_retrieved_evidence_instead_of_static_contact():
     clarification, guided = load_tool_helpers(
         "_clarification_for_query", "_guided_response_for_query",
     )
 
     query = "Es geht um eine allgemeine Kundensperre in Vaudis."
-    answer = guided(query)
-
     assert clarification(query) == ""
-    assert "datenschutz@kahle.de" in answer
-    assert "Kundennummer" in answer
-    assert "Grund der gewünschten Sperre" in answer
-    assert "mailto:datenschutz@kahle.de" in answer
+    assert guided(query) == ""
 
 
 def test_kahle_abbreviations_are_expanded_before_opening_hours_clarification():
@@ -206,6 +398,154 @@ def test_reranking_runs_on_ionos_and_not_on_a_local_service():
         source = (tools / name).read_text(encoding="utf-8")
         assert "IonosReranker(base_url, api_key" in source, name
         assert "TeiReranker(" not in source, f"{name} must not fall back to the local reranker"
+
+
+def test_procedural_query_discards_system_overviews_before_reranking():
+    candidates = [
+        {"payload": {
+            "title": "WPS Systemübersicht",
+            "domain": "internal_systems",
+            "document_type": "system_overview",
+            "evidence_capabilities": ["system_overview"],
+            "classification_status": "inferred", "classification_confidence": .95,
+        }},
+        {"payload": {
+            "title": "WPS Terminbuchung",
+            "domain": "internal_systems",
+            "document_type": "work_instruction",
+            "evidence_capabilities": ["procedure"],
+            "classification_status": "inferred", "classification_confidence": .95,
+        }},
+    ]
+
+    selected = module.pre_rerank_metadata_filter(
+        "Wie buche ich einen Termin in WPS?", candidates,
+    )
+
+    assert [point["payload"]["title"] for point in selected] == ["WPS Terminbuchung"]
+
+
+def test_fact_question_keeps_system_overview_without_requiring_a_procedure():
+    candidates = [{"payload": {
+        "title": "WPS Systemübersicht",
+        "domain": "internal_systems",
+        "document_type": "system_overview",
+        "evidence_capabilities": ["system_overview"],
+        "classification_status": "inferred", "classification_confidence": .95,
+    }}]
+
+    assert module.pre_rerank_metadata_filter("Was ist WPS?", candidates) == candidates
+
+
+def test_pre_rerank_filter_consumes_planned_capabilities_when_available():
+    candidates = [
+        {"payload": {"title": "Übersicht", "evidence_capabilities": ["system_overview"],
+                     "classification_status": "inferred", "classification_confidence": .95}},
+        {"payload": {"title": "Anleitung", "evidence_capabilities": ["procedure"],
+                     "classification_status": "inferred", "classification_confidence": .95}},
+    ]
+
+    selected = module.pre_rerank_metadata_filter(
+        "Was ist WPS?",
+        candidates,
+        information_needs=[{"evidence_capabilities": ["procedure"]}],
+    )
+
+    assert [point["payload"]["title"] for point in selected] == ["Anleitung"]
+
+
+def test_system_usage_location_plan_rejects_unrelated_location_document():
+    candidates = [
+        {"payload": {"title": "Systemlandkarte", "evidence_capabilities": ["system_overview"],
+                     "classification_status": "inferred", "classification_confidence": .95}},
+        {"payload": {"title": "Befragungssperre Hannover", "evidence_capabilities": ["procedure"],
+                     "classification_status": "inferred", "classification_confidence": .95}},
+        {"payload": {"title": "WPS Einsatzorte", "parent_content": "WPS wird an den Standorten Hannover und Wunstorf eingesetzt.",
+                     "evidence_capabilities": ["explicit_usage_scope"],
+                     "classification_status": "inferred", "classification_confidence": .95}},
+    ]
+
+    selected = module.pre_rerank_metadata_filter(
+        "An welchen Standorten wird WPS eingesetzt?",
+        candidates,
+        information_needs=[{"kind": "system_usage_locations", "evidence_capabilities": ["explicit_usage_scope"]}],
+    )
+
+    assert selected == [candidates[2]]
+
+
+def test_exact_location_opening_hours_keeps_textual_hours_even_below_global_threshold():
+    candidates = [
+        {"payload": {"title": "Standort Hannover", "heading_path": ["Kontakt"],
+                     "parent_content": "Hannover, Telefon 0511", "document_id": "han"}},
+        {"payload": {"title": "Standort Hannover", "heading_path": ["Öffnungszeiten"],
+                     "parent_content": "Verkauf: Mo-Fr 9-18, Sa 9-13", "document_id": "han"}},
+        {"payload": {"title": "Standort Wunstorf", "heading_path": ["Öffnungszeiten"],
+                     "parent_content": "Verkauf: Mo-Fr 9-18, Sa 9-13", "document_id": "wun"}},
+    ]
+    reranked = [(0, .91), (1, .12), (2, .88)]
+
+    selected = module.select_exact_location_opening_hours(
+        "Welche Öffnungszeiten hat der Standort Hannover?",
+        reranked,
+        candidates,
+        result_limit=5,
+    )
+
+    assert selected == [(1, .12)]
+
+
+def test_exact_location_opening_hours_rejects_document_index_without_literal_times():
+    candidates = [
+        {"payload": {"title": "Standort Hannover", "heading_path": ["Kurzindex"],
+                     "parent_content": "Dieser Steckbrief enthält Öffnungszeiten und Kontaktdaten.",
+                     "document_id": "han"}},
+        {"payload": {"title": "Standort Hannover", "heading_path": ["Öffnungszeiten"],
+                     "parent_content": "Verkauf: Mo-Fr 9:00-18:00, Sa 9:00-13:00",
+                     "document_id": "han"}},
+    ]
+    reranked = [(0, .92), (1, .11)]
+
+    selected = module.select_exact_location_opening_hours(
+        "Welche Öffnungszeiten hat der Standort Hannover?",
+        reranked,
+        candidates,
+        result_limit=5,
+    )
+
+    assert selected == [(1, .11)]
+
+
+def test_generic_factual_plan_does_not_exclude_specialized_evidence():
+    candidates = [{"payload": {
+        "title": "Prozessbeschreibung",
+        "evidence_capabilities": ["procedure"],
+        "classification_status": "inferred",
+        "classification_confidence": .95,
+    }}]
+
+    selected = module.pre_rerank_metadata_filter(
+        "Welche internen Prozesse sind dokumentiert?",
+        candidates,
+        information_needs=[{"evidence_capabilities": ["factual_support"]}],
+    )
+
+    assert selected == candidates
+
+
+def test_relationship_query_keeps_only_explicit_relationship_sources():
+    candidates = [
+        {"payload": {"title": "Kontakte", "evidence_capabilities": ["contact_details"],
+                     "classification_status": "inferred", "classification_confidence": .95}},
+        {"payload": {"title": "Systemkontakte", "evidence_capabilities": ["explicit_relationship"],
+                     "classification_status": "inferred", "classification_confidence": .95}},
+    ]
+
+    selected = module.pre_rerank_metadata_filter(
+        "Wer ist für den technischen Support von VaudisX zuständig?", candidates,
+    )
+
+    assert [point["payload"]["title"] for point in selected] == ["Systemkontakte"]
 
 
 def test_rag_tool_reports_content_free_retrieval_metrics_to_portal():
@@ -651,6 +991,62 @@ def test_wer_ist_person_query_focuses_exact_contact_document():
     assert module.focused_document_ids("Wer ist Thomas Keller?", candidates) == {"contacts"}
 
 
+def test_person_query_prefers_employee_directory_over_history_when_both_match():
+    candidates = [{
+        "payload": {
+            "document_id": "history",
+            "title": "KAHLE Unternehmensprofil und Historie",
+            "parent_content": "Thomas Keller gehört zur Geschäftsführung.",
+        },
+    }, {
+        "payload": {
+            "document_id": "contacts",
+            "title": "KAHLE Wichtige Kontakte Rollen",
+            "parent_content": "Geschäftsführer: Thomas Keller (keller@kahle.de)",
+        },
+    }]
+
+    assert module.focused_document_ids("Wer ist Thomas Keller?", candidates) == {"contacts"}
+
+
+def test_person_query_prefers_future_personio_directory_source():
+    candidates = [{
+        "payload": {
+            "document_id": "contacts",
+            "title": "KAHLE Wichtige Kontakte Rollen",
+            "parent_content": "IT: Stefan Schrader",
+        },
+    }, {
+        "payload": {
+            "document_id": "personio",
+            "title": "Personio Mitarbeiterverzeichnis",
+            "parent_content": "Stefan Schrader, Leitung IT/EDV",
+        },
+    }]
+
+    assert module.focused_document_ids("Wer ist Stefan Schrader?", candidates) == {"personio"}
+
+
+def test_active_version_question_focuses_the_named_document():
+    candidates = [{
+        "payload": {
+            "document_id": "test-guide",
+            "title": "Anleitung zur Anlage eines Testvorgangs Kopie",
+            "parent_content": "Lege den Testvorgang als Vorgang an.",
+        },
+    }, {
+        "payload": {
+            "document_id": "portal-help",
+            "title": "KAHLE Wissensportal Versionierung",
+            "parent_content": "Aktive Versionen ersetzen vorherige Fassungen.",
+        },
+    }]
+
+    assert module.focused_document_ids(
+        "Welche aktuell gültige Fassung unseres Testvorgangs gilt?", candidates
+    ) == {"test-guide"}
+
+
 def test_named_entity_uses_acl_filtered_hybrid_order_when_reranker_is_unavailable(monkeypatch):
     points = [{
         "id": "p1", "score": .9,
@@ -840,3 +1236,40 @@ def test_local_tool_update_uses_sqlite_and_built_bundles_without_api_key():
     assert 'TOOLS_DIR / "dist" / "kahle_workflow_orchestrator.py"' in register
     assert "OWUI_DB_PATH=/app/backend/data/webui.db" in updater
     assert "OPENWEBUI_API_KEY" not in updater
+
+
+def test_local_tool_update_registers_guard_in_the_running_container_database():
+    root = Path(__file__).resolve().parents[2]
+    updater = root / "scripts" / "openwebui" / "update-local-rag-tools.ps1"
+    escaped_updater = str(updater).replace("'", "''")
+    command = f"""
+$calls = [System.Collections.Generic.List[string]]::new()
+function docker {{
+    $DockerArgs = @($args)
+    $calls.Add(($DockerArgs -join ' '))
+    $global:LASTEXITCODE = 0
+    if ($DockerArgs[0] -eq 'inspect') {{ 'true' }}
+}}
+& '{escaped_updater}' -Container 'test-open-webui'
+$calls | ConvertTo-Json -Compress
+"""
+
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    calls = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert any(
+        "stack/open-webui-functions/kahle_toolcall_guard.py" in call.replace("\\", "/")
+        and ":/tmp/kahle-vinci/stack/open-webui-functions/kahle_toolcall_guard.py" in call.replace("\\", "/")
+        for call in calls
+    )
+    assert any(
+        "OWUI_DB_PATH=/app/backend/data/webui.db" in call
+        and "--only kahle_toolcall_guard" in call
+        for call in calls
+    )

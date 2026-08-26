@@ -652,3 +652,25 @@
   cursor: wait;
   opacity: 0.55;
 }
+.wp-notification-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.wp-notification-heading > .wp-secondary {
+  flex: none;
+  margin-top: 0;
+}
+
+@media (max-width: 700px) {
+  .wp-notification-heading {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .wp-notification-heading > .wp-secondary {
+    margin: -14px 0 24px;
+  }
+}

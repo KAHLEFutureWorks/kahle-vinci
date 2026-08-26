@@ -19,8 +19,7 @@
 services:
   open-webui:
     environment:
-      # Lokal wird der neue Antwortpfad aktiv geprüft. Produktion bleibt ohne
-      # explizite Freigabe im Schattenbetrieb.
+      # Lokal wird der produktiv aktive Antwortpfad ausdrücklich festgehalten.
       KAHLE_KNOWLEDGE_HARNESS_MODE: "active"
 
   kb-admin-api:
