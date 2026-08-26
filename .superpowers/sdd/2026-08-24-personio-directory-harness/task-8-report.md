@@ -215,3 +215,27 @@ present at baseline: missing unversioned local files
 `stack/.env.production.example`. Neither file was copied or created, and the
 failures are unrelated to the Personio feature. No live API, environment
 variable or local Compose service was accessed.
+
+## Preferred-name review fix round 1
+
+The real v1 change field is exposed as key `last_modified_at` with label
+`Last modified at`. Its mapping regression first failed with the sanitized
+required-fields error and then passed after both actual aliases were added.
+
+The sync regressions for missing, blank, non-string, single-token and malformed
+preferred names initially reported `8 failed, 1 passed`. Such records are now
+explicitly ineligible: delta sync physically removes an existing point, and a
+full sync no longer preserves it as temporarily malformed. The passing control
+case confirms that another transiently malformed business field still retains
+the last valid indexed record.
+
+Fresh offline verification:
+
+```text
+stack/personio-directory/tests: 111 passed in 1.32s
+stack/tests: 421 passed, 2 failed in 5.80s
+```
+
+The two stack failures remain the same missing unversioned local reference
+files documented above. No live API, environment variable or Compose service
+was accessed.

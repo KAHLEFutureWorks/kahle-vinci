@@ -1,6 +1,6 @@
 # Personio-Mitarbeiterverzeichnis betreiben und abnehmen
 
-Stand: 25. August 2026
+Stand: 26. August 2026
 
 ## Aktueller Abnahmestand
 
@@ -64,9 +64,10 @@ Erwartet werden die API-Mappings `personio_id`, `display_name`, `position`,
 `department`, `team`, `office`, `business_email`, `business_phone`,
 `employment_status` und `source_updated_at`. `display_name` muss ausschließlich
 auf das Personio-Feld mit der Bezeichnung `Name (preferred)` zeigen;
-`source_updated_at` bleibt für den Delta-Sync über `Last modified` beziehungsweise
-`Letzte Änderung` verpflichtend. Vor- und Nachname werden intern aus dem
-normalisierten Preferred Name abgeleitet und sind keine eigenen API-Mappings.
+`source_updated_at` bleibt für den Delta-Sync über `Last modified at`,
+`Last modified` beziehungsweise `Letzte Änderung` verpflichtend. Vor- und
+Nachname werden intern aus dem normalisierten Preferred Name abgeleitet und
+sind keine eigenen API-Mappings.
 Die Beschäftigungsart wird nicht gelesen oder ausgewertet. Wenn der Probe
 fehlschlägt oder ein benötigtes
 Geschäftsfeld nicht eindeutig aufgelöst wird, hier stoppen. Das Mapping wird

@@ -51,7 +51,7 @@ def filter_person(
     if status not in _ALLOWED_STATUSES:
         return None
 
-    preferred_name = _preferred_name(values["display_name"])
+    preferred_name = preferred_name_parts(values["display_name"])
     if preferred_name is None:
         return None
     display_name, first_name, last_name = preferred_name
@@ -62,7 +62,8 @@ def filter_person(
     return PersonRecord(**values)  # type: ignore[arg-type]
 
 
-def _preferred_name(value: object) -> tuple[str, str, str] | None:
+def preferred_name_parts(value: object) -> tuple[str, str, str] | None:
+    """Normalize and split the sole supported human-name source."""
     if not isinstance(value, str):
         return None
     display_name = " ".join(value.split())

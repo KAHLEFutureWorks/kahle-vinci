@@ -178,6 +178,28 @@ def test_delta_physically_removes_a_previously_indexed_person_who_becomes_inelig
     assert state.indexed_people() == {}
 
 
+@pytest.mark.parametrize("preferred_name", [None, "", 123, "Madonna", "Jan 123"])
+def test_delta_physically_removes_existing_person_with_ineligible_preferred_name(
+    tmp_path, preferred_name
+):
+    state = SQLiteSyncState(tmp_path / "personio.sqlite3")
+    with state.run("delta") as run:
+        run.replace_indexed_people({"person-1": "2026-08-24T10:00:00Z"})
+        run.mark_success("2026-08-24T10:00:00Z")
+    raw = raw_person("ACTIVE", "INTERNAL")
+    if preferred_name is None:
+        raw.pop("preferred_name")
+    else:
+        raw["preferred_name"] = preferred_name
+    index = FakeIndex(existing_ids={"person-1"})
+
+    report = DirectorySync(Client([raw]), index, state).run_delta()
+
+    assert index.deleted_ids == {"person-1"}
+    assert report.deleted == 1
+    assert state.indexed_people() == {}
+
+
 def test_full_sync_is_due_initially_then_after_24_hours(tmp_path):
     state = SQLiteSyncState(tmp_path / "personio.sqlite3")
     sync = DirectorySync(Client([]), FakeIndex(), state)
@@ -189,16 +211,36 @@ def test_full_sync_is_due_initially_then_after_24_hours(tmp_path):
     assert sync.full_sync_due("2026-08-24T10:00:01Z") is True
 
 
-def test_full_sync_keeps_existing_person_seen_with_temporarily_malformed_data(tmp_path):
+def test_full_sync_keeps_existing_person_seen_with_transient_non_name_malformed_data(tmp_path):
     state = SQLiteSyncState(tmp_path / "personio.sqlite3")
     index = FakeIndex(existing_ids={"person-1"})
-    malformed = raw_person("ACTIVE", "INTERNAL") | {"preferred_name": "single"}
+    malformed = raw_person("ACTIVE", "INTERNAL") | {"position": ""}
 
     report = DirectorySync(Client([malformed]), index, state).run_full()
 
     assert report.invalid == 1
     assert index.indexed_personio_ids() == {"person-1"}
     assert state.indexed_people() == {"person-1": "2026-08-24T10:15:00Z"}
+
+
+@pytest.mark.parametrize("preferred_name", [None, "", 123, "Madonna", "Jan 123"])
+def test_full_sync_deletes_existing_person_with_ineligible_preferred_name(
+    tmp_path, preferred_name
+):
+    state = SQLiteSyncState(tmp_path / "personio.sqlite3")
+    index = FakeIndex(existing_ids={"person-1"})
+    raw = raw_person("ACTIVE", "INTERNAL")
+    if preferred_name is None:
+        raw.pop("preferred_name")
+    else:
+        raw["preferred_name"] = preferred_name
+
+    report = DirectorySync(Client([raw]), index, state).run_full()
+
+    assert report.invalid == 1
+    assert report.deleted == 1
+    assert index.indexed_personio_ids() == set()
+    assert state.indexed_people() == {}
 
 
 @pytest.mark.parametrize("failure", ["upsert", "delete"])

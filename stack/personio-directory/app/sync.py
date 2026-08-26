@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .models import PersonRecord
-from .policy import filter_person
+from .policy import filter_person, preferred_name_parts
 from .state import SQLiteSyncState
 
 
@@ -167,4 +167,8 @@ def _utc_now() -> str:
 
 def _is_explicitly_ineligible(raw: Mapping[str, object], mapping: Mapping[str, str]) -> bool:
     status = raw.get(mapping["employment_status"])
-    return status not in {"ACTIVE", "LEAVE", "ONBOARDING"}
+    preferred_name = raw.get(mapping["display_name"])
+    return (
+        status not in {"ACTIVE", "LEAVE", "ONBOARDING"}
+        or preferred_name_parts(preferred_name) is None
+    )

@@ -151,6 +151,32 @@ def test_v1_assessment_still_requires_last_modified_for_delta_sync(config):
         client.assess_api()
 
 
+def test_v1_assessment_maps_actual_last_modified_at_key_and_label(config):
+    live_shape_attributes = v1_attributes()._payload
+    live_shape_attributes = {
+        "data": [
+            (
+                {"key": "last_modified_at", "label": "Last modified at"}
+                if attribute["key"] == "updated_at"
+                else attribute
+            )
+            for attribute in live_shape_attributes["data"]
+        ]
+    }
+    session = FakeSession([
+        Response(200, {"access_token": "v2-token", "expires_in": 3600}),
+        Response(200, {"data": []}),
+        Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
+        Response(200, live_shape_attributes),
+    ])
+    client = PersonioClient(config, session=session, sleep=lambda _: None, random_value=lambda: 0)
+
+    assessment = client.assess_api()
+
+    assert assessment.version == "v1"
+    assert assessment.mapping["source_updated_at"] == "last_modified_at"
+
+
 def test_v1_iter_people_uses_bounded_offset_pagination_and_updated_since(config):
     session = FakeSession([
         Response(200, {"data": {"token": "v1-token", "expires_in": 3600}}),
