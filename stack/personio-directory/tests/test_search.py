@@ -208,6 +208,76 @@ def test_directory_search_combines_role_and_office_filters_and_uses_stable_perso
     assert "employment_type" not in repr(evidence.claims)
 
 
+def test_directory_search_matches_teiledienst_and_hannover_as_explicit_dimensions():
+    matching = person(
+        "1", name="Anna Adler", position="Teiledienstberater", department="Teiledienst"
+    )
+    wrong_office = person(
+        "2", name="Berta Berlin", position="Teiledienstberater", department="Teiledienst", office="Berlin"
+    )
+
+    evidence = search([matching, wrong_office]).search(
+        query("Wer arbeitet im Teiledienst in Hannover?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+def test_directory_search_normalizes_serviceassistenzen_and_office_preposition():
+    matching = person(
+        "1", name="Anna Adler", position="Serviceassistenz", office="Wedemark"
+    )
+    wrong_role = person(
+        "2", name="Berta Berlin", position="Serviceberater", office="Wedemark"
+    )
+
+    evidence = search([matching, wrong_role]).search(
+        query("Wie heißen die Serviceassistenzen in der Wedemark?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+def test_sales_role_description_is_a_directory_search_with_brand_and_area_filters():
+    matching = person(
+        "1",
+        name="Anna Adler",
+        position="Automobilverkäufer",
+        department="Neuwagen",
+        team="SEAT",
+    )
+    wrong_brand = person(
+        "2",
+        name="Berta Berlin",
+        position="Automobilverkäufer",
+        department="Neuwagen",
+        team="CUPRA",
+    )
+    wrong_area = person(
+        "3",
+        name="Clara Celle",
+        position="Automobilverkäufer",
+        department="Gebrauchtwagen",
+        team="SEAT",
+    )
+
+    directory = search([matching, wrong_brand, wrong_area])
+    evidence = directory.search(query("Wer ist Verkäufer von Seat Neuwagen?"))
+
+    assert classify_directory_query("Wer ist Verkäufer von Seat Neuwagen?") == "directory_search"
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+def test_controlled_role_search_returns_no_unrelated_people_when_a_dimension_is_missing():
+    service = person("1", name="Anna Adler", position="Serviceassistenz", office="Wedemark")
+
+    evidence = search([service]).search(
+        query("Wie heißen die Serviceassistenzen in Celle?", "directory_search")
+    )
+
+    assert evidence.status == "not_found"
+
+
 def test_team_name_does_not_accidentally_add_an_office_filter():
     hannover_team_in_berlin = person(
         "1", name="Anna Adler", team="Service Hannover", office="Berlin"

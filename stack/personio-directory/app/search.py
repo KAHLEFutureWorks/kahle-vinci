@@ -28,6 +28,7 @@ _STOP_WORDS = frozenset(
     {
         "aktuell",
         "alle",
+        "bei",
         "arbeitet",
         "arbeiten",
         "das",
@@ -44,6 +45,8 @@ _STOP_WORDS = frozenset(
         "im",
         "in",
         "ist",
+        "heissen",
+        "heisst",
         "mit",
         "mitarbeitende",
         "mitarbeitenden",
@@ -58,6 +61,7 @@ _STOP_WORDS = frozenset(
         "sind",
         "team",
         "und",
+        "uns",
         "von",
         "welche",
         "welcher",
@@ -67,6 +71,10 @@ _STOP_WORDS = frozenset(
         "zu",
     }
 )
+_ROLE_VARIANTS: dict[str, tuple[str, ...]] = {
+    "serviceassistenz": ("serviceassistenz", "serviceassistent"),
+    "verkaufer": ("verkaufer", "automobilverkaufer", "verkauf"),
+}
 _COLLABORATION_DISCLAIMER = (
     "Die Zuordnung beschreibt nur organisatorische Nähe und keine tatsächliche "
     "persönliche, fachliche oder projektbezogene Zusammenarbeit."
@@ -107,6 +115,8 @@ def classify_directory_query(text: str) -> DirectoryIntent:
         return "onboarding_search"
     if _COWORKER_PHRASE.search(normalized):
         return "coworker_lookup"
+    if _is_controlled_role_description(normalized):
+        return "directory_search"
     if _PERSON_LOOKUP_PHRASE.search(normalized) or _SHORT_PERSON_QUESTION.fullmatch(
         normalized
     ):
@@ -235,8 +245,8 @@ class DirectorySearch:
         ignore_unstructured_terms: bool = False,
     ) -> tuple[PersonRecord, ...]:
         people = tuple(people)
-        terms = () if ignore_unstructured_terms else _search_terms(text)
         filters = _explicit_field_filters(text, people)
+        terms = () if ignore_unstructured_terms or filters else _search_terms(text)
         phone_digits = _digits(text)
         query_emails = _EMAIL.findall(text)
         normalized_emails = {_normalise_email(email) for email in query_emails}
@@ -381,7 +391,68 @@ def _explicit_field_filters(
         }
         if requested:
             filters[field] = frozenset(requested)
+    if _explicit_office_request(normalized) and "office" not in filters:
+        # An expressly named but unknown location must not degrade into a
+        # role-only list. It is a bounded zero-result filter, never a fuzzy match.
+        filters["office"] = frozenset({"__unmatched_office__"})
+    _add_controlled_variants(filters, normalized, people)
     return filters
+
+
+def _add_controlled_variants(
+    filters: dict[str, frozenset[str]],
+    query: str,
+    people: Iterable[PersonRecord],
+) -> None:
+    """Add only a small, auditable set of role and business-field variants."""
+    people = tuple(people)
+    for role, variants in _ROLE_VARIANTS.items():
+        if role == "serviceassistenz":
+            requested = bool(re.search(r"\bserviceassistenz(?:en)?\b", query))
+        else:
+            requested = bool(re.search(r"\bverkaufer\b", query))
+        if requested:
+            _add_matching_field_values(filters, "position", people, variants)
+    if re.search(r"\bseat\b", query):
+        _add_matching_field_values(filters, "team", people, ("seat",))
+    if re.search(r"\bneuwagen\b", query):
+        _add_matching_field_values(filters, "department", people, ("neuwagen",))
+
+
+def _add_matching_field_values(
+    filters: dict[str, frozenset[str]],
+    field: str,
+    people: Iterable[PersonRecord],
+    variants: Iterable[str],
+) -> None:
+    normalized_variants = frozenset(variants)
+    matched = {
+        value
+        for person in people
+        if (value := _normalise_text(str(getattr(person, field))))
+        and normalized_variants.intersection(value.split())
+    }
+    if matched:
+        filters[field] = frozenset(set(filters.get(field, ())) | matched)
+
+
+def _is_controlled_role_description(query: str) -> bool:
+    return bool(
+        re.search(r"\bserviceassistenz(?:en)?\b", query)
+        or (
+            re.search(r"\bverkaufer\b", query)
+            and re.search(r"\b(?:seat|neuwagen|automobil)\b", query)
+        )
+    )
+
+
+def _explicit_office_request(query: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:in(?:\s+der|\s+dem)?|nach|am\s+standort)\s+[\w]+",
+            query,
+        )
+    )
 
 
 def _field_value_is_explicitly_requested(
@@ -391,7 +462,7 @@ def _field_value_is_explicitly_requested(
         return f" {value} " in query
     return bool(
         re.search(
-            rf"\b(?:in|nach|am|(?:am\s+)?standort)\s+{re.escape(value)}\b",
+            rf"\b(?:in(?:\s+der|\s+dem)?|nach|am|(?:am\s+)?standort)\s+{re.escape(value)}\b",
             query,
         )
     )
