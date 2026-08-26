@@ -94,6 +94,16 @@ def test_natural_person_questions_use_person_lookup(text: str):
     assert classify_directory_query(text) == "person_lookup"
 
 
+def test_supervisor_question_uses_dedicated_fail_closed_directory_intent():
+    directory = search([person("1", name="Erika Beispiel")])
+
+    evidence = directory.search(query("Wer davon ist die Führungskraft?"))
+
+    assert classify_directory_query("Wer davon ist die Führungskraft?") == "supervisor_lookup"
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
 def test_named_person_query_requires_exact_full_name_or_email_before_expansion():
     erika = person("1", name="Erika Beispiel")
     directory = search([erika])

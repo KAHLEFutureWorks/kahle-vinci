@@ -40,7 +40,7 @@ _SOURCE_ID = re.compile(r"^P[1-9][0-9]*$")
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     intent: Literal[
-        "person_lookup", "directory_search", "coworker_lookup", "onboarding_search"
+        "person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"
     ]
     user_id: str = Field(min_length=1, max_length=256)
     user_role: str = Field(min_length=1, max_length=32)

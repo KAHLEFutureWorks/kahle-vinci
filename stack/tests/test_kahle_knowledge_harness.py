@@ -306,6 +306,7 @@ def test_retrieval_plan_uses_required_evidence_sources(query, tools):
         ("Wer arbeitet im Teiledienst in Hannover?", ("personio_directory",), "employee_directory"),
         ("Wie heißen die Serviceassistenzen in der Wedemark?", ("personio_directory",), "employee_directory"),
         ("Wer ist Verkäufer von Seat Neuwagen?", ("personio_directory",), "employee_directory"),
+        ("Wer davon ist die Führungskraft?", ("personio_directory",), "employee_directory"),
         ("An wen wende ich mich, wenn ein Kunde eine Mahnung erhält?", ("rag_chat",), "internal_knowledge"),
         ("Wer ist der Ansprechpartner für Kundenbeschwerden?", ("rag_chat",), "internal_knowledge"),
     ),

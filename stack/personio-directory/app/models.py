@@ -22,7 +22,7 @@ class PersonRecord:
 class DirectoryQuery:
     text: str
     intent: Literal[
-        "person_lookup", "directory_search", "coworker_lookup", "onboarding_search"
+        "person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"
     ]
     user_id: str
     user_role: str

@@ -11,9 +11,10 @@ from .policy import public_payload
 
 
 DirectoryIntent = Literal[
-    "person_lookup", "directory_search", "coworker_lookup", "onboarding_search"
+    "person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"
 ]
 _ONBOARDING_WORD = re.compile(r"\bonboarding\b", re.IGNORECASE)
+_SUPERVISOR_WORD = re.compile(r"\b(?:fuhrungskraft|vorgesetzt\w*)\b", re.IGNORECASE)
 _COWORKER_PHRASE = re.compile(
     r"\bmit\s+wem\b.*\b(?:zusammenarbeit|zusammenarbeiten|arbeitet)\b",
     re.IGNORECASE,
@@ -113,6 +114,8 @@ def classify_directory_query(text: str) -> DirectoryIntent:
     normalized = _normalise_text(text)
     if _ONBOARDING_WORD.search(normalized):
         return "onboarding_search"
+    if _SUPERVISOR_WORD.search(normalized):
+        return "supervisor_lookup"
     if _COWORKER_PHRASE.search(normalized):
         return "coworker_lookup"
     if _is_controlled_role_description(normalized):
@@ -158,6 +161,10 @@ class DirectorySearch:
                 sync_completed_at=sync_completed_at,
                 relationship_basis=coworkers.basis,
             )
+        if intent == "supervisor_lookup":
+            # Candidate context and an explicitly mapped supervisor relation
+            # are intentionally required before naming any manager.
+            return self._evidence((), sync_completed_at=sync_completed_at)
         return self._evidence(
             self._directory_candidates(
                 query.text,

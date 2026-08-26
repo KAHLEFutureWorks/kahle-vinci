@@ -502,6 +502,8 @@ def _directory_information_need(query: str) -> bool:
         return False
     if _explicit_onboarding_people_request(folded):
         return True
+    if re.search(r"\b(?:fuhrungskraft|vorgesetzt\w*)\b", folded):
+        return True
     if _has_named_person_reference(query):
         return True
     contact_or_list_patterns = (

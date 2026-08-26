@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 
 _ALLOWED_INTENTS = frozenset(
-    {"person_lookup", "directory_search", "coworker_lookup", "onboarding_search"}
+    {"person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"}
 )
 _ALLOWED_STATUSES = frozenset({"ok", "not_found", "not_ready"})
 _SOURCE_ID = re.compile(r"^P[1-9][0-9]*$")
