@@ -514,7 +514,8 @@ def _directory_information_need(query: str) -> bool:
         r"\bwie\s+(?:lautet|erreiche)\b.*\b(?:e-?mail|telefon|durchwahl)\b",
         r"\bwer\s+arbeitet\b",
         r"\bwie\s+hei(?:ss)?en\b.*\b(?:serviceassistenz|verkaufer|teiledienst)\w*",
-        r"\bwer\s+ist\s+verkaufer\b.*\b(?:seat|neuwagen|automobil)\b",
+        r"\bwer\s+(?:ist|sind)\s+(?:die\s+)?verkaufer\b",
+        r"\bwelche\s+serviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b",
         r"\bwelche\s+(?:mitarbeiter(?:innen)?|kolleg(?:en|innen))\b",
         r"\b(?:mitarbeiter(?:innen)?|kolleg(?:en|innen))\s+im\b",
     )

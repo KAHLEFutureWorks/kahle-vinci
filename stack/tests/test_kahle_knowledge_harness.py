@@ -570,6 +570,28 @@ def test_retrieval_plan_treats_was_weisst_du_alles_ueber_as_person_lookup():
 @pytest.mark.parametrize(
     "query",
     (
+        "Wer sind die Verkäufer in Nienburg?",
+        "Welche Serviceassistentinnen arbeiten in Nienburg?",
+        "Wer ist die Führungskraft von Erika Beispiel?",
+    ),
+)
+def test_retrieval_plan_routes_current_employee_role_and_supervisor_questions_to_personio(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
         "Wie erreiche ich Erika Beispiel?",
         "Wie ist die Telefonnummer von Erika Beispiel?",
         "Wie sind die Kontaktdaten der Serviceleitung Nienburg?",

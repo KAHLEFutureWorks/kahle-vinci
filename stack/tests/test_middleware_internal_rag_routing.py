@@ -194,7 +194,7 @@ def test_supported_onboarding_directory_evidence_is_rendered_without_model_synth
     assert "personio_id" not in answer
 
 
-def test_supported_person_lookup_evidence_is_rendered_without_model_synthesis():
+def test_supported_person_lookup_evidence_uses_the_answer_contract_instead_of_a_fixed_renderer():
     query = "Was weißt du alles über Erika Beispiel?"
     personio = {
         "status": "ok",
@@ -229,15 +229,14 @@ def test_supported_person_lookup_evidence_is_rendered_without_model_synthesis():
     direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
     answer = direct_answer(decision, decision.to_dict())
 
-    assert answer.startswith("Im aktuellen Personio-Mitarbeiterverzeichnis:")
-    assert "Erika Marie Beispiel – Serviceberaterin" in answer
-    assert "erika.beispiel@kahle.de" not in answer
-    assert "+49 511" not in answer
-    assert "personio_id" not in answer
-    assert "source_id" not in answer
+    assert answer == ""
+    contract = decision.answer_prompt()
+    assert "Erika Marie Beispiel" in contract
+    assert "erika.beispiel@kahle.de" in contract
+    assert "+49 511" in contract
 
 
-def test_supported_person_contact_evidence_is_rendered_from_personio_only():
+def test_supported_person_contact_evidence_uses_the_answer_contract_instead_of_a_fixed_renderer():
     query = "Wie erreiche ich Erika Beispiel?"
     personio = {
         "status": "ok",
@@ -269,10 +268,10 @@ def test_supported_person_contact_evidence_is_rendered_from_personio_only():
     direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
     answer = direct_answer(decision, decision.to_dict())
 
-    assert "erika.beispiel@kahle.de" in answer
-    assert "+49 511 123456" in answer
-    assert "personio_id" not in answer
-    assert "source_id" not in answer
+    assert answer == ""
+    contract = decision.answer_prompt()
+    assert "erika.beispiel@kahle.de" in contract
+    assert "+49 511 123456" in contract
 
 
 def test_general_leadership_ranking_is_fail_closed_even_with_directory_evidence():
@@ -1396,6 +1395,19 @@ def test_person_system_followup_keeps_named_person_relation():
 
     assert helper(messages, messages[-1]["content"]) == (
         "Welche belegte Zuständigkeit oder Beziehung hat Stefan Schrader zu Vaudis?"
+    )
+
+
+def test_person_contact_followup_keeps_the_prior_explicit_person_question():
+    helper = load_function_from_middleware("_expanded_internal_rag_query")
+    messages = [
+        {"role": "user", "content": "Wer ist Erika Beispiel?"},
+        {"role": "assistant", "content": "Aktueller Personio-Treffer."},
+        {"role": "user", "content": "Wie kann ich ihn erreichen?"},
+    ]
+
+    assert helper(messages, messages[-1]["content"]) == (
+        "Wie kann ich ihn erreichen?\nWer ist Erika Beispiel?"
     )
 
 

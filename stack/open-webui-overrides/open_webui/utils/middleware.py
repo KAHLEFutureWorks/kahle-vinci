@@ -462,48 +462,6 @@ def _knowledge_harness_direct_answer(
         )
     if (
         tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
-        and evidence.get('status') == 'supported'
-    ):
-        include_contacts = bool(
-            re.search(
-                r'\b(?:kontakt(?:daten)?|erreich\w*|telefon(?:nummer)?|durchwahl|e-?mail)\b',
-                folded_query,
-            )
-        )
-        entries = []
-        for claim in evidence.get('supported_claims') or ():
-            if not isinstance(claim, dict):
-                continue
-            name = str(claim.get('display_name') or '').strip()
-            if not name:
-                continue
-            details = [
-                str(claim.get(field) or '').strip()
-                for field in ('position', 'department', 'team', 'office')
-                if str(claim.get(field) or '').strip()
-            ]
-            contact_details = (
-                [
-                    f"E-Mail: {str(claim.get('business_email') or '').strip()}",
-                    f"Telefon: {str(claim.get('business_phone') or '').strip()}",
-                ]
-                if include_contacts
-                else []
-            )
-            contact_details = [detail for detail in contact_details if not detail.endswith(': ')]
-            entries.append(
-                f"- {name}"
-                + (f" – {' · '.join(details)}" if details else '')
-                + (f" · {' · '.join(contact_details)}" if contact_details else '')
-            )
-        if entries:
-            return "Im aktuellen Personio-Mitarbeiterverzeichnis:\n\n" + "\n".join(entries)
-        return (
-            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
-            'passende freigegebene Information.'
-        )
-    if (
-        tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
         and evidence.get('status') == 'unsupported'
     ):
         return (
@@ -1166,7 +1124,23 @@ def _expanded_internal_rag_query(messages: list[dict[str, Any]], user_text: str)
             'Hannover Wunstorf Wedemark Walsrode Neustadt am Rübenberge '
             'Nienburg Stadthagen'
         )
-    if re.search(r'\b(?:er|sie|ihm|ihr)\b', folded):
+    if re.search(r'\b(?:er|sie|ihn|ihm|ihr)\b', folded):
+        contact_followup = bool(
+            re.search(r'\b(?:erreich\w*|kontakt(?:daten)?|telefon(?:nummer)?|durchwahl|e-?mail)\b', folded)
+        )
+        if contact_followup:
+            for message in reversed((messages or [])[:-1]):
+                if not isinstance(message, dict) or message.get('role') != 'user':
+                    continue
+                prior_user_text = str(message.get('content') or '').strip()
+                if re.search(
+                    r'(?iu)\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|'
+                    r'was\s+wei(?:ß|ss)t\s+du(?:\s+alles)?\s+über)\s+'
+                    r'(?:unser(?:e|en)?\s+)?[A-ZÄÖÜ][\w.-]+\s+[A-ZÄÖÜ][\w.-]+',
+                    prior_user_text,
+                ):
+                    return f'{current}\n{prior_user_text}'
+                break
         system_match = re.search(
             r'\b(vaudisx?|wps|eva|catch|kahle[- ]?speak|personio)\b',
             current,
