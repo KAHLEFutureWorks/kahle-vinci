@@ -507,19 +507,31 @@ def _directory_information_need(query: str) -> bool:
         return True
     if _has_named_person_reference(query):
         return True
+    if _controlled_role_list_request(folded):
+        return True
     contact_or_list_patterns = (
         r"\bansprechpartner\b",
         r"\bkontaktdaten\b",
         r"\b(?:e-?mail|telefonnummer|durchwahl)\b.*\b(?:von|fur)\b",
         r"\bwie\s+(?:lautet|erreiche)\b.*\b(?:e-?mail|telefon|durchwahl)\b",
         r"\bwer\s+arbeitet\b",
-        r"\bwie\s+hei(?:ss)?en\b.*\b(?:serviceassistenz|verkaufer|teiledienst)\w*",
-        r"\bwer\s+(?:ist|sind)\s+(?:die\s+)?verkaufer\b",
-        r"\bwelche\s+serviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b",
         r"\bwelche\s+(?:mitarbeiter(?:innen)?|kolleg(?:en|innen))\b",
         r"\b(?:mitarbeiter(?:innen)?|kolleg(?:en|innen))\s+im\b",
     )
     return any(re.search(pattern, folded) for pattern in contact_or_list_patterns)
+
+
+def _controlled_role_list_request(folded_query: str) -> bool:
+    """Recognize only explicit directory-list requests for approved role families."""
+    return bool(
+        re.search(
+            r"\b(?:wer\s+sind|welche|wie\s+hei(?:ss)?en|nenn(?:e)?(?:\s+mir)?|"
+            r"(?:liste|zeig(?:e)?|gib)(?:\s+mir)?)\b.*\b(?:"
+            r"serviceassisten(?:z(?:en)?|t(?:in|innen|en)?)|"
+            r"(?:automobil)?verkaufer|serviceberater\w*|teiledienst\w*)\b",
+            folded_query,
+        )
+    )
 
 
 def _explicit_onboarding_people_request(folded_query: str) -> bool:
