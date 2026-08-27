@@ -320,7 +320,7 @@ def _personio_directory_intent(query: str) -> str:
         and 'onboarding-prozess' not in folded
     ):
         return 'onboarding_search'
-    if re.search(r'\b(?:fuhrungskraft|vorgesetzt\w*)\b', folded):
+    if re.search(r'\b(?:fuhrungskraft|fuehrungskraft|vorgesetzt\w*)\b', folded):
         return 'supervisor_lookup'
     if re.search(r'\bmit\s+wem\b.*\b(?:arbeitet|zusammen)\b', folded):
         return 'coworker_lookup'

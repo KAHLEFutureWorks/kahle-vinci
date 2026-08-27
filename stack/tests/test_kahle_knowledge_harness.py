@@ -589,6 +589,21 @@ def test_retrieval_plan_routes_current_employee_role_and_supervisor_questions_to
     assert plan.required_tools == ("personio_directory",)
 
 
+def test_person_contact_followup_with_a_prior_explicit_person_question_stays_personio_only():
+    harness = load_harness()
+    query = "Wie kann ich ihn erreichen?\nWer ist Erika Beispiel?"
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+
+
 @pytest.mark.parametrize(
     "query",
     (

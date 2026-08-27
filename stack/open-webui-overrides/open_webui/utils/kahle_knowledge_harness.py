@@ -534,6 +534,11 @@ def _explicit_onboarding_people_request(folded_query: str) -> bool:
 
 def _rag_information_need(query: str) -> bool:
     folded = _fold(query)
+    if _directory_information_need(query) and re.search(
+        r"\b(?:erreich\w*|kontakt(?:daten)?|telefon(?:nummer)?|durchwahl|e-?mail)\b",
+        folded,
+    ):
+        return False
     relation = bool(
         re.search(r"\bmit\b.+\bzu\s+tun\b", folded)
         or re.search(r"\bhang\w*\b.*\bzusammen\b", folded)

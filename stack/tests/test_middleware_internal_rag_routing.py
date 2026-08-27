@@ -352,6 +352,18 @@ def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
     )
 
 
+def test_german_fuehrungskraft_question_uses_supervisor_lookup_intent():
+    personio_intent = load_function_from_middleware("_personio_directory_intent")
+    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
+        "_ascii_fold"
+    )
+
+    assert (
+        personio_intent("Wer ist die Führungskraft von Erika Beispiel?")
+        == "supervisor_lookup"
+    )
+
+
 @pytest.mark.parametrize(
     ("query", "expected"),
     (
