@@ -306,6 +306,34 @@ def test_general_leadership_ranking_is_fail_closed_even_with_directory_evidence(
     assert "Erika Beispiel" not in answer
 
 
+def test_named_supervisor_evidence_is_not_blocked_as_a_leadership_ranking():
+    query = "Wer ist die Führungskraft von Erika Beispiel?"
+    personio = {
+        "status": "ok",
+        "claims": [
+            {"display_name": "Max Leitung", "position": "Bereichsleitung", "source_id": "P1"}
+        ],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-26T15:44:00Z",
+        "stale": False,
+    }
+    harness = load_python_module(HARNESS, "kahle_harness_named_supervisor_direct_answer")
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[{"role": "user", "content": query}],
+        model_id="test-model",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result="",
+        personio_result=personio,
+    )
+
+    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
+
+    assert direct_answer(decision, decision.to_dict()) == ""
+    assert "Max Leitung" in decision.answer_prompt()
+
+
 def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_context():
     execute = load_planned_retrieval_executor()
     query = "Wer davon ist die Führungskraft?"

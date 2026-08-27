@@ -426,8 +426,9 @@ def _knowledge_harness_direct_answer(
         .replace('ü', 'u')
         .replace('ß', 'ss')
     )
-    if re.search(r'\bfuhrungskraft\w*\b', folded_query) and not re.search(
-        r'\b(?:wer|welche)\s+(?:davon|von\s+diesen)\b', folded_query
+    if re.search(
+        r'\b(?:wichtig\w*|rangliste|auswahl)\b.*\bfuhrungskraft\w*\b',
+        folded_query,
     ):
         return (
             'Eine Rangliste oder Auswahl wichtiger Führungskräfte kann ich nicht '
