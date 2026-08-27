@@ -633,6 +633,11 @@ def test_person_contact_followup_with_a_prior_explicit_person_question_stays_per
     (
         "Wie erreiche ich Erika Beispiel?",
         "Wie ist die Telefonnummer von Erika Beispiel?",
+        "Wie sind die Kontaktdaten von Erika Beispiel?",
+        "Nenne mir die Kontaktdaten von Erika Beispiel.",
+        "Zeige mir die E-Mail-Adresse von Erika Beispiel.",
+        "Welche Telefonnummer hat Erika Beispiel?",
+        "Wie kann ich Erika Beispiel erreichen?",
         "Wie sind die Kontaktdaten der Serviceleitung Nienburg?",
     ),
 )

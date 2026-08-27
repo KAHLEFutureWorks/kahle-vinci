@@ -397,6 +397,13 @@ def test_german_fuehrungskraft_question_uses_supervisor_lookup_intent():
     (
         ("Wie erreiche ich Erika Beispiel?", "person_lookup"),
         ("Wie ist die Telefonnummer von Erika Beispiel?", "person_lookup"),
+        ("Wie sind die Kontaktdaten von Erika Beispiel?", "person_lookup"),
+        ("Wie lauten die Kontaktdaten von Erika Beispiel?", "person_lookup"),
+        ("Nenne mir die Kontaktdaten von Erika Beispiel.", "person_lookup"),
+        ("Gib mir die Kontaktdaten von Erika Beispiel.", "person_lookup"),
+        ("Zeige mir die E-Mail-Adresse von Erika Beispiel.", "person_lookup"),
+        ("Welche Telefonnummer hat Erika Beispiel?", "person_lookup"),
+        ("Wie kann ich Erika Beispiel erreichen?", "person_lookup"),
         ("Wie sind die Kontaktdaten der Serviceleitung Nienburg?", "directory_search"),
     ),
 )

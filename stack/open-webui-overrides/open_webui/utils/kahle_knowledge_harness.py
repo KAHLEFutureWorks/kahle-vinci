@@ -490,6 +490,8 @@ def _has_named_person_reference(query: str) -> bool:
             r"(?iu)\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|"
             r"was\s+wei(?:ß|ss)t\s+du(?:\s+alles)?\s+über|"
             r"wie\s+erreiche(?:\s+ich)?|wie\s+lautet.*?(?:von|für)|"
+            r"wie\s+kann\s+ich|"
+            r"welche\s+(?:telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+hat|"
             r"mit\s+wem\s+arbeitet|was\s+hat|wie\s+hängen)\s+"
             r"(?:unser(?:e|en)?\s+)?[A-ZÄÖÜ][\w.-]+\s+[A-ZÄÖÜ][\w.-]+",
             raw,

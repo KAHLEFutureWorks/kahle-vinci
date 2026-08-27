@@ -325,8 +325,15 @@ def _personio_directory_intent(query: str) -> str:
     if re.search(r'\bmit\s+wem\b.*\b(?:arbeitet|zusammen)\b', folded):
         return 'coworker_lookup'
     if re.search(
-        r'(?iu)\b(?:wie\s+erreiche(?:\s+ich)?|'
-        r'wie\s+(?:ist|lautet)\s+die\s+(?:telefonnummer|e-?mail|durchwahl))\s+'
+        r'(?iu)\b(?:'
+        r'wie\s+erreiche(?:\s+ich)?\s+'
+        r'|wie\s+kann\s+ich\s+'
+        r'|wie\s+(?:ist|sind|lautet|lauten)\s+die\s+'
+        r'(?:kontakt(?:daten|informationen|m(?:ö|oe)glichkeiten)|telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+(?:von|f(?:ü|ue)r)\s+'
+        r'|(?:nenne|gib|zeige)(?:\s+mir)?\s+die\s+'
+        r'(?:kontakt(?:daten|informationen|m(?:ö|oe)glichkeiten)|telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+(?:von|f(?:ü|ue)r)\s+'
+        r'|welche\s+(?:telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+hat\s+'
+        r')'
         r'(?:unser(?:e|en)?\s+)?[A-ZÄÖÜ][\w.-]+\s+[A-ZÄÖÜ][\w.-]+',
         raw_query,
     ):
