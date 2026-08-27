@@ -134,6 +134,34 @@ def test_supervisor_follow_up_returns_only_the_explicitly_evidenced_prior_candid
     assert "supervisor_personio_id" not in repr(evidence.claims)
 
 
+def test_named_supervisor_question_returns_only_the_explicitly_evidenced_supervisor():
+    leader = person("1", name="Erika Beispiel", position="Serviceleitung")
+    report = person(
+        "2",
+        name="Anna Adler",
+        position="Serviceassistentin",
+        supervisor_personio_id="1",
+    )
+
+    evidence = search([leader, report]).search(
+        query("Wer ist die Führungskraft von Anna Adler?")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+    assert "Anna Adler" not in [claim["display_name"] for claim in evidence.claims]
+
+
+def test_named_supervisor_question_without_explicit_supervisor_stays_fail_closed():
+    employee = person("1", name="Anna Adler")
+
+    evidence = search([employee]).search(
+        query("Wer ist die Führungskraft von Anna Adler?")
+    )
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
 def test_named_person_query_requires_exact_full_name_or_email_before_expansion():
     erika = person("1", name="Erika Beispiel")
     directory = search([erika])
@@ -185,6 +213,44 @@ def test_ambiguous_first_and_last_name_alias_remains_fail_closed():
 
     assert evidence.status == "not_found"
     assert evidence.claims == ()
+
+
+def test_unique_single_character_name_typo_resolves_to_the_current_personio_record():
+    employee = person("1", name="Erika Beispiel")
+
+    evidence = search([employee]).search(
+        query("Was weißt du über Erika Beispiell?", "person_lookup")
+    )
+
+    assert evidence.status == "ok"
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+
+
+def test_ambiguous_single_character_name_typo_stays_fail_closed():
+    first = person("1", name="Erika Beispiel")
+    second = person("2", name="Erika Beispielx")
+
+    evidence = search([first, second]).search(
+        query("Was weißt du über Erika Beispielz?", "person_lookup")
+    )
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
+def test_service_assistant_feminine_plural_keeps_the_controlled_role_filter():
+    assistant = person(
+        "1", name="Erika Beispiel", position="Serviceassistentin", office="Nienburg"
+    )
+    advisor = person(
+        "2", name="Anna Adler", position="Serviceberaterin", office="Nienburg"
+    )
+
+    evidence = search([assistant, advisor]).search(
+        query("Welche Serviceassistentinnen arbeiten in Nienburg?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
 
 
 def test_short_who_is_person_question_uses_exact_gate_and_rejects_partial_names():

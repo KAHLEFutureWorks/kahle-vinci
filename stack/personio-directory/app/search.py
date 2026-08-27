@@ -164,7 +164,9 @@ class DirectorySearch:
             )
         if intent == "supervisor_lookup":
             return self._evidence(
-                self._supervisors_from_candidate_query(query.candidate_query, people),
+                self._supervisors_from_candidate_query(query.candidate_query, people)
+                if query.candidate_query.strip()
+                else self._supervisor_for_named_person(query.text, people),
                 sync_completed_at=sync_completed_at,
             )
         return self._evidence(
@@ -239,6 +241,22 @@ class DirectorySearch:
             return ()
         return (candidate_by_id[supervisor_ids.pop()],)
 
+    def _supervisor_for_named_person(
+        self, text: str, people: Iterable[PersonRecord]
+    ) -> tuple[PersonRecord, ...]:
+        """Resolve only the explicit Personio supervisor of one named employee."""
+        people = tuple(people)
+        matches = self._exact_person_matches(text, people)
+        if len(matches) != 1:
+            return ()
+        supervisor_id = matches[0].supervisor_personio_id
+        if not supervisor_id:
+            return ()
+        supervisors = [
+            person for person in people if person.personio_id == supervisor_id
+        ]
+        return self._ordered(supervisors) if len(supervisors) == 1 else ()
+
     def _eligible_people(self, onboarding_requested: bool) -> tuple[PersonRecord, ...]:
         indexed_ids = self._index.indexed_personio_ids()
         records = self._index.people_by_personio_ids(indexed_ids)
@@ -281,7 +299,18 @@ class DirectorySearch:
             alias = _normalise_text(f"{name_parts[0]} {name_parts[-1]}")
             if alias and f" {alias} " in f" {normalized} ":
                 aliases.append(person)
-        return self._ordered(aliases) if len(aliases) == 1 else ()
+        if aliases:
+            return self._ordered(aliases) if len(aliases) == 1 else ()
+
+        typo_matches = []
+        for person in people:
+            name_parts = person.display_name.split()
+            forms = [_normalise_text(person.display_name)]
+            if len(name_parts) >= 3:
+                forms.append(_normalise_text(f"{name_parts[0]} {name_parts[-1]}"))
+            if any(_query_contains_one_character_name_typo(normalized, form) for form in forms):
+                typo_matches.append(person)
+        return self._ordered(typo_matches) if len(typo_matches) == 1 else ()
 
     def _directory_candidates(
         self,
@@ -405,6 +434,41 @@ def _normalise_email_text(value: str) -> str:
     return " ".join(_normalise_email(match) for match in _EMAIL.findall(value))
 
 
+def _query_contains_one_character_name_typo(query: str, name: str) -> bool:
+    """Allow one unambiguous one-character correction, never broad fuzzy search."""
+    name_tokens = tuple(name.split())
+    query_tokens = tuple(query.split())
+    if len(name_tokens) < 2 or len(query_tokens) < len(name_tokens):
+        return False
+    width = len(name_tokens)
+    return any(
+        _one_character_apart(" ".join(query_tokens[index : index + width]), name)
+        for index in range(len(query_tokens) - width + 1)
+    )
+
+
+def _one_character_apart(left: str, right: str) -> bool:
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    index_left = index_right = edits = 0
+    while index_left < len(left) and index_right < len(right):
+        if left[index_left] == right[index_right]:
+            index_left += 1
+            index_right += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(left) > len(right):
+            index_left += 1
+        elif len(right) > len(left):
+            index_right += 1
+        else:
+            index_left += 1
+            index_right += 1
+    return edits + (index_left < len(left)) + (index_right < len(right)) == 1
+
+
 def _digits(value: str) -> str:
     return "".join(character for character in value if character.isdigit())
 
@@ -454,7 +518,9 @@ def _add_controlled_variants(
     people = tuple(people)
     for role, variants in _ROLE_VARIANTS.items():
         if role == "serviceassistenz":
-            requested = bool(re.search(r"\bserviceassistenz(?:en)?\b", query))
+            requested = bool(
+                re.search(r"\bserviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b", query)
+            )
         else:
             requested = bool(re.search(r"\bverkaufer\b", query))
         if requested:
@@ -493,7 +559,7 @@ def _contains_controlled_variant(value: str, variants: frozenset[str]) -> bool:
 
 def _is_controlled_role_description(query: str) -> bool:
     return bool(
-        re.search(r"\bserviceassistenz(?:en)?\b", query)
+        re.search(r"\bserviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b", query)
         or (
             re.search(r"\bverkaufer\b", query)
             and re.search(r"\b(?:seat|neuwagen|automobil)\b", query)
