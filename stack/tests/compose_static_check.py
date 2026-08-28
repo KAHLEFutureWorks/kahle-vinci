@@ -20,7 +20,7 @@ def load_yaml(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
         import yaml  # type: ignore
     except Exception:
-        return None, "PyYAML not installed; using text checks only."
+        return None, "PyYAML is required for structured Compose verification."
 
     try:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -240,12 +240,12 @@ def main() -> int:
         print(f"ERROR: compose file not found: {compose_path}", file=sys.stderr)
         return 2
 
-    text = compose_path.read_text(encoding="utf-8")
-    compose, warning = load_yaml(compose_path)
-    failures = yaml_checks(compose) if compose is not None else text_checks(text)
+    compose, error = load_yaml(compose_path)
+    if compose is None:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
 
-    if warning:
-        print(f"NOTE: {warning}")
+    failures = yaml_checks(compose)
 
     if failures:
         print("Compose static check failed:")

@@ -16,8 +16,9 @@ This runbook prepares and tests KAHLE-Vinci as an internal employee system on a 
 - Server IPv4/IPv6 and initial SSH user.
 - Target domain `vinci.kahle.de` with DNS A/AAAA records pointing to the server.
 - Microsoft Entra tenant ID.
-- Microsoft app registration client ID and client secret with both required redirect URIs.
-- Optional for the first server test: Microsoft Graph application credentials with `Mail.Send` and a KAHLE sender mailbox. Without them, messages are retained in the protected local capture file and Graph delivery remains an open acceptance item.
+- Microsoft app registration client ID and client secret with the required Open WebUI redirect URI.
+- Academy provisioning additionally requires the configured Microsoft application to have the Graph application permission `Mail.Send` with admin consent and access to the KAHLE sender mailbox configured in `VINCI_WELCOME_MAIL_SENDER`. The `academy-provisioner` has no local mail-capture fallback. A failed Graph delivery prevents the affected user's LearningSuite provisioning until a later retry succeeds.
+- Separate `KB_MAIL_*` credentials for portal notifications are optional for the first server test. Without them, portal messages are retained in the protected local capture file and their Graph delivery remains an open acceptance item. This fallback does not apply to Academy messages.
 - Allowed login domain, usually `kahle.de`.
 - IONOS API key and existing KAHLE-Vinci runtime secrets.
 - An encrypted host backup with an external verified copy. The existing systemd backup and Windows SFTP pull satisfy this on `vinci-prod-01`; do not enable the additional portal backup worker there.
@@ -71,7 +72,6 @@ Create an app registration:
 - Supported account type: single tenant only
 - Redirect URI type: Web
 - Redirect URI: `https://<vinci-domain>/oauth/microsoft/callback`
-- Additional redirect URI: `https://<vinci-domain>/wissen/api/portal/auth/step-up/callback`
 
 Record:
 
@@ -84,6 +84,24 @@ Use this provider URL in production:
 ```text
 https://login.microsoftonline.com/<tenant-id>/v2.0/.well-known/openid-configuration
 ```
+
+## Portal and Classic Vector Security
+
+The knowledge portal uses Microsoft SSO through Open WebUI. It does not have a
+separate OAuth or step-up callback. The portal API validates the Open WebUI
+session forwarded with the request, restricts access to the domains configured
+in `PORTAL_ALLOWED_EMAIL_DOMAINS`, and checks that the synchronized portal
+identity is active and has the required `employee`, `manager`, `admin` or
+`portal_admin` role.
+
+Critical portal changes require an explicit confirmation in the corresponding
+request and user-interface dialog. This confirmation protects deliberate
+changes, but it is not a second login or a fresh authentication step.
+
+The classic Vector administration uses a separate security model. Its functions
+require an Open WebUI admin session and the additional Vector unlock code backed
+by `KB_ADMIN_UNLOCK_CODE_HASH` and `KB_ADMIN_UNLOCK_SESSION_SECRET`. Portal roles
+and portal confirmations do not replace this second gate.
 
 ## Deploy App
 
@@ -130,9 +148,12 @@ The local legacy inventory remains a test fixture only. Its 51 open migration ta
 
 Before inviting further employees, record the following checks in `docs/WISSENSPORTAL-LOKALE-ABNAHME.md`:
 
-- Microsoft login and fresh step-up for critical admin actions.
+- Microsoft login, inherited Open WebUI session, allowed-domain enforcement and rejection of inactive portal identities.
+- Portal role checks and explicit confirmations for critical portal actions.
+- Separately, Open WebUI admin authorization and the additional unlock code for classic Vector administration.
 - Employee, manager, Admin and Portal-Admin routing with separate real accounts.
-- Portal notifications for upload, approval, rejection, escalation and publication. Graph delivery remains a separately documented open test until the IT-managed app registration is available.
+- Portal notifications for upload, approval, rejection, escalation and publication. Their Graph delivery may remain a separately documented open test while the protected local capture is used.
+- Academy mail flow with a controlled test identity: each current Open WebUI admin receives the pending access request once, the approved user receives the Graph welcome message once, and LearningSuite subsequently sends exactly one course-access message with a login link. Academy acceptance requires working Graph `Mail.Send`; local portal mail capture does not satisfy this check.
 - Read isolation between two Knowledgebases and protected original links.
 - Clean area upload, KAHLE-Allgemein approval, duplicate/version case and critical two-stage case.
 - Concurrent approvals and background publication queue.

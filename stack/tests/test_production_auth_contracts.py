@@ -234,13 +234,20 @@ def test_production_overlay_does_not_resurrect_removed_local_reranker():
 
 def test_production_requires_portal_domain_configuration():
     production_template = (STACK_DIR / "env.production.template").read_text(encoding="utf-8")
-    legacy_example = (STACK_DIR / ".env.production.example").read_text(encoding="utf-8")
     required = ("PORTAL_ALLOWED_EMAIL_DOMAINS",)
     for name in required:
         assert f"{name}: ${{{name}:?" in PROD_COMPOSE
         assert name in START_SCRIPT
         assert name in PREPARE_SCRIPT
         assert name in production_template
-        assert name in legacy_example
-    assert "ENABLE_LOGIN_FORM=False" in legacy_example
-    assert "ENABLE_PASSWORD_AUTH=False" in legacy_example
+    assert "ENABLE_LOGIN_FORM=False" in production_template
+    assert "ENABLE_PASSWORD_AUTH=False" in production_template
+
+
+def test_only_the_canonical_production_template_exists():
+    legacy_example = STACK_DIR / ".env.production.example"
+
+    assert not legacy_example.exists(), (
+        "Remove the ignored legacy .env.production.example and use "
+        "stack/env.production.template."
+    )

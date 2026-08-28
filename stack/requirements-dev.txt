@@ -1,4 +1,4 @@
-# Abhaengigkeiten fuer die lokale Abnahme der drei Testsuiten.
+# Abhaengigkeiten fuer die lokale Abnahme aller sechs Python-Testsuiten.
 #
 # Die Dienste kb-admin-api und kb-sync laufen in getrennten Containern und
 # pinnen requests und pypdf bewusst unterschiedlich. Ein gemeinsames -r auf
@@ -16,6 +16,7 @@ PyJWT[crypto]==2.10.1
 cryptography==45.0.7
 reportlab==4.4.3
 watchdog==6.0.0
+PyYAML==6.0.3
 
 pytest==9.1.1
 

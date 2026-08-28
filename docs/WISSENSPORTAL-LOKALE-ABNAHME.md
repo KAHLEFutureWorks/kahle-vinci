@@ -2,6 +2,9 @@
 
 Stand: 11. August 2026
 
+> Dieses Dokument ist ein historischer Abnahmenachweis. Die aktuellen
+> Verification-Tiers und Befehle stehen in [VERIFICATION.md](VERIFICATION.md).
+
 Dieses Protokoll ist die fortlaufende Nachweisakte zur lokalen Umsetzung des PRD. Eine Produktionsfreigabe ist damit ausdrücklich nicht verbunden.
 
 ## Testumgebung

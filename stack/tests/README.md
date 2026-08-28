@@ -1,5 +1,10 @@
 # File-Proxy Smoke Tests
 
+Die kanonischen Targeted-, Fast-, Full- und Specialized-Befehle stehen in
+[`docs/VERIFICATION.md`](../../docs/VERIFICATION.md). Die beiden folgenden
+Static Checks sind Bestandteil von Fast und Full und können bei betroffenen
+Änderungen zusätzlich targeted ausgeführt werden.
+
 Run from repository root (`c:\kahle-vinci` / project root).
 
 Required: running stack with `open-webui`, `owui-file-proxy`, `document-worker`.

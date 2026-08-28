@@ -2,6 +2,9 @@
 
 Stand: 12. August 2026 · lokaler Release-Candidate vor dem kontrollierten Server-Test
 
+> Dieses Dokument beschreibt den damaligen Übergabestand. Die aktuellen
+> Verification-Tiers und Befehle stehen in [VERIFICATION.md](VERIFICATION.md).
+
 Dieses Dokument fasst zusammen, was seit dem Commit `1c6cea0` entstanden ist, und richtet sich an jeden, der die Arbeit fortsetzt. Die vorherigen acht Commits (`feb85a7` bis `1c6cea0`) bilden die Portal-Grundlage; sie sind hier nicht wiederholt.
 
 Das PRD liegt unverändert unter `docs/superpowers/specs/2026-08-06-kahle-vinci-wissensportal-prd.md`. Die fortlaufende Nachweisakte ist `docs/WISSENSPORTAL-LOKALE-ABNAHME.md`.

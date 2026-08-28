@@ -23,6 +23,7 @@ __pycache__/
 node_modules/
 .pytest_cache/
 .venv-test/
+.venv-verify/
 .mypy_cache/
 .ruff_cache/
 dist/

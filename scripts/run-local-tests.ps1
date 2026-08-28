@@ -1,103 +1,331 @@
 <#
 .SYNOPSIS
-    Faehrt alle Testsuiten der lokalen Wissensportal-Abnahme.
+    Fuehrt die kanonische lokale Verification fuer KAHLE-Vinci aus.
 
 .DESCRIPTION
-    Die Python-Suiten laufen bewusst in getrennten pytest-Prozessen: kb-admin-api und
-    kb-sync besitzen jeweils ein eigenes Paket `app`, das nicht gemeinsam in
-    einen Python-Prozess geladen werden kann.
+    Fast prueft die breiten, lokal und offline ausfuehrbaren Vertraege ohne die
+    langsamere Portal-Backend-Suite und ohne Portal-Produktionsbuild.
 
-    Die Modul-Suchpfade setzen die conftest.py der jeweiligen Testverzeichnisse,
-    ein PYTHONPATH muss nicht von aussen gesetzt werden.
+    Full ergaenzt alle vorhandenen Python-Suiten sowie Portal-Build und
+    Renderingtests. Die Python-Suiten laufen bewusst in getrennten Prozessen,
+    weil mehrere Dienste ein eigenes Paket `app` besitzen.
+
+    Alle Checks werden soweit technisch moeglich unabhaengig ausgefuehrt.
+    Die Zusammenfassung unterscheidet fachliche Testfehler von Setupfehlern,
+    beispielsweise fehlenden Befehlen, Abhaengigkeiten oder `spawn EPERM`.
+
+.PARAMETER Tier
+    Fast oder Full. Standard ist Full.
 
 .PARAMETER Python
-    Interpreter, der die Abhaengigkeiten aus stack/requirements-dev.txt besitzt.
+    Interpreter mit den Abhaengigkeiten aus stack/requirements-dev.txt.
     Standard ist "python".
 
 .PARAMETER Npm
-    NPM-Kommando fuer Produktionsbuild, Renderingtests und Lint des Portals.
+    NPM-Kommando fuer Lint und Produktionsbuild.
     Standard ist "npm".
 
+.PARAMETER Node
+    Node-Kommando fuer die Renderingtests. Standard ist "node".
+
 .EXAMPLE
-    .\scripts\run-local-tests.ps1
-    .\scripts\run-local-tests.ps1 -Python C:\venvs\vinci\Scripts\python.exe -Npm npm.cmd
+    .\scripts\run-local-tests.ps1 -Tier Fast -Python .\.venv-verify\Scripts\python.exe -Npm npm.cmd
+    .\scripts\run-local-tests.ps1 -Tier Full -Python .\.venv-verify\Scripts\python.exe -Npm npm.cmd -Node node.exe
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet("Fast", "Full")]
+    [string]$Tier = "Full",
     [string]$Python = "python",
-    [string]$Npm = "npm"
+    [string]$Npm = "npm",
+    [string]$Node = "node"
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$script:results = @()
 
-$suites = @(
-    @{ Name = "Portal-Backend";  Path = "stack/kb-admin-api"; Tests = "tests"; PythonPath = "" }
-    @{ Name = "Stack und Sicherheit"; Path = "stack";         Tests = "tests"; PythonPath = "" }
-    @{ Name = "Hybridindex";     Path = "stack/kb-sync";      Tests = "tests"; PythonPath = "" }
-    @{ Name = "RAG-Evaluation";  Path = "eval/rag"; Tests = "tests"; PythonPath = "eval/rag;stack/kb-sync" }
-)
+function Resolve-VerificationCommand {
+    param([string]$Command)
 
-$results = @()
-$failed = $false
+    if (Test-Path -LiteralPath $Command -PathType Leaf) {
+        return (Resolve-Path -LiteralPath $Command).Path
+    }
+    return $Command
+}
 
-foreach ($suite in $suites) {
-    $workingDir = Join-Path $repoRoot $suite.Path
-    Write-Host ""
-    Write-Host "=== $($suite.Name) ($($suite.Path)) ===" -ForegroundColor Cyan
+# Relative executable paths are supplied from the caller's current directory.
+# Resolve them before individual checks switch into service directories.
+$Python = Resolve-VerificationCommand $Python
+$Npm = Resolve-VerificationCommand $Npm
+$Node = Resolve-VerificationCommand $Node
 
-    Push-Location $workingDir
-    $previousPythonPath = $env:PYTHONPATH
-    try {
-        if ($suite.PythonPath) {
-            $paths = @($suite.PythonPath -split ';' | ForEach-Object { Join-Path $repoRoot $_ })
-            $env:PYTHONPATH = $paths -join [IO.Path]::PathSeparator
+function Add-CheckResult {
+    param(
+        [string]$Name,
+        [string]$Path,
+        [string]$Status,
+        [object]$ExitCode,
+        [string]$Detail
+    )
+
+    $script:results += [pscustomobject]@{
+        Check    = $Name
+        Pfad     = $Path
+        Status   = $Status
+        Exitcode = $ExitCode
+        Detail   = $Detail
+    }
+}
+
+function Test-IsSetupFailure {
+    param(
+        [string]$Kind,
+        [string]$Output
+    )
+
+    $setupPatterns = @("spawn EPERM")
+    if ($Kind -eq "Static") {
+        $setupPatterns += "PyYAML is required for structured Compose verification"
+    }
+    if ($Kind -eq "Pytest") {
+        $setupPatterns += @(
+            "No module named pytest",
+            "No module named 'pytest'",
+            "No module named 'fastapi'",
+            "No module named 'requests'",
+            "No module named 'multipart'",
+            "No module named 'docx'",
+            "No module named 'pypdf'",
+            "No module named 'httpx'",
+            "No module named 'jwt'",
+            "No module named 'cryptography'",
+            "No module named 'reportlab'",
+            "No module named 'watchdog'",
+            "No module named 'yaml'",
+            "No module named 'tzdata'"
+        )
+    }
+    if ($Kind -in @("Npm", "Node")) {
+        $setupPatterns += @(
+            "not recognized as the name of a cmdlet",
+            "is not recognized as an internal or external command",
+            "command not found",
+            "spawn ENOENT"
+        )
+    }
+    foreach ($pattern in $setupPatterns) {
+        if ($Output.IndexOf($pattern, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
         }
-        & $Python -m pytest $suite.Tests -q -p no:cacheprovider
-        $code = $LASTEXITCODE
+    }
+    return $false
+}
+
+function Invoke-VerificationCheck {
+    param(
+        [string]$Name,
+        [string]$Path,
+        [string]$WorkingDirectory,
+        [string]$Command,
+        [string[]]$Arguments,
+        [ValidateSet("Pytest", "Static", "Npm", "Node")]
+        [string]$Kind,
+        [string[]]$PythonPath = @()
+    )
+
+    Write-Host ""
+    Write-Host "=== $Name ($Path) ===" -ForegroundColor Cyan
+
+    if (-not (Test-Path -LiteralPath $WorkingDirectory -PathType Container)) {
+        $detail = "Arbeitsverzeichnis fehlt: $WorkingDirectory"
+        Write-Host "SETUPFEHLER: $detail" -ForegroundColor Yellow
+        Add-CheckResult $Name $Path "SETUPFEHLER" "-" $detail
+        return
+    }
+
+    $previousPythonPath = $env:PYTHONPATH
+    $pushed = $false
+    try {
+        if ($PythonPath.Count -gt 0) {
+            $resolvedPaths = @($PythonPath | ForEach-Object { Join-Path $repoRoot $_ })
+            $env:PYTHONPATH = $resolvedPaths -join [IO.Path]::PathSeparator
+        }
+        else {
+            $env:PYTHONPATH = $null
+        }
+
+        Push-Location $WorkingDirectory
+        $pushed = $true
+
+        try {
+            Get-Command -Name $Command -ErrorAction Stop | Out-Null
+        }
+        catch {
+            $detail = "Nicht ausfuehrbar: $($_.Exception.Message)"
+            Write-Host "SETUPFEHLER: $detail" -ForegroundColor Yellow
+            Add-CheckResult $Name $Path "SETUPFEHLER" "-" $detail
+            return
+        }
+
+        $outputLines = New-Object System.Collections.Generic.List[string]
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            # Windows PowerShell 5.1 wandelt natives stderr bei "Stop" in eine
+            # terminierende Ausnahme um. Der Exitcode bleibt die fuehrende
+            # Evidenz; stderr wird trotzdem vollstaendig erfasst und angezeigt.
+            $ErrorActionPreference = "Continue"
+            & $Command @Arguments 2>&1 | ForEach-Object {
+                $line = $_.ToString()
+                [void]$outputLines.Add($line)
+                Write-Host $line
+            }
+            $code = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($code -eq 0) {
+            Add-CheckResult $Name $Path "BESTANDEN" 0 ""
+            return
+        }
+
+        $output = $outputLines -join [Environment]::NewLine
+        if (Test-IsSetupFailure $Kind $output) {
+            $status = "SETUPFEHLER"
+            $detail = "Check konnte nicht regulaer ausgefuehrt werden."
+            $color = "Yellow"
+        }
+        else {
+            $status = "TESTFEHLER"
+            $detail = "Check hat einen fachlichen oder technischen Fehler gemeldet."
+            $color = "Red"
+        }
+        Write-Host "$status (Exitcode $code): $detail" -ForegroundColor $color
+        Add-CheckResult $Name $Path $status $code $detail
+    }
+    catch {
+        $detail = "Harness-Setupfehler: $($_.Exception.Message)"
+        Write-Host "SETUPFEHLER: $detail" -ForegroundColor Yellow
+        Add-CheckResult $Name $Path "SETUPFEHLER" "-" $detail
     }
     finally {
+        if ($pushed) {
+            Pop-Location
+        }
         $env:PYTHONPATH = $previousPythonPath
-        Pop-Location
     }
+}
 
-    if ($code -ne 0) { $failed = $true }
-    $results += [pscustomobject]@{
-        Suite    = $suite.Name
-        Pfad     = $suite.Path
-        Ergebnis = if ($code -eq 0) { "bestanden" } else { "FEHLGESCHLAGEN (Exitcode $code)" }
+$staticChecks = @(
+    @{
+        Name = "Compose-Static"; Path = "stack/tests/compose_static_check.py"
+        Arguments = @("stack/tests/compose_static_check.py"); Kind = "Static"
+    },
+    @{
+        Name = "n8n-Workflow-Static"; Path = "stack/tests/n8n_workflow_static_check.py"
+        Arguments = @("stack/tests/n8n_workflow_static_check.py"); Kind = "Static"
+    },
+    @{
+        Name = "Open-WebUI-Tool-Bundle-Sync"; Path = "stack/open-webui-tools"
+        Arguments = @("stack/open-webui-tools/build_tools.py", "--check"); Kind = "Static"
     }
+)
+
+foreach ($check in $staticChecks) {
+    Invoke-VerificationCheck `
+        -Name $check.Name `
+        -Path $check.Path `
+        -WorkingDirectory $repoRoot `
+        -Command $Python `
+        -Arguments $check.Arguments `
+        -Kind $check.Kind
+}
+
+$pythonSuites = @(
+    @{
+        Name = "Portal-Backend"; Path = "stack/kb-admin-api/tests"; MinimumTier = "Full"
+        WorkingDirectory = "stack/kb-admin-api"; Tests = "tests"; PythonPath = @()
+    },
+    @{
+        Name = "Stack und Sicherheit"; Path = "stack/tests"; MinimumTier = "Fast"
+        WorkingDirectory = "stack"; Tests = "tests"; PythonPath = @()
+    },
+    @{
+        Name = "Hybridindex"; Path = "stack/kb-sync/tests"; MinimumTier = "Fast"
+        WorkingDirectory = "stack/kb-sync"; Tests = "tests"; PythonPath = @()
+    },
+    @{
+        Name = "RAG-Evaluation"; Path = "eval/rag/tests"; MinimumTier = "Fast"
+        WorkingDirectory = "eval/rag"; Tests = "tests"; PythonPath = @("eval/rag", "stack/kb-sync")
+    },
+    @{
+        Name = "Academy-Provisioner"; Path = "stack/academy-provisioner/tests"; MinimumTier = "Fast"
+        WorkingDirectory = "stack/academy-provisioner"; Tests = "tests"; PythonPath = @()
+    },
+    @{
+        Name = "Personio-Directory"; Path = "stack/personio-directory/tests"; MinimumTier = "Fast"
+        WorkingDirectory = "."; Tests = "stack/personio-directory/tests"; PythonPath = @()
+    }
+)
+
+foreach ($suite in $pythonSuites) {
+    if ($suite.MinimumTier -eq "Full" -and $Tier -ne "Full") {
+        continue
+    }
+    Invoke-VerificationCheck `
+        -Name $suite.Name `
+        -Path $suite.Path `
+        -WorkingDirectory (Join-Path $repoRoot $suite.WorkingDirectory) `
+        -Command $Python `
+        -Arguments @("-m", "pytest", $suite.Tests, "-q", "-p", "no:cacheprovider") `
+        -Kind "Pytest" `
+        -PythonPath $suite.PythonPath
+}
+
+$dashboard = Join-Path $repoRoot "admin-dashboard"
+Invoke-VerificationCheck `
+    -Name "Portal-UI-Lint" `
+    -Path "admin-dashboard" `
+    -WorkingDirectory $dashboard `
+    -Command $Npm `
+    -Arguments @("run", "lint") `
+    -Kind "Npm"
+
+if ($Tier -eq "Full") {
+    Invoke-VerificationCheck `
+        -Name "Portal-UI-Build" `
+        -Path "admin-dashboard" `
+        -WorkingDirectory $dashboard `
+        -Command $Npm `
+        -Arguments @("run", "build") `
+        -Kind "Npm"
+
+    Invoke-VerificationCheck `
+        -Name "Portal-UI-Renderingtests" `
+        -Path "admin-dashboard/tests/rendered-html.test.mjs" `
+        -WorkingDirectory $dashboard `
+        -Command $Node `
+        -Arguments @("tests/rendered-html.test.mjs") `
+        -Kind "Node"
 }
 
 Write-Host ""
-Write-Host "=== Portal-UI (admin-dashboard) ===" -ForegroundColor Cyan
-Push-Location (Join-Path $repoRoot "admin-dashboard")
-try {
-    & $Npm test
-    $uiCode = $LASTEXITCODE
-    if ($uiCode -eq 0) {
-        & $Npm run lint
-        $uiCode = $LASTEXITCODE
+Write-Host "=== Gesamtergebnis: $Tier ===" -ForegroundColor Cyan
+$script:results | Select-Object Check, Pfad, Status, Exitcode | Format-Table -AutoSize
+
+$failedChecks = @($script:results | Where-Object { $_.Status -ne "BESTANDEN" })
+if ($failedChecks.Count -gt 0) {
+    Write-Host "Fehlerdetails:" -ForegroundColor Red
+    foreach ($result in $failedChecks) {
+        Write-Host "- $($result.Check) [$($result.Status)]: $($result.Detail)"
     }
-}
-finally {
-    Pop-Location
-}
-if ($uiCode -ne 0) { $failed = $true }
-$results += [pscustomobject]@{
-    Suite    = "Portal-UI"
-    Pfad     = "admin-dashboard"
-    Ergebnis = if ($uiCode -eq 0) { "bestanden" } else { "FEHLGESCHLAGEN (Exitcode $uiCode)" }
-}
-
-Write-Host ""
-Write-Host "=== Gesamtergebnis ===" -ForegroundColor Cyan
-$results | Format-Table -AutoSize
-
-if ($failed) {
-    Write-Host "Mindestens eine Suite ist fehlgeschlagen." -ForegroundColor Red
+    $testFailures = @($failedChecks | Where-Object { $_.Status -eq "TESTFEHLER" }).Count
+    $setupFailures = @($failedChecks | Where-Object { $_.Status -eq "SETUPFEHLER" }).Count
+    Write-Host "Verification fehlgeschlagen: $testFailures Testfehler, $setupFailures Setupfehler." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "Alle Suiten bestanden." -ForegroundColor Green
+Write-Host "Alle fuer $Tier erforderlichen Checks bestanden." -ForegroundColor Green
 exit 0

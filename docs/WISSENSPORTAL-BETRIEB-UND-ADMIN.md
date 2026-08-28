@@ -26,7 +26,7 @@ Stand: 6. August 2026. Diese Anleitung beschreibt den lokalen Abnahmebetrieb. Ei
 - Mitarbeiter laden Dokumente nur in freigegebene Wissensbereiche, prüfen Treffer und wählen die gewünschte Aktion.
 - Führungskräfte prüfen Uploads für KAHLE-Allgemein, fachlich auffällige Dokumente und die erste Stufe kritischer Fälle ihrer zugeordneten Mitarbeiter. Sie können unklare Fälle an einen Admin weiterleiten.
 - Admins bearbeiten Freigaben, Qualitätsfälle, Benutzerzuordnungen und Knowledge Bases. Änderungen an Knowledge Bases benötigen die Freigabe eines Portal-Admins.
-- Portal-Admins besitzen sämtliche Rechte und dürfen Knowledge-Base- sowie Adminänderungen direkt ausführen. Kritische Aktionen verlangen eine frische Microsoft-Anmeldung.
+- Portal-Admins besitzen sämtliche Rechte und dürfen Knowledge-Base- sowie Adminänderungen direkt ausführen. Kritische Rollen- und Knowledge-Base-Änderungen verlangen die im Portal angezeigte ausdrückliche Bestätigung.
 
 Mindestens ein aktiver Portal-Admin bleibt technisch erzwungen. Deaktivierte Nutzer erhalten keinen Portal- oder Quellenzugriff.
 
@@ -62,7 +62,7 @@ Abweichungen:
 ## 4. Ablauf, Verlängerung und Entfernung
 
 - Gültigkeit: höchstens 60 Arbeitstage.
-- Sammelerinnerungen: 15 und 10 Arbeitstage vorher an den Owner, 5 Arbeitstage vorher zusätzlich an die Führungskraft, 1 Arbeitstag vorher zusätzlich an Admins.
+- Sammelerinnerungen: 7 Arbeitstage vorher an den Owner, 5 Arbeitstage vorher zusätzlich an die Führungskraft, 1 Arbeitstag vorher zusätzlich an Admins und Portal-Admins.
 - Verlängerungen benötigen die Bestätigung des Owners, anschließend die Führungskraft und einen Admin.
 - Abgelaufene Dokumente werden deaktiviert und aus dem aktiven Retrievalumfang entfernt.
 - Entfernte Dokumente bleiben im Papierkorb. Ab Tag 30 erhält der Admin einen Löschauftrag, danach alle 10 Tage eine Erinnerung. Drei Tage vor Tag 90 folgt die letzte Warnung. An Tag 90 wird ohne Legal Hold physisch gelöscht.
@@ -73,7 +73,7 @@ Abweichungen:
 
 Benutzer stammen aus OpenWebUI und werden anhand ihrer stabilen Benutzer-ID sowie Microsoft-E-Mail synchronisiert. Führungskräfte, Vertretungen, Rollen und getrennte Lese-/Uploadrechte werden im Portal manuell verwaltet.
 
-Normale Admins können Änderungen an Knowledge Bases vorbereiten. Anlegen, Umbenennen, Archivieren oder endgültiges Entfernen wird erst nach Portal-Admin-Freigabe wirksam. Portal-Admins können diese Aktionen nach Microsoft-Step-up direkt ausführen.
+Normale Admins können Änderungen an Knowledge Bases vorbereiten. Anlegen, Umbenennen, Archivieren oder endgültiges Entfernen wird erst nach Portal-Admin-Freigabe wirksam. Portal-Admins können diese Aktionen nach ausdrücklicher Bestätigung direkt ausführen.
 
 Bei Archivierung oder endgültiger Entfernung einer Knowledge Base werden alle aktiven Nutzer mit bisherigem Leserecht sowie Admins und Portal-Admins über Portal und E-Mail informiert.
 
