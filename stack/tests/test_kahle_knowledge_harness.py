@@ -597,6 +597,7 @@ def test_retrieval_plan_routes_current_employee_role_and_supervisor_questions_to
         "Wie heißen die Serviceassistenzen in Nienburg?",
         "Liste mir die Serviceassistenzen in Nienburg auf.",
         "Zeige mir die Verkäufer in Nienburg.",
+        "Zeige mir die Mitarbeiter aus dem Verkauf am Standort Hannover.",
         "Nenne mir die Serviceberater in Nienburg.",
         "Wie heißen die Servicekräfte am Standort Nienburg?",
         "Wie heissen die Servicekraefte am Standort Nienburg?",

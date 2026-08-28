@@ -565,11 +565,11 @@ def _controlled_role_list_request(folded_query: str) -> bool:
     """Recognize only explicit directory-list requests for approved role families."""
     return bool(
         re.search(
-            r"\b(?:wer\s+(?:sind|ist)|welche|wie\s+hei(?:ss)?en|nenn(?:e)?(?:\s+mir)?|"
+            r"\b(?:wer\s+(?:sind|ist|arbeitet)|welche|wie\s+hei(?:ss)?en|nenn(?:e)?(?:\s+mir)?|"
             r"(?:liste|zeig(?:e)?|gib)(?:\s+mir)?)\b.*\b(?:"
             r"serviceassisten(?:z(?:en)?|t(?:in|innen|en)?)|"
             r"serviceberater\w*|servicekr(?:a|ae)ft(?:e|en)?|"
-            r"(?:automobil)?verkaufer|teiledienst\w*)\b",
+            r"(?:automobil)?verkaufer|verkauf|teiledienst\w*)\b",
             folded_query,
         )
     )

@@ -498,6 +498,60 @@ def test_sales_role_search_matches_controlled_embedded_compound_role_and_busines
     assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
 
 
+@pytest.mark.parametrize(
+    ("text", "department"),
+    (
+        ("Wer arbeitet in der Buchhaltung?", "Finanzbuchhaltung"),
+        ("Wer arbeitet in der Disposition?", "Fahrzeugdisposition"),
+        ("Wer arbeitet in der Rechnungslegung?", "Zentrale Rechnungslegung"),
+    ),
+)
+def test_controlled_department_short_forms_match_compound_department_values(text, department):
+    matching = person("1", name="Anna Adler", position="Sachbearbeitung", department=department)
+    unrelated = person("2", name="Berta Berlin", position="Sachbearbeitung", department="Controlling")
+
+    evidence = search([matching, unrelated]).search(query(text, "directory_search"))
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Zeige mir die Mitarbeiter aus dem Verkauf am Standort Hannover.",
+        "Wer arbeitet im Verkauf in Hannover?",
+    ),
+)
+def test_sales_department_queries_use_controlled_sales_positions_not_service_positions(text):
+    sales_advisor = person(
+        "1",
+        name="Anna Adler",
+        position="Großkundenverkaufsberater",
+        department="Verkauf Hannover",
+        team="Verkauf Hannover",
+    )
+    commercial_sales = person(
+        "2",
+        name="Berta Berlin",
+        position="Nutzfahrzeugverkäufer",
+        department="Verkauf Hannover",
+        team="Verkauf Hannover",
+    )
+    service_advisor = person(
+        "3",
+        name="Clara Celle",
+        position="Serviceberaterin",
+        department="Verkauf Hannover",
+        team="Verkauf Hannover",
+    )
+
+    evidence = search([sales_advisor, commercial_sales, service_advisor]).search(
+        query(text, "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler", "Berta Berlin"]
+
+
 def test_controlled_role_search_returns_no_unrelated_people_when_a_dimension_is_missing():
     service = person("1", name="Anna Adler", position="Serviceassistenz", office="Wedemark")
 
