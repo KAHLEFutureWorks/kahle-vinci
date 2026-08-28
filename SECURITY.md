@@ -121,6 +121,13 @@ Fehlercodes, Feldbezeichnungen und datensparsame Summen enthalten. Reale
 Mitarbeiterdaten oder Secrets dürfen nicht als Debug-Hilfe ausgegeben oder
 gespeichert werden.
 
+Für Personio-Ausgaben gelten zusätzlich Datenminimierung und Zweckbindung. Nur
+geschäftliche E-Mail-Adressen mit exakt `@kahle.de` werden indexiert; andere
+Adressen bleiben leer, ohne die Auffindbarkeit der Person zu entfernen.
+Onboardingdaten werden nur bei ausdrücklich formulierten Onboardingfragen
+ausgegeben. Supervisor-Beziehungen werden ausschließlich als stabile
+Personio-ID verarbeitet und nicht für Portal- oder Wissensrechte verwendet.
+
 ## Data Storage
 
 | Speicher | Sicherheitsrelevante Eigenschaft |
@@ -216,6 +223,12 @@ Dokumenten, Chats, Personio oder Academy sind keine allgemeinen Debugdaten.
 - Interne API-Keys und Provider-Credentials gelangen nicht in Frontend oder
   Logs.
 - Personio bleibt eine lesende Integration.
+- Personio ist für aktuelle Mitarbeiterstammdaten autoritativ. RAG darf Namen,
+  Rollen, Standorte, Kontaktdaten oder Supervisor-Beziehungen weder ersetzen
+  noch ergänzend erfinden.
+- Führungskräfte werden nur aus eindeutig auflösbarer Supervisor-Evidenz
+  beantwortet. Bei fehlender, unbekannter oder mehrdeutiger Evidenz bleibt die
+  Antwort fail-closed.
 
 ## Known Risks and Unknowns
 

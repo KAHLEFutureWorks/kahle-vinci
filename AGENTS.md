@@ -49,6 +49,10 @@ in [DECISIONS.md](DECISIONS.md) dokumentiert.
 - Externe Systeme werden über ihre vorhandenen Adapter oder Dienste
   angesprochen. Neue Direktzugriffe aus UI oder fachfremden Diensten sind nicht
   zulässig.
+- Personio ist für aktuelle Mitarbeiter-, Rollen-, Standort-, Kontakt-,
+  Onboarding- und Supervisor-Daten führend. Reine Verzeichnisfragen verwenden
+  Personio, Prozessfragen RAG und gemischte Fragen nur die jeweils erforderlichen
+  Quellen.
 - Die Python-Dienste besitzen jeweils ein eigenes Paket namens `app`. Ihre
   Tests und Imports müssen pro Dienst isoliert bleiben.
 
@@ -138,6 +142,9 @@ Produktions-Env, Compose-Mounts, Backups und externen Integrationen.
   `qdrant-snapshots/` als Architektur-Evidence behandeln.
 - Keine Python-Tests mehrerer Dienste mit gleichnamigem `app`-Paket in einem
   gemeinsamen pytest-Prozess ausführen.
+- Keine Führungskraft aus Reihenfolge, Position, Team, Standort, RAG oder
+  Modellwissen ableiten. Ohne eindeutig auflösbare Personio-Supervisor-Evidenz
+  bleibt die Antwort geschlossen.
 - Keine Produktionsaktivierung, externen Live-Probes oder Rollouts ohne
   ausdrücklichen Auftrag ableiten oder durchführen.
 

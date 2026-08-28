@@ -213,3 +213,40 @@ Implications:
   und Frontend-Prüfung.
 - Quellen und `dist/` müssen gemeinsam aktualisiert werden; `dist/` wird nicht
   isoliert bearbeitet.
+
+## ADR-008: Personio authority and evidence-bound employee routing
+
+Status: Confirmed
+
+Decision:
+Personio ist die führende Quelle für aktuelle Mitarbeiter-, Rollen-, Standort-,
+Kontakt-, Onboarding- und Supervisor-Daten. Reine aktuelle Verzeichnisfragen
+verwenden ausschließlich `personio_directory`; fachliche Prozess- und
+Zuständigkeitsfragen verwenden `rag_chat`. Benötigt eine Frage beide Arten von
+Evidenz, werden die Quellen kombiniert, ohne dass RAG aktuelle
+Personio-Stammdaten überschreiben darf. Führungskräfte werden ausschließlich
+über stabile und eindeutig auflösbare Personio-Supervisor-IDs beantwortet.
+
+Evidence:
+
+- `stack/open-webui-overrides/open_webui/utils/kahle_knowledge_harness.py`
+- `stack/open-webui-overrides/open_webui/utils/middleware.py`
+- `stack/personio-directory/app/search.py`
+- `stack/tests/test_kahle_knowledge_harness.py`
+- `stack/tests/test_middleware_internal_rag_routing.py`
+- `stack/personio-directory/tests/test_search.py`
+- `docs/operations/personio-directory.md`
+
+Rationale:
+Aktuelle Personaldaten ändern sich unabhängig vom Wissensbestand. Eine feste
+Quellenautorität verhindert veraltete oder halluzinierte Personenangaben und
+erlaubt zugleich, aktuelle Personen mit belegtem Prozesswissen zu verbinden.
+
+Implications:
+
+- Neue natürliche Formulierungen werden nur als kontrollierte Varianten und
+  mit Regressionstests ergänzt; eine offene semantische Personensuche ist nicht
+  zulässig.
+- Sichtbare RAG-Fortschrittsanzeigen erscheinen nur, wenn `rag_chat` tatsächlich
+  Teil des Retrieval-Plans ist.
+- Ohne eindeutige Supervisor-Evidenz wird keine Führungskraft genannt.

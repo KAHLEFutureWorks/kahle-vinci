@@ -126,6 +126,15 @@ einen BM25-Snapshot. Die ausführbaren Open-WebUI-Tools werden aus getrennten
 Quellen unter `stack/open-webui-tools/` in eigenständige Dateien unter `dist/`
 gebaut.
 
+Der Wissens-Harness plant die Quellen vor der Tool-Ausführung. Aktuelle
+Personen-, Kontakt-, Rollen-, Standort- und ausdrücklich formulierte
+Onboardingfragen laufen ausschließlich über `personio_directory`. Fachliche
+Prozess- und Zuständigkeitsfragen laufen über `rag_chat`. Benötigt eine Frage
+sowohl aktuelle Personendaten als auch belegtes Prozesswissen, werden beide
+Quellen ausgeführt und mit getrennter Autorität zusammengeführt. Personio
+bleibt dabei für aktuelle Stammdaten führend; widersprechende Namen, Rollen,
+Standorte, Kontakte oder Supervisor-Aussagen aus RAG werden verworfen.
+
 ### Integration services
 
 `personio-directory` stellt keine allgemeine Personio-API bereit. Der Dienst
@@ -133,6 +142,15 @@ synchronisiert Personio lesend, speichert lokalen Sync-Status, indexiert die
 freigegebenen Felder in einer eigenen Qdrant-Collection und antwortet nur über
 einen internen API-Key-geschützten Suchendpunkt. Der Endpunkt akzeptiert nur die
 Open-WebUI-Rollen `user` und `admin`.
+
+Die Verzeichnissuche zerlegt freigegebene natürliche Formulierungen in
+kontrollierte Rollen-, Abteilungs-, Team-/Marken- und Standortdimensionen.
+Ausdrücklich genannte Dimensionen werden mit AND verknüpft; kontrollierte
+Varianten innerhalb einer Dimension mit OR. Personen- und Supervisor-Suchen
+bleiben evidenzgebunden. Eine Führungskraft wird nur über die stabile
+Supervisor-Personio-ID einer eindeutig gefundenen Person oder Kandidatenmenge
+aufgelöst. Fehlt diese Evidenz oder ist sie mehrdeutig, liefert der Dienst
+keinen Namen.
 
 `academy-provisioner` liest die Open-WebUI-SQLite-Datenbank nur lesend. Nutzer
 mit den Open-WebUI-Rollen `user` oder `admin` sind für die Provisionierung

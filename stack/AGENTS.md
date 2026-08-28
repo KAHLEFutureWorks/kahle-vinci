@@ -41,6 +41,14 @@ Open-WebUI-Overrides, Tool-Bundles und Stack-Tests. Die allgemeinen Regeln aus
   Mount-Änderungen die tatsächlichen Read-/Write-Modi in allen Compose-Dateien.
 - Personio-Aufrufe bleiben lesend und im `personio-directory`-Adapter. Rohdaten,
   Namen und Providerantworten gehören nicht in Fehlerlogs.
+- Aktuelle Personen-, Kontakt-, Rollen-, Standort- und ausdrücklich formulierte
+  Onboardingfragen verwenden ausschließlich `personio_directory`. Fachliche
+  Prozess- und Zuständigkeitsfragen verwenden `rag_chat`; Fragen zu einer
+  aktuellen Person und einem Prozess dürfen beide Quellen kombinieren.
+- Personio-Stammdaten überschreiben gleichartige RAG-Aussagen. Führungskräfte
+  werden ausschließlich über eine eindeutig auflösbare Supervisor-Personio-ID
+  beantwortet und niemals aus Titel, Reihenfolge, Team oder Modellwissen
+  abgeleitet.
 - Academy-Provisionierung bleibt auf Open-WebUI-Rollen `user` und `admin`
   begrenzt. `pending` darf keine Provisionierung auslösen.
 - Bearbeite Tool-Quellen, führe danach `build_tools.py` aus und prüfe den Sync.
