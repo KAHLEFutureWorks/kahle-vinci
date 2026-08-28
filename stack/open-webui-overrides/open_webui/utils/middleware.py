@@ -410,6 +410,17 @@ def _knowledge_harness_direct_answer(
             'verlässlich bestimmen. Personio liefert dafür keine freigegebene Evidenz.'
         )
     if (
+        _personio_directory_intent(query) == 'supervisor_lookup'
+        and (
+            tuple(retrieval.get('required_tools') or ()) != ('personio_directory',)
+            or evidence.get('status') != 'supported'
+        )
+    ):
+        return (
+            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
+            'passende freigegebene Supervisor-Evidenz.'
+        )
+    if (
         tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
         and 'onboard' in folded_query
         and evidence.get('status') == 'supported'

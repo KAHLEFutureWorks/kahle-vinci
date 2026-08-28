@@ -110,6 +110,19 @@ def test_supervisor_question_uses_dedicated_fail_closed_directory_intent():
     assert evidence.claims == ()
 
 
+def test_supervisor_typo_uses_fail_closed_supervisor_intent():
+    directory = search([person("1", name="Erika Beispiel")])
+
+    evidence = directory.search(query("Wer ist die Führungskrft von Erika Beispiel?"))
+
+    assert (
+        classify_directory_query("Wer ist die Führungskrft von Erika Beispiel?")
+        == "supervisor_lookup"
+    )
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
 def test_supervisor_follow_up_returns_only_the_explicitly_evidenced_prior_candidate():
     leader = person("1", name="Erika Beispiel", position="Teiledienstleitung", department="Teiledienst")
     report = person(
@@ -156,6 +169,119 @@ def test_named_supervisor_question_without_explicit_supervisor_stays_fail_closed
 
     evidence = search([employee]).search(
         query("Wer ist die Führungskraft von Anna Adler?")
+    )
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
+def test_department_supervisor_resolves_only_explicit_personio_relationship():
+    leader = person(
+        "1",
+        name="Erika Beispiel",
+        position="Dispositionsleitung",
+        department="Disposition",
+    )
+    report = person(
+        "2",
+        name="Anna Adler",
+        position="Disponentin",
+        department="Disposition",
+        supervisor_personio_id="1",
+    )
+
+    evidence = search([leader, report]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+
+
+def test_department_supervisor_can_resolve_one_shared_external_supervisor():
+    leader = person(
+        "1",
+        name="Erika Beispiel",
+        position="Bereichsleitung",
+        department="Management",
+    )
+    reports = [
+        person(
+            "2",
+            name="Anna Adler",
+            position="Disponentin",
+            department="Disposition",
+            supervisor_personio_id="1",
+        ),
+        person(
+            "3",
+            name="Berta Beispiel",
+            position="Disponentin",
+            department="Disposition",
+            supervisor_personio_id="1",
+        ),
+    ]
+
+    evidence = search([leader, *reports]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+
+
+def test_department_supervisor_with_multiple_explicit_leaders_stays_fail_closed():
+    leaders = [
+        person("1", name="Erika Beispiel", position="Bereichsleitung"),
+        person("2", name="Clara Beispiel", position="Bereichsleitung"),
+    ]
+    reports = [
+        person(
+            "3",
+            name="Anna Adler",
+            position="Disponentin",
+            department="Disposition",
+            supervisor_personio_id="1",
+        ),
+        person(
+            "4",
+            name="Berta Beispiel",
+            position="Disponentin",
+            department="Disposition",
+            supervisor_personio_id="2",
+        ),
+    ]
+
+    evidence = search([*leaders, *reports]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
+def test_department_supervisor_with_internal_and_external_hierarchy_stays_fail_closed():
+    higher_leader = person(
+        "9",
+        name="Clara Beispiel",
+        position="Bereichsleitung",
+        department="Management",
+    )
+    department_leader = person(
+        "1",
+        name="Erika Beispiel",
+        position="Dispositionsleitung",
+        department="Disposition",
+        supervisor_personio_id="9",
+    )
+    report = person(
+        "2",
+        name="Anna Adler",
+        position="Disponentin",
+        department="Disposition",
+        supervisor_personio_id="1",
+    )
+
+    evidence = search([higher_leader, department_leader, report]).search(
+        query("Wer ist die Führungskraft der Disposition?")
     )
 
     assert evidence.status == "not_found"

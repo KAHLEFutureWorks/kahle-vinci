@@ -122,7 +122,7 @@ def classify_directory_query(text: str) -> DirectoryIntent:
     normalized = _normalise_text(text)
     if _ONBOARDING_WORD.search(normalized):
         return "onboarding_search"
-    if _SUPERVISOR_WORD.search(normalized):
+    if _has_supervisor_reference(normalized):
         return "supervisor_lookup"
     if _COWORKER_PHRASE.search(normalized):
         return "coworker_lookup"
@@ -170,10 +170,12 @@ class DirectorySearch:
                 relationship_basis=coworkers.basis,
             )
         if intent == "supervisor_lookup":
+            named_supervisor = self._supervisor_for_named_person(query.text, people)
             return self._evidence(
                 self._supervisors_from_candidate_query(query.candidate_query, people)
                 if query.candidate_query.strip()
-                else self._supervisor_for_named_person(query.text, people),
+                else named_supervisor
+                or self._supervisors_from_candidate_query(query.text, people),
                 sync_completed_at=sync_completed_at,
             )
         return self._evidence(
@@ -231,22 +233,27 @@ class DirectorySearch:
         if not candidate_text:
             return ()
         candidate_intent = classify_directory_query(candidate_text)
-        if candidate_intent not in {"directory_search", "onboarding_search"}:
+        if candidate_intent not in {
+            "directory_search",
+            "onboarding_search",
+            "supervisor_lookup",
+        }:
             return ()
         candidates = self._directory_candidates(
             candidate_text,
             people,
             ignore_unstructured_terms=candidate_intent == "onboarding_search",
         )
-        candidate_by_id = {person.personio_id: person for person in candidates}
+        people_by_id = {person.personio_id: person for person in people}
         supervisor_ids = {
             person.supervisor_personio_id
             for person in candidates
-            if person.supervisor_personio_id in candidate_by_id
+            if person.supervisor_personio_id
         }
         if len(supervisor_ids) != 1:
             return ()
-        return (candidate_by_id[supervisor_ids.pop()],)
+        supervisor = people_by_id.get(supervisor_ids.pop())
+        return (supervisor,) if supervisor is not None else ()
 
     def _supervisor_for_named_person(
         self, text: str, people: Iterable[PersonRecord]
@@ -474,6 +481,16 @@ def _one_character_apart(left: str, right: str) -> bool:
             index_left += 1
             index_right += 1
     return edits + (index_left < len(left)) + (index_right < len(right)) == 1
+
+
+def _has_supervisor_reference(query: str) -> bool:
+    """Recognize explicit supervisor wording plus one controlled character typo."""
+    if _SUPERVISOR_WORD.search(query):
+        return True
+    return any(
+        token.startswith("fuhrung") and _one_character_apart(token, "fuhrungskraft")
+        for token in query.split()
+    )
 
 
 def _digits(value: str) -> str:

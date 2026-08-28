@@ -528,7 +528,7 @@ def classify_personio_directory_intent(query: str) -> str:
         and "onboarding-prozess" not in folded
     ):
         return "onboarding_search"
-    if re.search(r"\b(?:fuhrungskraft|vorgesetzt\w*)\b", folded):
+    if _has_supervisor_reference(folded):
         return "supervisor_lookup"
     if re.search(r"\bmit\s+wem\b.*\b(?:arbeitet|zusammen)\b", folded):
         return "coworker_lookup"
@@ -543,7 +543,7 @@ def _directory_information_need(query: str) -> bool:
         return False
     if _explicit_onboarding_people_request(folded):
         return True
-    if re.search(r"\b(?:fuhrungskraft|vorgesetzt\w*)\b", folded):
+    if _has_supervisor_reference(folded):
         return True
     if _has_named_person_reference(query):
         return True
@@ -559,6 +559,39 @@ def _directory_information_need(query: str) -> bool:
         r"\b(?:mitarbeiter(?:innen)?|kolleg(?:en|innen))\s+im\b",
     )
     return any(re.search(pattern, folded) for pattern in contact_or_list_patterns)
+
+
+def _has_supervisor_reference(query: str) -> bool:
+    """Recognize explicit supervisor wording plus one controlled character typo."""
+    folded = _fold(query)
+    if re.search(r"\b(?:fuhrungskraft|vorgesetzt\w*)\b", folded):
+        return True
+    return any(
+        token.startswith("fuhrung") and _one_character_apart(token, "fuhrungskraft")
+        for token in folded.split()
+    )
+
+
+def _one_character_apart(left: str, right: str) -> bool:
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    index_left = index_right = edits = 0
+    while index_left < len(left) and index_right < len(right):
+        if left[index_left] == right[index_right]:
+            index_left += 1
+            index_right += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(left) > len(right):
+            index_left += 1
+        elif len(right) > len(left):
+            index_right += 1
+        else:
+            index_left += 1
+            index_right += 1
+    return edits + (index_left < len(left)) + (index_right < len(right)) == 1
 
 
 def _controlled_role_list_request(folded_query: str) -> bool:

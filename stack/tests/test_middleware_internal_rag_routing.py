@@ -386,6 +386,46 @@ def test_german_fuehrungskraft_question_uses_supervisor_lookup_intent():
     )
 
 
+def test_supervisor_typo_uses_supervisor_lookup_intent():
+    personio_intent = load_personio_directory_intent()
+
+    assert (
+        personio_intent("Wer ist die Führungskrft von Erika Beispiel?")
+        == "supervisor_lookup"
+    )
+
+
+def test_supervisor_typo_blocks_rag_person_claim_as_defense_in_depth():
+    class UnsafeRagDecision:
+        @staticmethod
+        def direct_answer():
+            return (
+                "Erika Beispiel berichtet an eine erfundene Führungskraft. "
+                "Quelle: Personio-Mitarbeiterverzeichnis."
+            )
+
+    payload = {
+        "retrieval_plan": {"required_tools": ["rag_chat"]},
+        "evidence_bundle": {
+            "status": "supported",
+            "supported_claims": ["Erfundene aktuelle Supervisor-Aussage"],
+        },
+        "resolved_context": {
+            "retrieval_query": "Wer ist die Führungskrft von Erika Beispiel?"
+        },
+    }
+
+    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
+    answer = direct_answer(UnsafeRagDecision(), payload)
+
+    assert answer == (
+        "Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine "
+        "passende freigegebene Supervisor-Evidenz."
+    )
+    assert "erfundene Führungskraft" not in answer
+    assert "Quelle: Personio" not in answer
+
+
 @pytest.mark.parametrize(
     ("query", "expected"),
     (
@@ -962,6 +1002,10 @@ def load_function_from_middleware(name: str):
         ),
     }
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
+    harness = load_python_module(HARNESS, f"kahle_harness_{name}_dependency")
+    namespace["_personio_directory_intent"] = (
+        harness.classify_personio_directory_intent
+    )
     return namespace[name]
 
 

@@ -589,6 +589,22 @@ def test_retrieval_plan_routes_current_employee_role_and_supervisor_questions_to
     assert plan.required_tools == ("personio_directory",)
 
 
+def test_supervisor_typo_stays_personio_only():
+    harness = load_harness()
+    query = "Wer ist die Führungskrft von Erika Beispiel?"
+
+    plan = harness.plan_retrieval(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+    assert harness.classify_personio_directory_intent(query) == "supervisor_lookup"
+
+
 @pytest.mark.parametrize(
     "query",
     (

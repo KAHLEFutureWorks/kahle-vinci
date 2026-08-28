@@ -99,6 +99,15 @@ sind mehrere Personen möglich, bleibt die Antwort bewusst nicht verfügbar.
 Supervisor-Daten werden nicht für Portalrechte oder zusätzliche Wissensrechte
 verwendet.
 
+Eine direkte Frage nach der Führungskraft einer Abteilung oder eines Bereichs
+wird zunächst mit denselben strukturierten Directory-Filtern auf die betroffenen
+Personen begrenzt. Eine Person wird nur genannt, wenn genau eine stabile
+Supervisor-ID innerhalb der Kandidaten oder als gemeinsame externe
+Supervisor-ID eindeutig auf eine freigegebene Person auflösbar ist. Mehrere,
+fehlende oder unbekannte Supervisor-IDs bleiben ohne Namensausgabe. Ein
+kontrollierter einzelner Zeichenfehler im Wort „Führungskraft“ wird ebenfalls
+als Supervisorfrage behandelt und darf niemals zu RAG zurückfallen.
+
 ## 3. Lokalen Stack kontrolliert starten
 
 Die frische PowerShell enthält die beiden Personio-Werte bereits im
@@ -188,7 +197,7 @@ Konto mit Rolle `user`, ein Konto mit Rolle `admin` und ein Konto mit Rolle
 `pending` werden benötigt. Reale Personennamen dürfen nur direkt in der
 Oberfläche eingesetzt und nicht in Berichte übernommen werden.
 
-Für jedes verfügbare Vinci-Modell sind diese 17 fachlichen Prüfungen nötig:
+Für jedes verfügbare Vinci-Modell sind diese 20 fachlichen Prüfungen nötig:
 
 1. Eine aktive Person exakt nach vollständigem Namen, Rolle, Standort,
    geschäftlicher Telefonnummer und geschäftlicher E-Mail finden.
@@ -232,6 +241,16 @@ Für jedes verfügbare Vinci-Modell sind diese 17 fachlichen Prüfungen nötig:
     RAG für die dokumentierte funktionale Zuständigkeit verwenden. Ohne eine
     eindeutige, versionierte Rollenabbildung auf Personio darf keine aktuelle
     Person geraten oder aus einem RAG-Dokument übernommen werden.
+18. Eine direkte Frage nach der Führungskraft einer kontrollierten Abteilung
+    stellen. Nur eine eindeutig auflösbare Supervisor-ID darf einen Namen
+    liefern; mehrere Supervisor-IDs müssen fail-closed bleiben.
+19. Dieselbe benannte Supervisorfrage mit einem einzelnen Zeichenfehler im Wort
+    „Führungskraft“ stellen. Verwendet werden darf nur `personio_directory`;
+    eine RAG-Anzeige, ein RAG-Name oder eine angebliche Personio-Quelle aus RAG
+    sind unzulässig.
+20. Eine reine Verkaufsliste mit der Formulierung „Zeige mir die Mitarbeiter aus
+    dem Verkauf am Standort Hannover“ prüfen. Verwendet werden darf nur
+    `personio_directory`, auch direkt nach einem Rollout.
 
 Wenn der Personio-Bestand keinen passenden Status- oder Kaskadenfall enthält,
 wird der Fall als `pending` dokumentiert. Es werden keine Personio-Daten nur für
@@ -287,6 +306,14 @@ PERSONIO_DIRECTORY_SYNC_INTERVAL_SECONDS=900
 verwechselt. OpenWebUI erhält keine Personio-Credentials. Compose setzt intern
 `PERSONIO_DIRECTORY_URL` und verwendet den bestehenden internen API-Key. Der
 Dienst veröffentlicht keinen Host-Port.
+
+Die Open-WebUI-Harness-Datei ist als Read-only-Bind-Mount eingebunden. Wird sie
+bei einem Rollout ersetzt, genügt `docker compose up -d --build open-webui`
+nicht als Reload-Nachweis, weil ein unveränderter Container weiterlaufen kann.
+Der Rollout muss Open WebUI ausdrücklich neu erstellen, zum Beispiel mit
+`docker compose ... up -d --force-recreate --no-deps open-webui`, und danach
+den Health-Status prüfen. Ein Rollback muss denselben Reload nach dem
+Wiederherstellen der vorherigen Datei ausführen.
 
 Vor dem Produktionsstart werden die Werte nur auf Anwesenheit und Nicht-Leere
 geprüft. Sie dürfen nicht mit `cat`, `grep`, `docker compose config` ohne
