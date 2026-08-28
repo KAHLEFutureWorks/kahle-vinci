@@ -21,6 +21,12 @@ KNOWN_ALIASES = {
     "SHG": "Stadthagen",
 }
 
+_PERSON_NAME_WORD = (
+    r"(?!(?:der|die|das|den|dem|ein|eine|einen|einem|einer|"
+    r"ansprechpartner|kontakt(?:daten)?|rolle|position|abteilung|team|standort|"
+    r"onboarding|prozess|verkaufer|serviceberater|servicekraft|mitarbeiter)\b)[\w.-]+"
+)
+
 
 @dataclass(frozen=True)
 class UserIntent:
@@ -483,7 +489,7 @@ def _is_procedural(query: str) -> bool:
 
 
 def _has_named_person_reference(query: str) -> bool:
-    """Recognize only explicit person-question shapes, never arbitrary nouns."""
+    """Recognize explicit employee profile and contact questions only."""
     raw = str(query or "")
     return bool(
         re.search(
@@ -492,11 +498,43 @@ def _has_named_person_reference(query: str) -> bool:
             r"wie\s+erreiche(?:\s+ich)?|wie\s+lautet.*?(?:von|für)|"
             r"wie\s+kann\s+ich|"
             r"welche\s+(?:telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+hat|"
+            r"welche\s+(?:position|rolle|abteilung|team|standort)\s+hat|"
             r"mit\s+wem\s+arbeitet|was\s+hat|wie\s+hängen)\s+"
-            r"(?:unser(?:e|en)?\s+)?[A-ZÄÖÜ][\w.-]+\s+[A-ZÄÖÜ][\w.-]+",
+            rf"(?:unser(?:e|en)?\s+)?{_PERSON_NAME_WORD}\s+{_PERSON_NAME_WORD}",
+            raw,
+        )
+        or re.search(
+            r"(?iu)\b(?:kontakt(?:daten|informationen|m(?:ö|oe)glichkeiten)?|"
+            r"e-?mail(?:-adresse)?|telefon(?:nummer)?|durchwahl)\b"
+            r".{0,80}?\b(?:von|für)\s+"
+            rf"(?:unser(?:e|en)?\s+)?{_PERSON_NAME_WORD}\s+{_PERSON_NAME_WORD}",
+            raw,
+        )
+        or re.search(
+            r"(?iu)\b(?:infos?|informationen|details)\s+(?:über|ueber|zu)\s+"
+            rf"(?:unser(?:e|en)?\s+)?{_PERSON_NAME_WORD}\s+{_PERSON_NAME_WORD}",
             raw,
         )
     )
+
+
+def classify_personio_directory_intent(query: str) -> str:
+    """Classify bounded directory sub-intents for planning and execution."""
+    raw = str(query or "")
+    folded = _fold(raw)
+    if (
+        "onboard" in folded
+        and re.search(r"\b(?:wer|welche|mitarbeiter|personen)\b", folded)
+        and "onboarding-prozess" not in folded
+    ):
+        return "onboarding_search"
+    if re.search(r"\b(?:fuhrungskraft|vorgesetzt\w*)\b", folded):
+        return "supervisor_lookup"
+    if re.search(r"\bmit\s+wem\b.*\b(?:arbeitet|zusammen)\b", folded):
+        return "coworker_lookup"
+    if _has_named_person_reference(raw):
+        return "person_lookup"
+    return "directory_search"
 
 
 def _directory_information_need(query: str) -> bool:
@@ -527,10 +565,11 @@ def _controlled_role_list_request(folded_query: str) -> bool:
     """Recognize only explicit directory-list requests for approved role families."""
     return bool(
         re.search(
-            r"\b(?:wer\s+sind|welche|wie\s+hei(?:ss)?en|nenn(?:e)?(?:\s+mir)?|"
+            r"\b(?:wer\s+(?:sind|ist|arbeitet)|welche|wie\s+hei(?:ss)?en|nenn(?:e)?(?:\s+mir)?|"
             r"(?:liste|zeig(?:e)?|gib)(?:\s+mir)?)\b.*\b(?:"
             r"serviceassisten(?:z(?:en)?|t(?:in|innen|en)?)|"
-            r"(?:automobil)?verkaufer|serviceberater\w*|teiledienst\w*)\b",
+            r"serviceberater\w*|servicekr(?:a|ae)ft(?:e|en)?|"
+            r"(?:automobil)?verkaufer|verkauf|teiledienst\w*)\b",
             folded_query,
         )
     )

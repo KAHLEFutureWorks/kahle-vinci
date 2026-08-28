@@ -75,8 +75,15 @@ _STOP_WORDS = frozenset(
 )
 _ROLE_VARIANTS: dict[str, tuple[str, ...]] = {
     "serviceassistenz": ("serviceassistenz", "serviceassistent"),
+    "serviceberatung": ("serviceberater", "serviceberatung"),
     "verkaufer": ("verkaufer", "automobilverkaufer", "verkauf"),
 }
+_DEPARTMENT_VARIANTS: dict[str, tuple[str, ...]] = {
+    "buchhaltung": ("buchhaltung",),
+    "disposition": ("disposition",),
+    "rechnungslegung": ("rechnungslegung",),
+}
+_SALES_POSITION_VARIANTS = ("verkauf", "verkaufer")
 _COLLABORATION_DISCLAIMER = (
     "Die Zuordnung beschreibt nur organisatorische Nähe und keine tatsächliche "
     "persönliche, fachliche oder projektbezogene Zusammenarbeit."
@@ -521,10 +528,24 @@ def _add_controlled_variants(
             requested = bool(
                 re.search(r"\bserviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b", query)
             )
+        elif role == "serviceberatung":
+            requested = bool(re.search(r"\bserviceberater(?:in(?:nen)?)?\b", query))
         else:
             requested = bool(re.search(r"\bverkaufer\b", query))
         if requested:
             _add_matching_field_values(filters, "position", people, variants)
+    if re.search(r"\bservicekr(?:a|ae)ft(?:e|en)?\b", query):
+        _add_matching_field_values(filters, "department", people, ("service",))
+    for department, variants in _DEPARTMENT_VARIANTS.items():
+        if re.search(rf"\b{re.escape(department)}\b", query):
+            _add_matching_field_values(filters, "department", people, variants)
+    if re.search(r"\bverkauf\b", query):
+        # "im Verkauf" denotes the controlled sales-role family. Department
+        # and team values are often organizational labels and must not make a
+        # Service position appear in a sales list.
+        filters.pop("department", None)
+        filters.pop("team", None)
+        _add_matching_field_values(filters, "position", people, _SALES_POSITION_VARIANTS)
     if re.search(r"\bseat\b", query):
         _add_matching_field_values(filters, "team", people, ("seat",))
     if re.search(r"\bneuwagen\b", query):
@@ -560,6 +581,8 @@ def _contains_controlled_variant(value: str, variants: frozenset[str]) -> bool:
 def _is_controlled_role_description(query: str) -> bool:
     return bool(
         re.search(r"\bserviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b", query)
+        or re.search(r"\bserviceberater(?:in(?:nen)?)?\b", query)
+        or re.search(r"\bservicekr(?:a|ae)ft(?:e|en)?\b", query)
         or (
             re.search(r"\bverkaufer\b", query)
             and re.search(r"\b(?:seat|neuwagen|automobil)\b", query)
@@ -570,7 +593,7 @@ def _is_controlled_role_description(query: str) -> bool:
 def _explicit_office_request(query: str) -> bool:
     return bool(
         re.search(
-            r"\b(?:in(?:\s+der|\s+dem)?|nach|am\s+standort)\s+[\w]+",
+            r"\b(?:in|nach|am(?:\s+standort)?)\s+(?!der\b|dem\b)[\w]+",
             query,
         )
     )

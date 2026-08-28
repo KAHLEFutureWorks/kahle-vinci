@@ -93,6 +93,7 @@ from open_webui.utils.filter import (
 )
 from open_webui.utils.kahle_knowledge_harness import (
     build_decision as build_knowledge_harness_decision,
+    classify_personio_directory_intent,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
     resolve_query_aliases,
@@ -311,41 +312,8 @@ async def _execute_kahle_retrieval_plan(
 
 
 def _personio_directory_intent(query: str) -> str:
-    """Map a directory need to the private API's bounded sub-intent."""
-    raw_query = str(query or '')
-    folded = _ascii_fold(raw_query)
-    if (
-        'onboard' in folded
-        and re.search(r'\b(?:wer|welche|mitarbeiter|personen)\b', folded)
-        and 'onboarding-prozess' not in folded
-    ):
-        return 'onboarding_search'
-    if re.search(r'\b(?:fuhrungskraft|fuehrungskraft|vorgesetzt\w*)\b', folded):
-        return 'supervisor_lookup'
-    if re.search(r'\bmit\s+wem\b.*\b(?:arbeitet|zusammen)\b', folded):
-        return 'coworker_lookup'
-    if re.search(
-        r'(?iu)\b(?:'
-        r'wie\s+erreiche(?:\s+ich)?\s+'
-        r'|wie\s+kann\s+ich\s+'
-        r'|wie\s+(?:ist|sind|lautet|lauten)\s+die\s+'
-        r'(?:kontakt(?:daten|informationen|m(?:ö|oe)glichkeiten)|telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+(?:von|f(?:ü|ue)r)\s+'
-        r'|(?:nenne|gib|zeige)(?:\s+mir)?\s+die\s+'
-        r'(?:kontakt(?:daten|informationen|m(?:ö|oe)glichkeiten)|telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+(?:von|f(?:ü|ue)r)\s+'
-        r'|welche\s+(?:telefonnummer|e-?mail(?:-adresse)?|durchwahl)\s+hat\s+'
-        r')'
-        r'(?:unser(?:e|en)?\s+)?[A-ZÄÖÜ][\w.-]+\s+[A-ZÄÖÜ][\w.-]+',
-        raw_query,
-    ):
-        return 'person_lookup'
-    if re.search(
-        r'\b(?:wer\s+ist|wo\s+arbeitet|was\s+macht|'
-        r'was\s+weisst\s+du(?:\s+alles)?\s+u(?:e)?ber|'
-        r'was\s+hat|wie\s+haengen)\b',
-        folded,
-    ):
-        return 'person_lookup'
-    return 'directory_search'
+    """Map a directory need to the Harness' bounded shared sub-intent."""
+    return classify_personio_directory_intent(query)
 
 
 def _supervisor_candidate_query(messages: list[dict[str, Any]], query: str) -> str:
