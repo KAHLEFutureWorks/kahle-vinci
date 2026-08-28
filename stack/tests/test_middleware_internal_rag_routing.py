@@ -369,10 +369,7 @@ def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_
 
 
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
-    personio_intent = load_function_from_middleware("_personio_directory_intent")
-    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
-        "_ascii_fold"
-    )
+    personio_intent = load_personio_directory_intent()
 
     assert personio_intent("Was weißt du über Max Mustermann?") == "person_lookup"
     assert (
@@ -381,10 +378,7 @@ def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
 
 
 def test_german_fuehrungskraft_question_uses_supervisor_lookup_intent():
-    personio_intent = load_function_from_middleware("_personio_directory_intent")
-    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
-        "_ascii_fold"
-    )
+    personio_intent = load_personio_directory_intent()
 
     assert (
         personio_intent("Wer ist die Führungskraft von Erika Beispiel?")
@@ -401,6 +395,12 @@ def test_german_fuehrungskraft_question_uses_supervisor_lookup_intent():
         ("Wie lauten die Kontaktdaten von Erika Beispiel?", "person_lookup"),
         ("Nenne mir die Kontaktdaten von Erika Beispiel.", "person_lookup"),
         ("Gib mir die Kontaktdaten von Erika Beispiel.", "person_lookup"),
+        ("Gib mir bitte die Kontaktdaten von Erika Beispiel.", "person_lookup"),
+        ("Bitte gib mir den Kontakt von Erika Beispiel.", "person_lookup"),
+        ("Kannst du mir die E-Mail-Adresse von Erika Beispiel geben?", "person_lookup"),
+        ("Ich brauche die Telefonnummer von Erika Beispiel.", "person_lookup"),
+        ("Gib mir Infos ueber Erika Beispiel.", "person_lookup"),
+        ("wer ist erika beispiel?", "person_lookup"),
         ("Zeige mir die E-Mail-Adresse von Erika Beispiel.", "person_lookup"),
         ("Welche Telefonnummer hat Erika Beispiel?", "person_lookup"),
         ("Wie kann ich Erika Beispiel erreichen?", "person_lookup"),
@@ -408,19 +408,13 @@ def test_german_fuehrungskraft_question_uses_supervisor_lookup_intent():
     ),
 )
 def test_current_employee_contact_questions_use_directory_intents(query, expected):
-    personio_intent = load_function_from_middleware("_personio_directory_intent")
-    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
-        "_ascii_fold"
-    )
+    personio_intent = load_personio_directory_intent()
 
     assert personio_intent(query) == expected
 
 
 def test_german_wie_haengen_question_uses_person_lookup_intent():
-    personio_intent = load_function_from_middleware("_personio_directory_intent")
-    personio_intent.__globals__["_ascii_fold"] = load_function_from_middleware(
-        "_ascii_fold"
-    )
+    personio_intent = load_personio_directory_intent()
 
     assert (
         personio_intent("Wie hängen Max Mustermann und KAHLE-Vinci zusammen?")
@@ -969,6 +963,15 @@ def load_function_from_middleware(name: str):
     }
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace[name]
+
+
+def load_personio_directory_intent():
+    intent = load_function_from_middleware("_personio_directory_intent")
+    harness = load_python_module(HARNESS, "kahle_harness_directory_intent")
+    intent.__globals__["classify_personio_directory_intent"] = (
+        harness.classify_personio_directory_intent
+    )
+    return intent
 
 
 def load_canonical_rag_source_helpers():

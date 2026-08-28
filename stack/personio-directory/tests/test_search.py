@@ -253,6 +253,42 @@ def test_service_assistant_feminine_plural_keeps_the_controlled_role_filter():
     assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
 
 
+def test_service_advisor_role_family_filters_position_and_office():
+    advisor = person(
+        "1", name="Erika Beispiel", position="Serviceberaterin", office="Nienburg"
+    )
+    assistant = person(
+        "2", name="Anna Adler", position="Serviceassistentin", office="Nienburg"
+    )
+    other_office = person(
+        "3", name="Berta Berlin", position="Serviceberater", office="Hannover"
+    )
+
+    evidence = search([advisor, assistant, other_office]).search(
+        query("Nenne mir die Serviceberater in Nienburg.", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+
+
+def test_servicekraefte_maps_to_service_department_and_office():
+    service_employee = person(
+        "1", name="Erika Beispiel", department="Service", office="Nienburg"
+    )
+    sales_employee = person(
+        "2", name="Anna Adler", department="Verkauf", office="Nienburg"
+    )
+    other_office = person(
+        "3", name="Berta Berlin", department="Service", office="Hannover"
+    )
+
+    evidence = search([service_employee, sales_employee, other_office]).search(
+        query("Wie heissen die Servicekraefte am Standort Nienburg?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+
+
 def test_short_who_is_person_question_uses_exact_gate_and_rejects_partial_names():
     erika = person("1", name="Erika Beispiel")
     directory = search([erika])

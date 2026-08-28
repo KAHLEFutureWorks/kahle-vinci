@@ -597,9 +597,36 @@ def test_retrieval_plan_routes_current_employee_role_and_supervisor_questions_to
         "Wie heißen die Serviceassistenzen in Nienburg?",
         "Liste mir die Serviceassistenzen in Nienburg auf.",
         "Zeige mir die Verkäufer in Nienburg.",
+        "Nenne mir die Serviceberater in Nienburg.",
+        "Wie heißen die Servicekräfte am Standort Nienburg?",
+        "Wie heissen die Servicekraefte am Standort Nienburg?",
     ),
 )
 def test_retrieval_plan_routes_controlled_role_list_wordings_to_personio(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Bitte gib mir den Kontakt von Erika Beispiel.",
+        "Gib mir Infos über Erika Beispiel.",
+        "Gib mir Infos ueber Erika Beispiel.",
+        "Welche Abteilung hat Erika Beispiel?",
+        "wer ist erika beispiel?",
+    ),
+)
+def test_retrieval_plan_routes_named_employee_contact_and_profile_wordings_to_personio(query):
     harness = load_harness()
 
     plan = harness.plan_retrieval(

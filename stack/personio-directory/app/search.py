@@ -75,6 +75,7 @@ _STOP_WORDS = frozenset(
 )
 _ROLE_VARIANTS: dict[str, tuple[str, ...]] = {
     "serviceassistenz": ("serviceassistenz", "serviceassistent"),
+    "serviceberatung": ("serviceberater", "serviceberatung"),
     "verkaufer": ("verkaufer", "automobilverkaufer", "verkauf"),
 }
 _COLLABORATION_DISCLAIMER = (
@@ -521,10 +522,14 @@ def _add_controlled_variants(
             requested = bool(
                 re.search(r"\bserviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b", query)
             )
+        elif role == "serviceberatung":
+            requested = bool(re.search(r"\bserviceberater(?:in(?:nen)?)?\b", query))
         else:
             requested = bool(re.search(r"\bverkaufer\b", query))
         if requested:
             _add_matching_field_values(filters, "position", people, variants)
+    if re.search(r"\bservicekr(?:a|ae)ft(?:e|en)?\b", query):
+        _add_matching_field_values(filters, "department", people, ("service",))
     if re.search(r"\bseat\b", query):
         _add_matching_field_values(filters, "team", people, ("seat",))
     if re.search(r"\bneuwagen\b", query):
@@ -560,6 +565,8 @@ def _contains_controlled_variant(value: str, variants: frozenset[str]) -> bool:
 def _is_controlled_role_description(query: str) -> bool:
     return bool(
         re.search(r"\bserviceassisten(?:z(?:en)?|t(?:in|innen|en)?)\b", query)
+        or re.search(r"\bserviceberater(?:in(?:nen)?)?\b", query)
+        or re.search(r"\bservicekr(?:a|ae)ft(?:e|en)?\b", query)
         or (
             re.search(r"\bverkaufer\b", query)
             and re.search(r"\b(?:seat|neuwagen|automobil)\b", query)
