@@ -187,6 +187,53 @@ def test_named_supervisor_question_returns_only_the_explicitly_evidenced_supervi
 
 
 @pytest.mark.parametrize(
+    "query_name",
+    (
+        "Andreas Möller",
+        "Andreas Oeller",
+        "Moeller, Andreas",
+    ),
+)
+def test_named_supervisor_question_requires_an_exact_controlled_name(query_name):
+    leader = person("1", name="Karsten Engelking", position="Teamleitung Service")
+    report = person(
+        "2",
+        name="Andreas Moeller",
+        position="Serviceberater",
+        supervisor_personio_id="1",
+    )
+
+    evidence = search([leader, report]).search(
+        query(f"Wer ist die Führungskraft von {query_name}?")
+    )
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
+def test_supervisor_follow_up_rejects_a_typo_corrected_prior_person_name():
+    leader = person("1", name="Karsten Engelking", position="Teamleitung Service")
+    report = person(
+        "2",
+        name="Andreas Moeller",
+        position="Serviceberater",
+        supervisor_personio_id="1",
+    )
+    supervisor_query = DirectoryQuery(
+        text="Wer ist seine Führungskraft?",
+        intent="supervisor_lookup",
+        user_id="test-user",
+        user_role="user",
+        candidate_query="Wer ist Andreas Möller?",
+    )
+
+    evidence = search([leader, report]).search(supervisor_query)
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
+@pytest.mark.parametrize(
     ("stored_name", "query_name"),
     (
         ("Jana Janßen", "Jana Janssen"),
@@ -733,6 +780,28 @@ def test_it_department_aliases_match_combined_it_edv_department(wording):
         name="Berta Berlin",
         position="Sachbearbeitung",
         department="Marketing",
+    )
+
+    evidence = search([matching, unrelated]).search(
+        query(f"Wie erreiche ich die {wording}?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+@pytest.mark.parametrize("wording", ("IT", "EDV"))
+def test_it_department_aliases_do_not_match_short_substrings_in_unrelated_departments(wording):
+    matching = person(
+        "1",
+        name="Anna Adler",
+        position="Systemadministration",
+        department="IT / EDV",
+    )
+    unrelated = person(
+        "2",
+        name="Berta Berlin",
+        position="Sachbearbeitung",
+        department="Mitarbeiterentwicklung",
     )
 
     evidence = search([matching, unrelated]).search(

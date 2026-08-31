@@ -264,7 +264,7 @@ class DirectorySearch:
         }:
             return ()
         candidates = (
-            self._exact_person_matches(candidate_text, people)
+            self._exact_person_matches(candidate_text, people, allow_typo=False)
             if candidate_intent == "person_lookup"
             else self._directory_candidates(
                 candidate_text,
@@ -288,7 +288,7 @@ class DirectorySearch:
     ) -> tuple[PersonRecord, ...]:
         """Resolve only the explicit Personio supervisor of one named employee."""
         people = tuple(people)
-        matches = self._exact_person_matches(text, people)
+        matches = self._exact_person_matches(text, people, allow_typo=False)
         if len(matches) != 1:
             return ()
         supervisor_id = matches[0].supervisor_personio_id
@@ -317,7 +317,11 @@ class DirectorySearch:
         return query.intent
 
     def _exact_person_matches(
-        self, text: str, people: Iterable[PersonRecord]
+        self,
+        text: str,
+        people: Iterable[PersonRecord],
+        *,
+        allow_typo: bool = True,
     ) -> tuple[PersonRecord, ...]:
         normalized = _normalise_text(text)
         normalized_email_text = _normalise_email_text(text)
@@ -343,6 +347,9 @@ class DirectorySearch:
                 aliases.append(person)
         if aliases:
             return self._ordered(aliases) if len(aliases) == 1 else ()
+
+        if not allow_typo:
+            return ()
 
         typo_matches = []
         for person in people:
@@ -628,9 +635,10 @@ def _add_matching_field_values(
 
 def _contains_controlled_variant(value: str, variants: frozenset[str]) -> bool:
     """Match only approved role/business stems inside German compounds."""
+    tokens = re.findall(r"[a-z0-9]+", value)
     return any(
-        variant in token
-        for token in value.split()
+        (token == variant if len(variant) <= 3 else variant in token)
+        for token in tokens
         for variant in variants
     )
 

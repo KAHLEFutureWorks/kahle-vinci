@@ -330,8 +330,37 @@ def test_named_supervisor_evidence_is_not_blocked_as_a_leadership_ranking():
 
     direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
 
-    assert direct_answer(decision, decision.to_dict()) == ""
+    assert direct_answer(decision, decision.to_dict()) == (
+        "Die in Personio hinterlegte Führungskraft ist Max Leitung."
+    )
     assert "Max Leitung" in decision.answer_prompt()
+
+
+def test_personio_only_retrieval_hides_rag_and_websearch_tools():
+    filter_tools = load_function_from_middleware(
+        "_filter_native_tools_for_kahle_retrieval"
+    )
+    plan = SimpleNamespace(required_tools=("personio_directory",))
+    tools = {
+        "rag_chat": object(),
+        "safe_websearch": object(),
+        "safe_webcaller": object(),
+        "display_file": object(),
+    }
+
+    filtered = filter_tools(tools, plan)
+
+    assert list(filtered) == ["display_file"]
+
+
+def test_mixed_retrieval_keeps_the_planned_rag_tool_available():
+    filter_tools = load_function_from_middleware(
+        "_filter_native_tools_for_kahle_retrieval"
+    )
+    plan = SimpleNamespace(required_tools=("personio_directory", "rag_chat"))
+    tools = {"rag_chat": object(), "safe_websearch": object()}
+
+    assert filter_tools(tools, plan) == tools
 
 
 def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_context():
@@ -396,6 +425,9 @@ def test_polite_pronoun_does_not_override_an_explicit_supervisor_subject():
     (
         "Wer davon ist die Führungskraft?",
         "Wer ist deren Führungskraft?",
+        "Wer ist seine Führungskraft?",
+        "Wer ist ihre Führungskraft?",
+        "Wer ist die Führungskraft?",
     ),
 )
 def test_referential_supervisor_follow_up_keeps_the_previous_user_context(follow_up):
@@ -408,6 +440,40 @@ def test_referential_supervisor_follow_up_keeps_the_previous_user_context(follow
     ]
 
     assert candidate_query(messages, follow_up) == prior_query
+
+
+def test_possessive_wording_does_not_reuse_context_for_other_intents():
+    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    prior_query = "Wie funktioniert die Urlaubsfreigabe?"
+    messages = [
+        {"role": "user", "content": prior_query},
+        {"role": "assistant", "content": "RAG-Treffer."},
+        {"role": "user", "content": "Wie ist ihre E-Mail-Adresse?"},
+    ]
+
+    assert candidate_query(messages, "Wie ist ihre E-Mail-Adresse?") == ""
+
+
+def test_planned_rag_tool_call_is_forced_without_legacy_keyword_signal():
+    planned_calls = load_function_from_middleware("_planned_rag_tool_calls")
+    query = "Wie ist die E-Mail der Personalabteilung?"
+
+    assert planned_calls(
+        {"_kahle_force_rag_tool_call": True},
+        {"rag_chat": object()},
+        query,
+    ) == [{"name": "rag_chat", "parameters": {"query": query}}]
+
+
+def test_planned_rag_tool_call_is_not_forced_outside_the_preroute_contract():
+    planned_calls = load_function_from_middleware("_planned_rag_tool_calls")
+
+    assert planned_calls({}, {"rag_chat": object()}, "Wie ist die E-Mail der Personalabteilung?") == []
+    assert planned_calls(
+        {"_kahle_force_rag_tool_call": True},
+        {},
+        "Wie ist die E-Mail der Personalabteilung?",
+    ) == []
 
 
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
@@ -1803,6 +1869,7 @@ def load_fallback_tool_helpers():
         "_ascii_fold",
         "_infer_generated_file_output_format",
         "_looks_like_previous_result_file_request",
+        "_planned_rag_tool_calls",
         "_infer_fallback_tool_calls",
     }
     nodes = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name in wanted]
@@ -1814,6 +1881,7 @@ def load_fallback_tool_helpers():
         "re": re,
         "unicodedata": unicodedata,
         "tools": {"kahle_workflow_execute": object()},
+        "metadata": {},
         "attached_file_names": [],
         "attached_exact_paths": [],
         "_looks_like_internal_rag_request": lambda text: False,

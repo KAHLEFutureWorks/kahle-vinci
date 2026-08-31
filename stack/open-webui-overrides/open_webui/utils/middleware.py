@@ -342,7 +342,8 @@ def _supervisor_candidate_query(messages: list[dict[str, Any]], query: str) -> s
     )
     if not re.search(
         r'\b(?:davon|deren|dessen|diese(?:r|n|m|s)?\s+person|'
-        r'er|sie|ihn|ihm|ihr)\b',
+        r'sein(?:e|er|em|en|es)?|ihr(?:e|er|em|en|es)?|'
+        r'die\s+fuhrungskraft|er|sie|ihn|ihm)\b',
         folded_current,
     ):
         return ''
@@ -445,6 +446,21 @@ def _knowledge_harness_direct_answer(
             'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
             'passende freigegebene Supervisor-Evidenz.'
         )
+    if _personio_directory_intent(query) == 'supervisor_lookup':
+        supervisor_names = [
+            str(claim.get('display_name') or '').strip()
+            for claim in evidence.get('supported_claims') or ()
+            if isinstance(claim, dict) and str(claim.get('display_name') or '').strip()
+        ]
+        if len(supervisor_names) == 1:
+            return (
+                'Die in Personio hinterlegte Führungskraft ist '
+                f'{supervisor_names[0]}.'
+            )
+        return (
+            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
+            'passende freigegebene Supervisor-Evidenz.'
+        )
     if (
         tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
         and 'onboard' in folded_query
@@ -506,6 +522,35 @@ def _should_execute_kahle_retrieval(
         'personio_directory' in required_tools
         or ('rag_chat' in required_tools and 'rag_chat' in tools_dict)
     )
+
+
+def _planned_rag_tool_calls(
+    metadata: dict[str, Any], tools: dict[str, Any], user_text: str,
+) -> list[dict[str, Any]]:
+    """Return the mandatory RAG call for a Harness-owned pre-route."""
+    if not metadata.get('_kahle_force_rag_tool_call') or 'rag_chat' not in tools:
+        return []
+    query = str(user_text or '').strip()
+    if not query:
+        return []
+    return [{'name': 'rag_chat', 'parameters': {'query': query}}]
+
+
+def _filter_native_tools_for_kahle_retrieval(
+    tools_dict: dict[str, Any], retrieval_plan: Any,
+) -> dict[str, Any]:
+    """Keep external knowledge tools out of Personio-only requests."""
+    required_tools = tuple(
+        getattr(retrieval_plan, 'required_tools', ()) or ()
+    )
+    if required_tools != ('personio_directory',):
+        return tools_dict
+    blocked = {'rag_chat', 'safe_websearch', 'safe_webcaller'}
+    return {
+        name: tool
+        for name, tool in tools_dict.items()
+        if str(name).casefold() not in blocked
+    }
 
 
 # We believe in one maker of all models, seen and unseen,
@@ -2582,6 +2627,10 @@ async def chat_completion_tools_handler(
         text = unicodedata.normalize('NFKC', user_text or '').lower()
         if not text:
             return []
+
+        planned_rag_calls = _planned_rag_tool_calls(metadata, tools, user_text or '')
+        if planned_rag_calls:
+            return planned_rag_calls
 
         ascii_text = _ascii_fold(text)
         generated_output_format = _infer_generated_file_output_format(text)
@@ -4841,6 +4890,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         previous_information_needs = pre_route_metadata.get(
                             '_kahle_information_needs'
                         )
+                        previous_force_rag = pre_route_metadata.get(
+                            '_kahle_force_rag_tool_call'
+                        )
+                        pre_route_metadata['_kahle_force_rag_tool_call'] = True
                         pre_route_metadata['_kahle_information_needs'] = [
                             {
                                 'kind': str(getattr(need, 'kind', '') or ''),
@@ -4867,6 +4920,12 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             else:
                                 pre_route_metadata['_kahle_information_needs'] = (
                                     previous_information_needs
+                                )
+                            if previous_force_rag is None:
+                                pre_route_metadata.pop('_kahle_force_rag_tool_call', None)
+                            else:
+                                pre_route_metadata['_kahle_force_rag_tool_call'] = (
+                                    previous_force_rag
                                 )
                         if user_tool_request != (original_user_tool_request or ''):
                             set_last_user_message_content(
@@ -5008,6 +5067,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         )
                     )
                 }
+                native_tools_dict = _filter_native_tools_for_kahle_retrieval(
+                    native_tools_dict, retrieval_plan
+                )
                 if native_tools_dict:
                     form_data['tools'] = [
                         {'type': 'function', 'function': tool.get('spec', {})}
@@ -5033,6 +5095,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             )
                         )
                     }
+                    legacy_tools_dict = _filter_native_tools_for_kahle_retrieval(
+                        legacy_tools_dict, retrieval_plan
+                    )
                     if legacy_tools_dict:
                         form_data, flags = await chat_completion_tools_handler(
                             request,
