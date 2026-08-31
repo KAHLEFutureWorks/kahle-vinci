@@ -226,6 +226,12 @@ Zuständigkeitsfragen verwenden `rag_chat`. Benötigt eine Frage beide Arten von
 Evidenz, werden die Quellen kombiniert, ohne dass RAG aktuelle
 Personio-Stammdaten überschreiben darf. Führungskräfte werden ausschließlich
 über stabile und eindeutig auflösbare Personio-Supervisor-IDs beantwortet.
+Abteilungs-, Bereichs- und funktionale Kontaktfragen sind bewusst gemischt:
+RAG belegt gemeinsame Kontaktwege, Personio liefert aktuelle individuelle
+Geschäftskontakte. Eine ausdrücklich neu benannte Person in einer
+Supervisor-Frage wird unabhängig von einer vorherigen Supervisor-Frage
+aufgelöst; nur referenzielle Supervisor-Folgefragen übernehmen den passenden
+vorherigen Personenkontext.
 
 Evidence:
 
@@ -250,3 +256,6 @@ Implications:
 - Sichtbare RAG-Fortschrittsanzeigen erscheinen nur, wenn `rag_chat` tatsächlich
   Teil des Retrieval-Plans ist.
 - Ohne eindeutige Supervisor-Evidenz wird keine Führungskraft genannt.
+- Dokumentierte Kontaktwege und aktuelle Personio-Kontakte werden in gemischten
+  Antworten getrennt ausgewiesen. Explizit verlangte E-Mail-Adressen oder
+  Telefonnummern benötigen weiterhin einen exakten freigegebenen Wert.

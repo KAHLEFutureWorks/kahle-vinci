@@ -368,6 +368,48 @@ def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_
     ]
 
 
+def test_consecutive_named_supervisor_question_does_not_reuse_the_previous_subject():
+    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    messages = [
+        {"role": "user", "content": "Wer ist die Führungskraft von Anna Beispiel?"},
+        {"role": "assistant", "content": "Personio-Treffer."},
+        {"role": "user", "content": "Wer ist die Führungskraft von Berta Beispiel?"},
+    ]
+
+    assert candidate_query(messages, messages[-1]["content"]) == ""
+
+
+def test_polite_pronoun_does_not_override_an_explicit_supervisor_subject():
+    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    follow_up = "Können Sie mir die Führungskraft von Berta Beispiel nennen?"
+    messages = [
+        {"role": "user", "content": "Wer ist die Führungskraft von Anna Beispiel?"},
+        {"role": "assistant", "content": "Personio-Treffer."},
+        {"role": "user", "content": follow_up},
+    ]
+
+    assert candidate_query(messages, follow_up) == ""
+
+
+@pytest.mark.parametrize(
+    "follow_up",
+    (
+        "Wer davon ist die Führungskraft?",
+        "Wer ist deren Führungskraft?",
+    ),
+)
+def test_referential_supervisor_follow_up_keeps_the_previous_user_context(follow_up):
+    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    prior_query = "Wer ist Anna Beispiel?"
+    messages = [
+        {"role": "user", "content": prior_query},
+        {"role": "assistant", "content": "Personio-Treffer."},
+        {"role": "user", "content": follow_up},
+    ]
+
+    assert candidate_query(messages, follow_up) == prior_query
+
+
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
     personio_intent = load_personio_directory_intent()
 

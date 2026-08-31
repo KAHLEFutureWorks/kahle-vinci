@@ -327,6 +327,25 @@ def _supervisor_candidate_query(messages: list[dict[str, Any]], query: str) -> s
     if _personio_directory_intent(query) != 'supervisor_lookup':
         return ''
     current = str(query or '').strip()
+    if re.search(
+        r'\b(?:von|für)\s+(?:[A-ZÄÖÜ][\w.\'-]*\s+)'
+        r'{1,3}[A-ZÄÖÜ][\w.\'-]*\b',
+        current,
+    ):
+        return ''
+    folded_current = (
+        current.casefold()
+        .replace('ä', 'a')
+        .replace('ö', 'o')
+        .replace('ü', 'u')
+        .replace('ß', 'ss')
+    )
+    if not re.search(
+        r'\b(?:davon|deren|dessen|diese(?:r|n|m|s)?\s+person|'
+        r'er|sie|ihn|ihm|ihr)\b',
+        folded_current,
+    ):
+        return ''
     prior_user_messages = [
         str(message.get('content') or '').strip()
         for message in messages

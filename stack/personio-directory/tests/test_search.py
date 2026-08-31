@@ -147,6 +147,28 @@ def test_supervisor_follow_up_returns_only_the_explicitly_evidenced_prior_candid
     assert "supervisor_personio_id" not in repr(evidence.claims)
 
 
+def test_supervisor_follow_up_can_use_an_exact_prior_person_lookup():
+    leader = person("1", name="Erika Beispiel", position="Bereichsleitung")
+    report = person(
+        "2",
+        name="Anna Adler",
+        position="Sachbearbeitung",
+        supervisor_personio_id="1",
+    )
+    directory = search([leader, report])
+    supervisor_query = DirectoryQuery(
+        text="Wer ist deren Führungskraft?",
+        intent="supervisor_lookup",
+        user_id="test-user",
+        user_role="user",
+        candidate_query="Wer ist Anna Adler?",
+    )
+
+    evidence = directory.search(supervisor_query)
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+
+
 def test_named_supervisor_question_returns_only_the_explicitly_evidenced_supervisor():
     leader = person("1", name="Erika Beispiel", position="Serviceleitung")
     report = person(
@@ -693,6 +715,28 @@ def test_department_aliases_resolve_the_personnel_department(wording):
 
     evidence = search([personnel, unrelated]).search(
         query(f"Wie erreiche ich das {wording}?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+@pytest.mark.parametrize("wording", ("IT", "EDV"))
+def test_it_department_aliases_match_combined_it_edv_department(wording):
+    matching = person(
+        "1",
+        name="Anna Adler",
+        position="Systemadministration",
+        department="IT / EDV",
+    )
+    unrelated = person(
+        "2",
+        name="Berta Berlin",
+        position="Sachbearbeitung",
+        department="Marketing",
+    )
+
+    evidence = search([matching, unrelated]).search(
+        query(f"Wie erreiche ich die {wording}?", "directory_search")
     )
 
     assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]

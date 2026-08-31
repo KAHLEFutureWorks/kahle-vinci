@@ -253,27 +253,40 @@ def test_shadow_harness_policy_is_identical_for_max_and_future_models():
     )
 
 
-def test_person_questions_use_employee_directory_intent_with_current_rag_adapter():
+@pytest.mark.parametrize(
+    ("query", "expected_tools"),
+    (
+        ("Wer ist Erika Beispiel?", ("personio_directory",)),
+        ("Wer ist Anna Beispiel?", ("personio_directory",)),
+        (
+            "Wer ist unser Ansprechpartner im Service?",
+            ("personio_directory", "rag_chat"),
+        ),
+        (
+            "Wie lautet die dienstliche E-Mail von Erika Beispiel?",
+            ("personio_directory",),
+        ),
+    ),
+)
+def test_person_questions_use_employee_directory_intent_with_current_rag_adapter(
+    query, expected_tools
+):
     harness = load_harness()
-    for query in (
-        "Wer ist Engin Bayir?",
-        "Wer ist Thomas Keller?",
-        "Wer ist unser Ansprechpartner im Service?",
-        "Wie lautet die dienstliche E-Mail von Thomas Keller?",
-    ):
-        decision = harness.build_decision(
-            query=query,
-            resolved_query=query,
-            messages=[],
-            model_id="kahle-vinci-max-thinking",
-            permission_scope={"user_id": "user-1"},
-            rag_result="KAHLE_RAG_RESULT\nFOUND: false",
-        )
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci-max-thinking",
+        permission_scope={"user_id": "user-1"},
+        rag_result="KAHLE_RAG_RESULT\nFOUND: false",
+    )
 
-        assert decision.user_intent.kind == "employee_directory"
-        assert decision.retrieval_plan.required_tools == ("personio_directory",)
-        assert decision.retrieval_plan.required_tool == "personio_directory"
-        assert decision.model_profile["harness_policy"] == "shared"
+    assert decision.user_intent.kind == "employee_directory"
+    assert decision.retrieval_plan.required_tools == expected_tools
+    assert decision.retrieval_plan.required_tool == (
+        "multi_source" if len(expected_tools) > 1 else expected_tools[0]
+    )
+    assert decision.model_profile["harness_policy"] == "shared"
 
 
 @pytest.mark.parametrize(
@@ -716,7 +729,7 @@ def test_retrieval_plan_routes_current_employee_contact_questions_only_to_person
         "Wie erreiche ich den Teiledienst?",
     ),
 )
-def test_organization_area_contact_wordings_route_to_personio(query):
+def test_organization_area_contact_wordings_route_to_personio_and_rag(query):
     harness = load_harness()
 
     plan = harness.plan_retrieval(
@@ -727,11 +740,11 @@ def test_organization_area_contact_wordings_route_to_personio(query):
         {"user_id": "user-1"},
     )
 
-    assert plan.required_tools == ("personio_directory",)
+    assert plan.required_tools == ("personio_directory", "rag_chat")
     assert plan.information_needs[0].kind == "organization_contact"
 
 
-def test_central_organization_contact_requires_rag_evidence():
+def test_central_organization_contact_combines_personio_and_rag_evidence():
     harness = load_harness()
     query = "Wie lautet die zentrale E-Mail-Adresse der Personalabteilung?"
 
@@ -743,8 +756,76 @@ def test_central_organization_contact_requires_rag_evidence():
         {"user_id": "user-1"},
     )
 
-    assert plan.required_tools == ("rag_chat",)
+    assert plan.required_tools == ("personio_directory", "rag_chat")
     assert plan.information_needs[0].kind == "organization_contact"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_tools"),
+    (
+        ("Wie erreiche ich die IT?", ("personio_directory", "rag_chat")),
+        (
+            "Wie ist die E-Mail der Personalabteilung?",
+            ("personio_directory", "rag_chat"),
+        ),
+        (
+            "Wer sind die Ansprechpartner im Marketing?",
+            ("personio_directory", "rag_chat"),
+        ),
+        (
+            "Welche Kontakte gibt es für Bewerbungen?",
+            ("personio_directory", "rag_chat"),
+        ),
+        ("Wer arbeitet in der IT?", ("personio_directory",)),
+        (
+            "Wer ist die Führungskraft von Erika Beispiel?",
+            ("personio_directory",),
+        ),
+        ("Wie läuft der Bewerbungsprozess?", ("rag_chat",)),
+        ("Wohin schicke ich meine Bewerbung?", ("rag_chat",)),
+    ),
+)
+def test_area_contact_source_matrix(query, expected_tools):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == expected_tools
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie erreiche ich Personal?",
+        "Wie erreiche ich das Personalwesen?",
+        "Wie erreiche ich die Personalabteilung?",
+        "Wie erreiche ich den Personalbereich?",
+        "Wie erreiche ich HR?",
+        "Wie erreiche ich die EDV?",
+        "Wie erreiche ich das Marketing?",
+        "Welche Kontakte gibt es für Datenschutz?",
+        "Welche Kontakte gibt es für Krankmeldungen?",
+        "Welche Kontakte gibt es für Karriere?",
+    ),
+)
+def test_organizational_channel_wordings_combine_personio_and_rag(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory", "rag_chat")
 
 
 def test_personio_organization_contact_uses_only_structured_business_contacts():
@@ -778,8 +859,82 @@ def test_personio_organization_contact_uses_only_structured_business_contacts():
         "+49 511 000000",
     )
     assert decision.direct_answer() == (
-        "Im aktuellen Personio-Mitarbeiterverzeichnis:\n\n"
+        "Aktuelle Ansprechpersonen aus Personio:\n\n"
         "- Erika Beispiel – person@example.invalid · +49 511 000000"
+    )
+
+
+def test_mixed_organization_contact_keeps_documented_channel_and_current_people_separate():
+    harness = load_harness()
+    query = "Wie erreiche ich das Marketing?"
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"claim_id\":\"R1C1\",\"source_id\":\"#1\","
+        "\"text\":\"Das dokumentierte Funktionspostfach ist team@example.invalid.\","
+        "\"evidence_span\":\"Das dokumentierte Funktionspostfach ist team@example.invalid.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"doc-1\"}]}"
+    )
+    personio = {
+        "status": "ok",
+        "claims": [{
+            "display_name": "Erika Beispiel",
+            "business_email": "person@example.invalid",
+            "source_id": "P1",
+        }],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-31T10:15:00Z",
+        "stale": False,
+    }
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+        personio_result=personio,
+    )
+
+    assert decision.direct_answer() == (
+        "Dokumentierter Kontaktweg:\n\n"
+        "Das dokumentierte Funktionspostfach ist team@example.invalid. [#1]\n\n"
+        "Aktuelle Ansprechpersonen aus Personio:\n\n"
+        "- Erika Beispiel – person@example.invalid"
+    )
+
+
+def test_general_area_contact_accepts_a_cited_non_literal_contact_path():
+    harness = load_harness()
+    query = "Wie erreiche ich die IT?"
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"claim_id\":\"R1C1\",\"source_id\":\"#1\","
+        "\"text\":\"Die IT ist ausschließlich über das Ticketsystem im Intranet erreichbar.\","
+        "\"evidence_span\":\"Die IT ist ausschließlich über das Ticketsystem im Intranet erreichbar.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"doc-1\"}]}"
+    )
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+    )
+
+    assert decision.evidence_bundle.status == "partially_supported"
+    assert decision.answer_contract.allowed_contact_values == ()
+    assert decision.direct_answer() == (
+        "Dokumentierter Kontaktweg:\n\n"
+        "Die IT ist ausschließlich über das Ticketsystem im Intranet erreichbar. [#1]"
     )
 
 
@@ -894,11 +1049,12 @@ def test_rag_organization_contact_uses_only_an_exact_cited_contact_literal():
         rag_result=rag,
     )
 
-    assert decision.evidence_bundle.status == "supported"
+    assert decision.evidence_bundle.status == "partially_supported"
     assert decision.answer_contract.allowed_contact_values == (
         "team@example.invalid",
     )
     assert decision.direct_answer() == (
+        "Dokumentierter Kontaktweg:\n\n"
         "Der freigegebene Kontakt ist team@example.invalid. [#1]"
     )
 

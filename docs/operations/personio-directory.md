@@ -91,11 +91,13 @@ dann anhand der Personio-Attributbezeichnung explizit korrigiert. Dafür niemals
 Beispielwerte oder vollständige API-Antworten protokollieren.
 
 Eine Folgefrage wie „Wer davon ist die Führungskraft?“ wird nur beantwortet,
-wenn die unmittelbar vorherige reine Verzeichnisfrage erneut genau eine
-Kandidatin oder einen Kandidaten liefert, deren beziehungsweise dessen
-Personio-ID durch die Supervisor-Beziehung mindestens einer anderen gefundenen
-Person explizit bestätigt wird. Fehlt dieser Kontext, fehlt die Beziehung oder
-sind mehrere Personen möglich, bleibt die Antwort bewusst nicht verfügbar.
+wenn die unmittelbar vorherige Verzeichnis- oder exakte Personenfrage erneut
+genau eine Kandidatin oder einen Kandidaten liefert, deren beziehungsweise
+dessen Supervisor-ID eindeutig auflösbar ist. Eine neue Supervisorfrage mit
+einem ausdrücklich genannten vollständigen Namen verwendet diesen aktuellen
+Namen und übernimmt nicht den Kandidaten einer vorherigen Supervisorfrage.
+Fehlt der referenzielle Kontext, fehlt die Beziehung oder sind mehrere Personen
+möglich, bleibt die Antwort bewusst nicht verfügbar.
 Supervisor-Daten werden nicht für Portalrechte oder zusätzliche Wissensrechte
 verwendet.
 
@@ -115,14 +117,24 @@ eine nicht auflösbare Beziehung. Diese Summen belegen die Datenabdeckung,
 ersetzen aber nicht die Prüfung, dass Open WebUI und Personio Directory mit der
 gleichen aktuellen Revision laufen.
 
-Bereichskontakte verwenden dieselbe strukturierte Verzeichnisgrenze. Gängige
+Bereichskontakte verwenden Personio und RAG gemeinsam. Gängige
 kontrollierte Varianten wie `Personalwesen`, `Personalabteilung`,
 `Personalbereich`, `Personal` und `HR` werden auf dieselbe Personio-
 Abteilungsfamilie abgebildet. Exakte vorhandene Bereichsnamen funktionieren
-weiterhin ohne Alias. Unbekannte Bereiche dürfen niemals zu einer ungefilterten
-Personenliste führen. Eine ausdrücklich angefragte zentrale Sammeladresse oder
-Zentralnummer darf nur aus einer freigegebenen RAG-Evidenz mit wortgleichem
-Kontaktwert stammen; fehlt dieser Wert, bleibt die Antwort nicht verfügbar.
+weiterhin ohne Alias; `IT` und `EDV` bilden zusätzlich eine kontrollierte
+gemeinsame Abteilungsvariante. RAG liefert dokumentierte Funktionspostfächer,
+Ticketsysteme oder andere Kontaktwege, Personio aktuelle geschäftliche
+Einzelkontakte. Diese Teile werden getrennt ausgegeben. Reine Mitarbeiterlisten
+bleiben Personio-only, reine Prozess- und Einreichungsfragen RAG-only.
+Unbekannte Bereiche dürfen niemals zu einer ungefilterten Personenliste führen.
+Eine ausdrücklich angefragte E-Mail-Adresse oder Telefonnummer darf nur aus
+einer freigegebenen Evidenz mit wortgleichem Kontaktwert stammen; fehlt dieser
+Wert, bleibt die Antwort nicht verfügbar.
+
+Ein neu hochgeladenes Wissensportal-Dokument steht RAG erst zur Verfügung,
+wenn seine aktuelle Version aktiv veröffentlicht, für die fragende Person
+freigegeben und erfolgreich indexiert wurde. Der sichtbare Upload allein ist
+kein Retrieval-Nachweis.
 
 ## 3. Lokalen Stack kontrolliert starten
 
@@ -226,7 +238,7 @@ Konto mit Rolle `user`, ein Konto mit Rolle `admin` und ein Konto mit Rolle
 `pending` werden benötigt. Reale Personennamen dürfen nur direkt in der
 Oberfläche eingesetzt und nicht in Berichte übernommen werden.
 
-Für jedes verfügbare Vinci-Modell sind diese 23 fachlichen Prüfungen nötig:
+Für jedes verfügbare Vinci-Modell sind diese 25 fachlichen Prüfungen nötig:
 
 1. Eine aktive Person exakt nach vollständigem Namen, Rolle, Standort,
    geschäftlicher Telefonnummer und geschäftlicher E-Mail finden.
@@ -281,8 +293,9 @@ Für jedes verfügbare Vinci-Modell sind diese 23 fachlichen Prüfungen nötig:
     dem Verkauf am Standort Hannover“ prüfen. Verwendet werden darf nur
     `personio_directory`, auch direkt nach einem Rollout.
 21. Einen Bereichskontakt mit den Varianten Personalwesen, Personalabteilung,
-    Personalbereich, Personal und HR abfragen. Jede Variante muss denselben
-    Personio-Bereich verwenden und darf keine RAG-Anzeige zeigen.
+    Personalbereich, Personal und HR sowie IT und EDV abfragen. Jede Frage muss
+    `personio_directory` und `rag_chat` verwenden. Dokumentierte gemeinsame
+    Kontaktwege und aktuelle Personio-Einzelkontakte müssen getrennt erscheinen.
 22. Eine zentrale E-Mail-Adresse und eine zentrale Telefonnummer eines Bereichs
     abfragen, für die in den freigegebenen Quellen kein Kontaktwert steht. Die
     Antwort muss die fehlende verlässliche Kontaktinformation benennen und darf
@@ -290,6 +303,14 @@ Für jedes verfügbare Vinci-Modell sind diese 23 fachlichen Prüfungen nötig:
 23. Dieselben beiden zentralen Kontaktfragen mit einer Testquelle ausführen, die
     einen freigegebenen Kontaktwert enthält. Ausgegeben werden darf nur der
     wortgleiche Wert aus dem zitierten Evidence-Claim.
+24. In einem Chat nacheinander die Führungskraft zweier ausdrücklich benannter
+    Testpersonen abfragen. Die zweite Antwort muss ausschließlich die zweite
+    Person auflösen. Eine höfliche Formulierung mit „Können Sie mir …“ darf
+    ebenfalls keinen vorherigen Kandidaten übernehmen.
+25. Nach einer exakten Personenfrage referenziell nach „deren Führungskraft“
+    fragen. Nur dieser Fall darf den unmittelbar passenden Personenkontext
+    übernehmen und muss weiterhin ausschließlich explizite Personio-
+    Supervisor-Evidenz verwenden.
 
 Wenn der Personio-Bestand keinen passenden Status- oder Kaskadenfall enthält,
 wird der Fall als `pending` dokumentiert. Es werden keine Personio-Daten nur für

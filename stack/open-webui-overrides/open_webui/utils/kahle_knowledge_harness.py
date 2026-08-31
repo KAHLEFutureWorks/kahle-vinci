@@ -30,7 +30,10 @@ _PERSON_NAME_WORD = (
 _ORGANIZATION_UNIT_PATTERN = (
     r"(?:personal(?:wesen|abteilung|bereich)?|hr|"
     r"(?:finanz)?buchhaltung|rechnungslegung|disposition|controlling|"
-    r"marketing|it|verkauf|service|teiledienst)"
+    r"marketing|it|edv|verkauf|service|teiledienst)"
+)
+_FUNCTIONAL_CONTACT_TOPIC_PATTERN = (
+    r"(?:bewerbung(?:en)?|karriere|datenschutz|krankmeldung(?:en)?)"
 )
 _EMAIL_LITERAL = re.compile(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
 _PHONE_LITERAL = re.compile(r"(?<!\w)(?:\+?\d[\d ()/.-]{4,}\d)(?!\w)")
@@ -236,25 +239,28 @@ def _contact_information_requested(query: str) -> bool:
     return bool(
         re.search(
             r"\b(?:e-?mail(?:-adresse)?|telefon(?:nummer)?|durchwahl|"
-            r"kontakt(?:daten|informationen|moglichkeiten)?|erreich\w*)\b",
+            r"kontakt(?:e|daten|informationen|moglichkeiten)?|erreich\w*|"
+            r"ansprechpartner(?:in|innen)?)\b",
             folded,
         )
         or re.search(r"\bin\s+kontakt\b", folded)
     )
 
 
-def _central_organization_contact_question(query: str) -> bool:
+def _organizational_contact_question(query: str) -> bool:
+    """Return whether both documented channels and current people may answer."""
     folded = _fold(query)
+    if not _contact_information_requested(folded):
+        return False
     return bool(
         _organization_unit_reference(folded)
-        and _contact_information_requested(folded)
-        and re.search(r"\b(?:zentral\w*|allgemein\w*|sammel\w*)\b", folded)
+        or re.search(rf"\b{_FUNCTIONAL_CONTACT_TOPIC_PATTERN}\b", folded)
     )
 
 
 def _organization_unit_directory_question(query: str) -> bool:
     folded = _fold(query)
-    if not _organization_unit_reference(folded) or _central_organization_contact_question(folded):
+    if not _organization_unit_reference(folded):
         return False
     return bool(
         _contact_information_requested(folded)
@@ -322,6 +328,23 @@ def _contact_value_channels(values: tuple[str, ...]) -> frozenset[str]:
     )
 
 
+def _cited_contact_instructions(evidence: EvidenceBundle) -> tuple[tuple[str, str], ...]:
+    instructions: list[tuple[str, str]] = []
+    for claim in evidence.supported_claims:
+        if not isinstance(claim, dict):
+            continue
+        text = str(claim.get("evidence_span") or claim.get("text") or "").strip()
+        source_id = str(claim.get("source_id") or "").strip()
+        folded = _fold(text)
+        if text and source_id and re.search(
+            r"\b(?:ticket(?:system)?|intranet|funktionspostfach|postfach|"
+            r"kontakt|erreich\w*|wenden)\b",
+            folded,
+        ):
+            instructions.append((text, source_id))
+    return tuple(dict.fromkeys(instructions))
+
+
 def _apply_contact_evidence_requirement(
     query: str, evidence: EvidenceBundle
 ) -> tuple[EvidenceBundle, tuple[str, ...]]:
@@ -330,7 +353,11 @@ def _apply_contact_evidence_requirement(
         return evidence, ()
     allowed_values = _contact_values(evidence)
     available = _contact_value_channels(allowed_values)
-    satisfied = bool(available) if "any" in requested else requested.issubset(available)
+    satisfied = (
+        bool(available) or bool(_cited_contact_instructions(evidence))
+        if "any" in requested
+        else requested.issubset(available)
+    )
     if evidence.status == "unsupported" or not satisfied:
         return (
             EvidenceBundle(
@@ -351,38 +378,48 @@ def _organization_contact_answer(
     query: str, retrieval_plan: RetrievalPlan, evidence: EvidenceBundle
 ) -> str:
     channels = _requested_contact_channels(query)
-    if retrieval_plan.required_tools == ("personio_directory",):
-        entries = []
-        for claim in evidence.supported_claims:
-            if not isinstance(claim, dict):
-                continue
-            name = str(claim.get("display_name") or "").strip()
-            email = str(claim.get("business_email") or claim.get("email") or "").strip()
-            phone = str(claim.get("business_phone") or claim.get("phone") or "").strip()
-            contacts = []
-            if email and ("email" in channels or "any" in channels):
-                contacts.append(email)
-            if phone and ("phone" in channels or "any" in channels):
-                contacts.append(phone)
-            if name and contacts:
-                entries.append(f"- {name} – {' · '.join(contacts)}")
-        if entries:
-            return "Im aktuellen Personio-Mitarbeiterverzeichnis:\n\n" + "\n".join(entries)
-        return "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
+    del retrieval_plan
+    people = []
+    for claim in evidence.supported_claims:
+        if not isinstance(claim, dict):
+            continue
+        name = str(claim.get("display_name") or "").strip()
+        email = str(claim.get("business_email") or claim.get("email") or "").strip()
+        phone = str(claim.get("business_phone") or claim.get("phone") or "").strip()
+        contacts = []
+        if email and ("email" in channels or "any" in channels):
+            contacts.append(email)
+        if phone and ("phone" in channels or "any" in channels):
+            contacts.append(phone)
+        if name and contacts:
+            people.append(f"- {name} – {' · '.join(contacts)}")
 
-    supported = []
+    documented = []
     allowed = set(_contact_values(evidence))
     for claim in evidence.supported_claims:
         if not isinstance(claim, dict):
             continue
         text = str(claim.get("evidence_span") or claim.get("text") or "").strip()
         source_id = str(claim.get("source_id") or "").strip()
-        if text and source_id and any(value in text for value in allowed):
-            supported.append(f"{text} [{source_id}]")
-    return (
-        "\n".join(dict.fromkeys(supported))
-        if supported
-        else "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
+        if text and source_id and (
+            any(value in text for value in allowed)
+            or (text, source_id) in _cited_contact_instructions(evidence)
+        ):
+            documented.append(f"{text} [{source_id}]")
+
+    sections = []
+    if documented:
+        sections.append(
+            "Dokumentierter Kontaktweg:\n\n"
+            + "\n".join(dict.fromkeys(documented))
+        )
+    if people:
+        sections.append(
+            "Aktuelle Ansprechpersonen aus Personio:\n\n"
+            + "\n".join(dict.fromkeys(people))
+        )
+    return "\n\n".join(sections) or (
+        "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
     )
 
 
@@ -725,8 +762,8 @@ def _directory_information_need(query: str) -> bool:
     folded = _fold(query)
     if _functional_responsibility_question(folded):
         return False
-    if _central_organization_contact_question(folded):
-        return False
+    if _organizational_contact_question(folded):
+        return True
     if _organization_unit_directory_question(folded):
         return True
     if _explicit_onboarding_people_request(folded):
@@ -808,7 +845,7 @@ def _explicit_onboarding_people_request(folded_query: str) -> bool:
 
 def _rag_information_need(query: str) -> bool:
     folded = _fold(query)
-    if _central_organization_contact_question(folded):
+    if _organizational_contact_question(folded):
         return True
     if _directory_information_need(query) and re.search(
         r"\b(?:erreich\w*|kontakt(?:daten)?|telefon(?:nummer)?|durchwahl|e-?mail)\b",
@@ -881,19 +918,16 @@ def _information_needs(query: str) -> tuple[InformationNeed, ...]:
                 evidence_capabilities=("approved_functional_responsibility",),
             ),
         )
-    if _organization_unit_directory_question(folded) or _central_organization_contact_question(folded):
-        directory_unit = _organization_unit_directory_question(folded)
+    if _organizational_contact_question(folded):
         return (
             InformationNeed(
                 kind="organization_contact",
-                domain="employee_directory" if directory_unit else "internal_organization",
-                document_types=() if directory_unit else (
+                domain="internal_organization",
+                document_types=(
                     "contact_directory",
                     "responsibility_matrix",
                 ),
-                evidence_capabilities=("current_person_record",)
-                if directory_unit
-                else ("contact_details",),
+                evidence_capabilities=("current_person_record", "contact_details"),
             ),
         )
     if relation_target:

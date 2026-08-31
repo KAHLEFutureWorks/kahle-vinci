@@ -80,6 +80,7 @@ _ROLE_VARIANTS: dict[str, tuple[str, ...]] = {
 }
 _DEPARTMENT_VARIANTS: dict[str, tuple[str, ...]] = {
     "personal": ("personal", "human resources"),
+    "it": ("it", "edv"),
     "buchhaltung": ("buchhaltung",),
     "disposition": ("disposition",),
     "rechnungslegung": ("rechnungslegung",),
@@ -143,13 +144,13 @@ def _organization_unit_contact_question(query: str) -> bool:
         re.search(
             r"\b(?:personal(?:wesen|abteilung|bereich)?|hr|"
             r"(?:finanz)?buchhaltung|rechnungslegung|disposition|controlling|"
-            r"marketing|it|verkauf|service|teiledienst)\b",
+            r"marketing|it|edv|verkauf|service|teiledienst)\b",
             query,
         )
         and (
             re.search(
                 r"\b(?:e-?mail|telefon(?:nummer)?|durchwahl|"
-                r"kontakt(?:daten)?|erreich\w*)\b",
+                r"kontakt(?:e|daten)?|erreich\w*|ansprechpartner(?:in|innen)?)\b",
                 query,
             )
             or re.search(r"\bin\s+kontakt\b", query)
@@ -256,15 +257,20 @@ class DirectorySearch:
             return ()
         candidate_intent = classify_directory_query(candidate_text)
         if candidate_intent not in {
+            "person_lookup",
             "directory_search",
             "onboarding_search",
             "supervisor_lookup",
         }:
             return ()
-        candidates = self._directory_candidates(
-            candidate_text,
-            people,
-            ignore_unstructured_terms=candidate_intent == "onboarding_search",
+        candidates = (
+            self._exact_person_matches(candidate_text, people)
+            if candidate_intent == "person_lookup"
+            else self._directory_candidates(
+                candidate_text,
+                people,
+                ignore_unstructured_terms=candidate_intent == "onboarding_search",
+            )
         )
         people_by_id = {person.personio_id: person for person in people}
         supervisor_ids = {
@@ -584,6 +590,8 @@ def _add_controlled_variants(
                 )
             )
             if department == "personal"
+            else bool(re.search(r"\b(?:it|edv)\b", query))
+            if department == "it"
             else bool(re.search(rf"\b{re.escape(department)}\b", query))
         )
         if requested:
