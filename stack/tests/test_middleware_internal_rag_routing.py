@@ -453,6 +453,21 @@ def test_current_employee_contact_questions_use_directory_intents(query, expecte
     assert personio_intent(query) == expected
 
 
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie erreiche ich das Personalwesen?",
+        "Wie komme ich mit der Personalabteilung in Kontakt?",
+        "Gib mir den Kontakt zum Personalbereich.",
+        "Wie erreiche ich HR?",
+    ),
+)
+def test_organization_area_contact_uses_directory_intent(query):
+    personio_intent = load_personio_directory_intent()
+
+    assert personio_intent(query) == "directory_search"
+
+
 def test_german_wie_haengen_question_uses_person_lookup_intent():
     personio_intent = load_personio_directory_intent()
 

@@ -15,7 +15,9 @@
   padding: 9px 13px;
   text-decoration: none;
   font-size: 12px;
+  font-family: inherit;
   font-weight: 750;
+  cursor: pointer;
   white-space: nowrap;
   transition: background 0.15s, border-color 0.15s;
 }

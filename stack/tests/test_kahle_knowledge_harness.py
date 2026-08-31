@@ -699,6 +699,240 @@ def test_retrieval_plan_routes_current_employee_contact_questions_only_to_person
     assert plan.required_tools == ("personio_directory",)
 
 
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie erreiche ich das Personalwesen?",
+        "Wie komme ich mit der Personalabteilung in Kontakt?",
+        "Gib mir den Kontakt zum Personalbereich.",
+        "Wie erreiche ich Personal?",
+        "Wie erreiche ich HR?",
+        "Wie erreiche ich die Buchhaltung?",
+        "Wie erreiche ich die Disposition?",
+        "Wie erreiche ich das Marketing?",
+        "Wie erreiche ich die IT?",
+        "Wie erreiche ich den Verkauf?",
+        "Wie erreiche ich den Service?",
+        "Wie erreiche ich den Teiledienst?",
+    ),
+)
+def test_organization_area_contact_wordings_route_to_personio(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+    assert plan.information_needs[0].kind == "organization_contact"
+
+
+def test_central_organization_contact_requires_rag_evidence():
+    harness = load_harness()
+    query = "Wie lautet die zentrale E-Mail-Adresse der Personalabteilung?"
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("rag_chat",)
+    assert plan.information_needs[0].kind == "organization_contact"
+
+
+def test_personio_organization_contact_uses_only_structured_business_contacts():
+    harness = load_harness()
+    query = "Wie erreiche ich das Personalwesen?"
+    personio = {
+        "status": "ok",
+        "claims": [{
+            "display_name": "Erika Beispiel",
+            "business_email": "person@example.invalid",
+            "business_phone": "+49 511 000000",
+            "source_id": "P1",
+        }],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-31T10:15:00Z",
+        "stale": False,
+    }
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result="",
+        personio_result=personio,
+    )
+
+    assert decision.answer_contract.allowed_contact_values == (
+        "person@example.invalid",
+        "+49 511 000000",
+    )
+    assert decision.direct_answer() == (
+        "Im aktuellen Personio-Mitarbeiterverzeichnis:\n\n"
+        "- Erika Beispiel – person@example.invalid · +49 511 000000"
+    )
+
+
+def test_personio_organization_contact_requires_the_requested_contact_channel():
+    harness = load_harness()
+    query = "Wie lautet die E-Mail-Adresse der Personalabteilung?"
+    personio = {
+        "status": "ok",
+        "claims": [{
+            "display_name": "Erika Beispiel",
+            "business_phone": "+49 511 000000",
+            "source_id": "P1",
+        }],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-31T10:15:00Z",
+        "stale": False,
+    }
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result="",
+        personio_result=personio,
+    )
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.answer_contract.allowed_contact_values == ()
+    assert decision.direct_answer() == (
+        "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
+    )
+
+
+def test_rag_organization_contact_without_literal_contact_evidence_is_unsupported():
+    harness = load_harness()
+    query = "Wie lautet die zentrale E-Mail-Adresse der Personalabteilung?"
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"claim_id\":\"R1C1\",\"source_id\":\"#1\","
+        "\"text\":\"Die Personalabteilung bearbeitet interne Anfragen.\","
+        "\"evidence_span\":\"Die Personalabteilung bearbeitet interne Anfragen.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"doc-1\"}]}"
+    )
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+    )
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.direct_answer() == (
+        "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
+    )
+
+
+def test_rag_contact_evidence_never_treats_a_document_date_as_a_phone_number():
+    harness = load_harness()
+    query = "Wie lautet die zentrale Telefonnummer der Personalabteilung?"
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"claim_id\":\"R1C1\",\"source_id\":\"#1\","
+        "\"text\":\"Der dokumentierte Stand ist 31.08.2026.\","
+        "\"evidence_span\":\"Der dokumentierte Stand ist 31.08.2026.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"doc-1\"}]}"
+    )
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+    )
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_rag_organization_contact_uses_only_an_exact_cited_contact_literal():
+    harness = load_harness()
+    query = "Wie lautet die zentrale E-Mail-Adresse der Personalabteilung?"
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"claim_id\":\"R1C1\",\"source_id\":\"#1\","
+        "\"text\":\"Der freigegebene Kontakt ist team@example.invalid.\","
+        "\"evidence_span\":\"Der freigegebene Kontakt ist team@example.invalid.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"doc-1\"}]}"
+    )
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+    )
+
+    assert decision.evidence_bundle.status == "supported"
+    assert decision.answer_contract.allowed_contact_values == (
+        "team@example.invalid",
+    )
+    assert decision.direct_answer() == (
+        "Der freigegebene Kontakt ist team@example.invalid. [#1]"
+    )
+
+
+def test_previous_assistant_contact_value_is_never_treated_as_evidence():
+    harness = load_harness()
+    query = "Woher hast du diese E-Mail-Adresse?"
+    rag = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":["
+        "{\"claim_id\":\"R1C1\",\"source_id\":\"#1\","
+        "\"text\":\"Die Quelle beschreibt nur den Aufgabenbereich.\","
+        "\"evidence_span\":\"Die Quelle beschreibt nur den Aufgabenbereich.\"}],"
+        "\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"doc-1\"}]}"
+    )
+
+    decision = harness.build_decision(
+        query=query,
+        resolved_query="Wie lautet die zentrale E-Mail-Adresse der Personalabteilung?",
+        messages=[
+            {"role": "assistant", "content": "Nutze invented@example.invalid."},
+            {"role": "user", "content": query},
+        ],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=rag,
+    )
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert "invented@example.invalid" not in decision.answer_prompt()
+
+
 def test_merge_evidence_keeps_personio_current_data_and_rag_project_relation():
     harness = load_harness()
     rag = (

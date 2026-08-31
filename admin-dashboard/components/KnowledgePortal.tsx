@@ -11,7 +11,6 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type ReactNode,
 } from "react";
-import Link from "next/link";
 import {
   AlertTriangle,
   Archive,
@@ -1032,10 +1031,15 @@ function KnowledgePortalContent() {
           <small>Wissensportal</small>
         </div>
         <div className="wp-header-actions">
-          <Link className="wp-back-link" href="/" aria-label="Zurück zu KAHLE-Vinci">
+          <button
+            type="button"
+            className="wp-back-link"
+            onClick={() => window.location.assign("/")}
+            aria-label="Zurück zu KAHLE-Vinci"
+          >
             <ArrowLeft size={17} />
             <span>Zurück zu KAHLE-Vinci</span>
-          </Link>
+          </button>
           <div className="wp-user">
             <span>{session.display_name}</span>
             <small>

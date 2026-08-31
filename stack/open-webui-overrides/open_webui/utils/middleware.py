@@ -256,7 +256,13 @@ def _plan_kahle_retrieval_gate(
     if 'personio_directory' in required_tools:
         return plan
     if (
-        legacy_rag_request
+        (
+            legacy_rag_request
+            or any(
+                getattr(need, 'kind', '') == 'organization_contact'
+                for need in tuple(getattr(plan, 'information_needs', ()) or ())
+            )
+        )
         and 'rag_chat' in required_tools
         and 'rag_chat' in tools_dict
     ):

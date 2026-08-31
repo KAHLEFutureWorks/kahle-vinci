@@ -79,6 +79,7 @@ _ROLE_VARIANTS: dict[str, tuple[str, ...]] = {
     "verkaufer": ("verkaufer", "automobilverkaufer", "verkauf"),
 }
 _DEPARTMENT_VARIANTS: dict[str, tuple[str, ...]] = {
+    "personal": ("personal", "human resources"),
     "buchhaltung": ("buchhaltung",),
     "disposition": ("disposition",),
     "rechnungslegung": ("rechnungslegung",),
@@ -128,11 +129,32 @@ def classify_directory_query(text: str) -> DirectoryIntent:
         return "coworker_lookup"
     if _is_controlled_role_description(normalized):
         return "directory_search"
+    if _organization_unit_contact_question(normalized):
+        return "directory_search"
     if _PERSON_LOOKUP_PHRASE.search(normalized) or _SHORT_PERSON_QUESTION.fullmatch(
         normalized
     ):
         return "person_lookup"
     return "directory_search"
+
+
+def _organization_unit_contact_question(query: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:personal(?:wesen|abteilung|bereich)?|hr|"
+            r"(?:finanz)?buchhaltung|rechnungslegung|disposition|controlling|"
+            r"marketing|it|verkauf|service|teiledienst)\b",
+            query,
+        )
+        and (
+            re.search(
+                r"\b(?:e-?mail|telefon(?:nummer)?|durchwahl|"
+                r"kontakt(?:daten)?|erreich\w*)\b",
+                query,
+            )
+            or re.search(r"\bin\s+kontakt\b", query)
+        )
+    )
 
 
 class DirectorySearch:
@@ -554,7 +576,17 @@ def _add_controlled_variants(
     if re.search(r"\bservicekr(?:a|ae)ft(?:e|en)?\b", query):
         _add_matching_field_values(filters, "department", people, ("service",))
     for department, variants in _DEPARTMENT_VARIANTS.items():
-        if re.search(rf"\b{re.escape(department)}\b", query):
+        requested = (
+            bool(
+                re.search(
+                    r"\b(?:personal(?:wesen|abteilung|bereich)?|hr)\b",
+                    query,
+                )
+            )
+            if department == "personal"
+            else bool(re.search(rf"\b{re.escape(department)}\b", query))
+        )
+        if requested:
             _add_matching_field_values(filters, "department", people, variants)
     if re.search(r"\bverkauf\b", query):
         # "im Verkauf" denotes the controlled sales-role family. Department

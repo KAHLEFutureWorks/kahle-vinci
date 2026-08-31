@@ -108,6 +108,22 @@ fehlende oder unbekannte Supervisor-IDs bleiben ohne Namensausgabe. Ein
 kontrollierter einzelner Zeichenfehler im Wort „Führungskraft“ wird ebenfalls
 als Supervisorfrage behandelt und darf niemals zu RAG zurückfallen.
 
+Der aggregierte Produktionsnachweis vom 31. August 2026 meldete API v1, ein
+aktives Supervisor-Mapping, 402 indexierte Personen, 400 vorhandene
+Supervisor-Beziehungen, 399 innerhalb des freigegebenen Index auflösbare und
+eine nicht auflösbare Beziehung. Diese Summen belegen die Datenabdeckung,
+ersetzen aber nicht die Prüfung, dass Open WebUI und Personio Directory mit der
+gleichen aktuellen Revision laufen.
+
+Bereichskontakte verwenden dieselbe strukturierte Verzeichnisgrenze. Gängige
+kontrollierte Varianten wie `Personalwesen`, `Personalabteilung`,
+`Personalbereich`, `Personal` und `HR` werden auf dieselbe Personio-
+Abteilungsfamilie abgebildet. Exakte vorhandene Bereichsnamen funktionieren
+weiterhin ohne Alias. Unbekannte Bereiche dürfen niemals zu einer ungefilterten
+Personenliste führen. Eine ausdrücklich angefragte zentrale Sammeladresse oder
+Zentralnummer darf nur aus einer freigegebenen RAG-Evidenz mit wortgleichem
+Kontaktwert stammen; fehlt dieser Wert, bleibt die Antwort nicht verfügbar.
+
 ## 3. Lokalen Stack kontrolliert starten
 
 Die frische PowerShell enthält die beiden Personio-Werte bereits im
@@ -131,6 +147,19 @@ $composeArgs = @(
 docker compose @composeArgs ps personio-directory open-webui caddy-local
 docker compose @composeArgs logs --tail=100 personio-directory
 ```
+
+Nach Änderungen an der Personio-Suche oder am Knowledge Harness müssen beide
+betroffenen Laufzeiten neu erstellt werden. Ein alter lokaler Container ist
+kein gültiger Abnahmenachweis, selbst wenn er noch `healthy` meldet:
+
+```powershell
+docker compose @composeArgs up -d --build --force-recreate personio-directory open-webui
+docker compose @composeArgs ps personio-directory open-webui
+```
+
+Der sichtbare Personio-Synchronisationszeitpunkt muss zum neu aufgebauten
+Testlauf passen. Eine Antwort aus einem älteren Index wird nur als
+Stale-/Rollback-Test gewertet, nicht als aktuelle Funktionsabnahme.
 
 `personio-directory` muss nach dem ersten erfolgreichen Sync `healthy` sein.
 Die Logs dürfen nur technische, sanitierte Fehlercodes enthalten. Der erste
@@ -197,7 +226,7 @@ Konto mit Rolle `user`, ein Konto mit Rolle `admin` und ein Konto mit Rolle
 `pending` werden benötigt. Reale Personennamen dürfen nur direkt in der
 Oberfläche eingesetzt und nicht in Berichte übernommen werden.
 
-Für jedes verfügbare Vinci-Modell sind diese 20 fachlichen Prüfungen nötig:
+Für jedes verfügbare Vinci-Modell sind diese 23 fachlichen Prüfungen nötig:
 
 1. Eine aktive Person exakt nach vollständigem Namen, Rolle, Standort,
    geschäftlicher Telefonnummer und geschäftlicher E-Mail finden.
@@ -251,6 +280,16 @@ Für jedes verfügbare Vinci-Modell sind diese 20 fachlichen Prüfungen nötig:
 20. Eine reine Verkaufsliste mit der Formulierung „Zeige mir die Mitarbeiter aus
     dem Verkauf am Standort Hannover“ prüfen. Verwendet werden darf nur
     `personio_directory`, auch direkt nach einem Rollout.
+21. Einen Bereichskontakt mit den Varianten Personalwesen, Personalabteilung,
+    Personalbereich, Personal und HR abfragen. Jede Variante muss denselben
+    Personio-Bereich verwenden und darf keine RAG-Anzeige zeigen.
+22. Eine zentrale E-Mail-Adresse und eine zentrale Telefonnummer eines Bereichs
+    abfragen, für die in den freigegebenen Quellen kein Kontaktwert steht. Die
+    Antwort muss die fehlende verlässliche Kontaktinformation benennen und darf
+    weder Adresse noch Nummer ergänzen.
+23. Dieselben beiden zentralen Kontaktfragen mit einer Testquelle ausführen, die
+    einen freigegebenen Kontaktwert enthält. Ausgegeben werden darf nur der
+    wortgleiche Wert aus dem zitierten Evidence-Claim.
 
 Wenn der Personio-Bestand keinen passenden Status- oder Kaskadenfall enthält,
 wird der Fall als `pending` dokumentiert. Es werden keine Personio-Daten nur für

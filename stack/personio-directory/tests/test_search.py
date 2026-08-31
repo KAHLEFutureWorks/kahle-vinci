@@ -164,6 +164,32 @@ def test_named_supervisor_question_returns_only_the_explicitly_evidenced_supervi
     assert "Anna Adler" not in [claim["display_name"] for claim in evidence.claims]
 
 
+@pytest.mark.parametrize(
+    ("stored_name", "query_name"),
+    (
+        ("Jana Janßen", "Jana Janssen"),
+        ("Jana Marie Beispiel", "Jana Beispiel"),
+    ),
+)
+def test_named_supervisor_resolves_controlled_preferred_name_variants(
+    stored_name: str, query_name: str
+):
+    leader = person("1", name="Erika Beispiel", position="Bereichsleitung")
+    report = person(
+        "2",
+        name=stored_name,
+        first_name="Jana",
+        last_name=stored_name.split()[-1],
+        supervisor_personio_id="1",
+    )
+
+    evidence = search([leader, report]).search(
+        query(f"Wer ist die Führungskraft von {query_name}?")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]
+
+
 def test_named_supervisor_question_without_explicit_supervisor_stays_fail_closed():
     employee = person("1", name="Anna Adler")
 
@@ -639,6 +665,47 @@ def test_controlled_department_short_forms_match_compound_department_values(text
     evidence = search([matching, unrelated]).search(query(text, "directory_search"))
 
     assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+@pytest.mark.parametrize(
+    "wording",
+    (
+        "Personalwesen",
+        "Personalabteilung",
+        "Personalbereich",
+        "Personal",
+        "HR",
+    ),
+)
+def test_department_aliases_resolve_the_personnel_department(wording):
+    personnel = person(
+        "1",
+        name="Anna Adler",
+        position="Personalreferentin",
+        department="Personalmanagement",
+    )
+    unrelated = person(
+        "2",
+        name="Berta Berlin",
+        position="Sachbearbeitung",
+        department="Finanzbuchhaltung",
+    )
+
+    evidence = search([personnel, unrelated]).search(
+        query(f"Wie erreiche ich das {wording}?", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Anna Adler"]
+
+
+def test_unknown_organization_unit_never_degrades_to_an_unfiltered_directory_list():
+    evidence = search([
+        person("1", name="Anna Adler", department="Personalmanagement"),
+        person("2", name="Berta Berlin", department="Finanzbuchhaltung"),
+    ]).search(query("Wie erreiche ich die Fantasieabteilung?", "directory_search"))
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
 
 
 @pytest.mark.parametrize(
