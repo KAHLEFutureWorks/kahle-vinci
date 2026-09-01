@@ -454,6 +454,34 @@ def test_pre_rerank_filter_consumes_planned_capabilities_when_available():
     assert [point["payload"]["title"] for point in selected] == ["Anleitung"]
 
 
+def test_organization_contact_filter_applies_only_rag_capabilities():
+    candidates = [
+        {"payload": {
+            "title": "Wichtige Funktionspostfächer und Kontakte",
+            "evidence_capabilities": ["contact_details"],
+            "classification_status": "inferred",
+            "classification_confidence": .95,
+        }},
+        {"payload": {
+            "title": "Allgemeine interne Information",
+            "evidence_capabilities": ["factual_support"],
+            "classification_status": "inferred",
+            "classification_confidence": .95,
+        }},
+    ]
+
+    selected = module.pre_rerank_metadata_filter(
+        "Wie erreiche ich das Marketing?",
+        candidates,
+        information_needs=[{
+            "kind": "organization_contact",
+            "evidence_capabilities": ["current_person_record", "contact_details"],
+        }],
+    )
+
+    assert selected == candidates[:1]
+
+
 def test_system_usage_location_plan_rejects_unrelated_location_document():
     candidates = [
         {"payload": {"title": "Systemlandkarte", "evidence_capabilities": ["system_overview"],

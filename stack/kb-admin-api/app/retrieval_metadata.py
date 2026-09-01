@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-CLASSIFIER_VERSION = "kahle.retrieval-metadata.v2"
+CLASSIFIER_VERSION = "kahle.retrieval-metadata.v3"
 DOMAINS = {
     "knowledge_governance", "data_protection", "internal_systems",
     "employee_directory", "internal_processes", "internal_locations",
@@ -63,6 +63,7 @@ class RetrievalMetadataClassifier:
     def classify(self, title: str, markdown: str) -> RetrievalMetadata:
         combined = f"{title}\n{markdown}"
         folded = _fold(combined)
+        folded_title = _fold(title)
 
         opening_hours = bool(
             re.search(r"\b(?:offnungszeiten|oeffnungszeiten|offnungszeit|oeffnungszeit)\b", folded)
@@ -72,6 +73,13 @@ class RetrievalMetadataClassifier:
             )
         )
         location_profile = "standort" in folded and opening_hours
+        email_count = len(
+            re.findall(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", combined)
+        )
+        contact_directory = bool(
+            email_count >= 2
+            and any(term in folded_title for term in ("funktionspostfach", "kontakt"))
+        )
 
         if location_profile:
             domain = "internal_locations"
@@ -80,6 +88,8 @@ class RetrievalMetadataClassifier:
             or ("dokument" in folded and "freigab" in folded)
         ):
             domain = "knowledge_governance"
+        elif contact_directory:
+            domain = "employee_directory"
         elif any(term in folded for term in ("datenschutz", "werbewiderspruch", "kundensperre")):
             domain = "data_protection"
         elif any(term in folded for term in ("system", "software", "anwendung", "dms")):
@@ -112,6 +122,8 @@ class RetrievalMetadataClassifier:
 
         if location_profile:
             document_type = "location_profile"
+        elif contact_directory:
+            document_type = "contact_directory"
         elif "arbeitsanweisung" in folded or (procedure and approval_workflow):
             document_type = "work_instruction"
         elif procedure or "prozessbeschreibung" in folded:
@@ -132,7 +144,7 @@ class RetrievalMetadataClassifier:
             capabilities.append("procedure")
         if document_type == "system_overview" and not procedure:
             capabilities.append("system_overview")
-        if domain == "employee_directory":
+        if contact_directory or domain == "employee_directory":
             capabilities.append("contact_details")
         if self.relations(markdown):
             capabilities.append("explicit_relationship")
@@ -309,11 +321,19 @@ class RetrievalMetadataStore:
         relations = self.classifier.relations(markdown)
         with self._connect() as db:
             current = db.execute(
-                "SELECT content_sha256,classifier_version FROM document_retrieval_metadata "
+                "SELECT content_sha256,classifier_version,classification_status "
+                "FROM document_retrieval_metadata "
                 "WHERE version_id=?",
                 (version_id,),
             ).fetchone()
-            if current and current["content_sha256"] == digest and current["classifier_version"] == CLASSIFIER_VERSION:
+            if (
+                current
+                and current["content_sha256"] == digest
+                and (
+                    current["classifier_version"] == CLASSIFIER_VERSION
+                    or current["classification_status"] == "confirmed"
+                )
+            ):
                 return False
             db.execute(
                 """
@@ -333,7 +353,9 @@ class RetrievalMetadataStore:
                     classifier_version=excluded.classifier_version,
                     confidence=excluded.confidence,
                     content_sha256=excluded.content_sha256,
-                    classified_at=excluded.classified_at
+                    classified_at=excluded.classified_at,
+                    confirmed_by_user_id=NULL,
+                    confirmed_at=NULL
                 """,
                 (
                     version_id,
@@ -389,14 +411,17 @@ class RetrievalMetadataStore:
             if dry_run:
                 with self._connect() as db:
                     current = db.execute(
-                        "SELECT content_sha256,classifier_version "
+                        "SELECT content_sha256,classifier_version,classification_status "
                         "FROM document_retrieval_metadata WHERE version_id=?",
                         (row["version_id"],),
                     ).fetchone()
                 changed = not (
                     current
                     and current["content_sha256"] == digest
-                    and current["classifier_version"] == CLASSIFIER_VERSION
+                    and (
+                        current["classifier_version"] == CLASSIFIER_VERSION
+                        or current["classification_status"] == "confirmed"
+                    )
                 )
             else:
                 changed = self.classify_version(

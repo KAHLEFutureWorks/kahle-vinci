@@ -16,6 +16,8 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
 
 $secretsModule = Join-Path $PSScriptRoot "secrets\KvCredentialManager.psm1"
 Import-Module $secretsModule -Force
+$runtimeModule = Join-Path $PSScriptRoot "StackRuntime.psm1"
+Import-Module $runtimeModule -Force
 
 # A user-scoped token added after Codex/PowerShell was started is not present in
 # the inherited process environment. Import it explicitly so Compose can prefer
@@ -105,6 +107,47 @@ if (-not $NoEdge) {
 }
 
 try {
+  $composeConfigJson = & docker @composeFiles config --format json
+  if ($LASTEXITCODE -ne 0) {
+    throw "docker compose config failed with exit code $LASTEXITCODE"
+  }
+  $composeConfig = ConvertFrom-JsonDocument -Lines $composeConfigJson
+  $expectedContainerNames = @(
+    $composeConfig.services.PSObject.Properties |
+      ForEach-Object { [string]$_.Value.container_name } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  )
+  $composeProject = [Environment]::GetEnvironmentVariable("COMPOSE_PROJECT_NAME")
+  if ([string]::IsNullOrWhiteSpace($composeProject)) {
+    $composeProject = Split-Path (Split-Path $composeFile -Parent) -Leaf
+  }
+  $existingContainers = @(
+    foreach ($containerName in $expectedContainerNames) {
+      $inspectJson = & docker inspect $containerName 2>$null
+      if ($LASTEXITCODE -ne 0) {
+        continue
+      }
+      $container = @(ConvertFrom-JsonDocument -Lines $inspectJson)[0]
+      [PSCustomObject]@{
+        Name = $containerName
+        Project = Get-ContainerComposeProject -Container $container
+      }
+    }
+  )
+  $foreignContainers = @(
+    Find-ForeignContainerNames `
+      -Containers $existingContainers `
+      -ComposeProject $composeProject
+  )
+  if ($foreignContainers.Count -gt 0) {
+    throw (
+      "Container name conflict before Compose start: " +
+      ($foreignContainers -join ", ") +
+      ". Remove or rename these foreign containers explicitly, then rerun. " +
+      "No containers were changed."
+    )
+  }
+
   if ($Pull) {
     & docker @composeFiles pull --ignore-buildable
     if ($LASTEXITCODE -ne 0) {
@@ -123,6 +166,40 @@ try {
   & docker @upArgs
   if ($LASTEXITCODE -ne 0) {
     throw "docker compose up failed with exit code $LASTEXITCODE"
+  }
+
+  $availableRuntimeServices = @(
+    $composeConfig.services.PSObject.Properties | ForEach-Object { $_.Name }
+  )
+  $requiredRuntimeServices = @(
+    Select-RequiredRuntimeServices -AvailableServices $availableRuntimeServices
+  )
+  $unreadyServices = @("runtime status not checked")
+  for ($attempt = 0; $attempt -lt 60; $attempt++) {
+    $serviceStatusJson = & docker @composeFiles ps --format json
+    if ($LASTEXITCODE -ne 0) {
+      throw "docker compose ps failed with exit code $LASTEXITCODE"
+    }
+    $serviceStatus = @(
+      $serviceStatusJson |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { $_ | ConvertFrom-Json }
+    )
+    $unreadyServices = @(
+      Get-UnreadyRequiredServices `
+        -Services $serviceStatus `
+        -RequiredServices $requiredRuntimeServices
+    )
+    if ($unreadyServices.Count -eq 0) {
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+  if ($unreadyServices.Count -gt 0) {
+    throw (
+      "Local stack started incompletely. Required services not ready: " +
+      ($unreadyServices -join ", ")
+    )
   }
 } finally {
   foreach ($name in $requiredSecrets) {

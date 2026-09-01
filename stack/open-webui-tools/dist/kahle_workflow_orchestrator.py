@@ -267,6 +267,10 @@ def pre_rerank_metadata_filter(
         if isinstance(need, dict) and need.get("kind") != "directory_record"
         for capability in need.get("evidence_capabilities") or ()
         if str(capability)
+        and not (
+            need.get("kind") == "organization_contact"
+            and str(capability) == "current_person_record"
+        )
     }
     # ``factual_support`` is the base contract, not a specialized hard filter.
     # A procedure or system overview can still support ordinary factual claims.

@@ -97,6 +97,37 @@ def test_classifier_recognizes_procedural_prose_without_numbered_steps():
     assert "procedure" in result.evidence_capabilities
 
 
+def test_classifier_treats_function_mailbox_list_as_contact_directory():
+    result = RetrievalMetadataClassifier().classify(
+        "Wichtige Funktionspostfächer und Kontakte",
+        """## Wichtige Funktionspostfächer
+- Datenschutz: datenschutz@example.invalid
+- Marketing: marketing@example.invalid
+- Bewerbungen: bewerbung@example.invalid
+- IT: Kontakt ausschließlich über das Ticketsystem.
+""",
+    )
+
+    assert result.domain == "employee_directory"
+    assert result.document_type == "contact_directory"
+    assert "contact_details" in result.evidence_capabilities
+    assert "procedure" in result.evidence_capabilities
+
+
+def test_classifier_keeps_single_mailbox_work_instruction_as_procedure():
+    result = RetrievalMetadataClassifier().classify(
+        "Arbeitsanweisung: Umgang mit dem Funktionspostfach",
+        """1. Öffne das Funktionspostfach service@example.invalid.
+2. Prüfe die neue Nachricht.
+3. Speichere die Bearbeitung.
+""",
+    )
+
+    assert result.document_type == "work_instruction"
+    assert "procedure" in result.evidence_capabilities
+    assert "contact_details" not in result.evidence_capabilities
+
+
 def test_backfill_is_idempotent_and_does_not_modify_uploaded_content(tmp_path: Path):
     db_path = tmp_path / "portal.sqlite3"
     files_root = tmp_path / "files"
@@ -121,6 +152,89 @@ def test_backfill_is_idempotent_and_does_not_modify_uploaded_content(tmp_path: P
     assert row["document_type"] == "system_overview"
     assert row["evidence_capabilities"] == ["system_overview"]
     assert row["content_sha256"] == before
+
+
+def test_backfill_reclassifies_function_mailboxes_from_previous_classifier(tmp_path: Path):
+    db_path = tmp_path / "portal.sqlite3"
+    files_root = tmp_path / "files"
+    _database(db_path)
+    markdown_path = files_root / "doc-1" / "v-1" / "rag.md"
+    markdown_path.parent.mkdir(parents=True)
+    markdown = (
+        "# Wichtige Funktionspostfächer\n"
+        "- Datenschutz: datenschutz@example.invalid\n"
+        "- Marketing: marketing@example.invalid\n"
+    )
+    markdown_path.write_text(markdown, encoding="utf-8")
+    store = RetrievalMetadataStore(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE canonical_documents SET title=? WHERE document_id='doc-1'",
+            ("Wichtige Funktionspostfächer und Kontakte",),
+        )
+    store.classify_version(
+        document_id="doc-1",
+        version_id="v-1",
+        title="Wichtige Funktionspostfächer und Kontakte",
+        markdown=markdown,
+        content_sha256=hashlib.sha256(markdown_path.read_bytes()).hexdigest(),
+    )
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE document_retrieval_metadata SET "
+            "domain='data_protection',document_type='process_description',"
+            "evidence_capabilities_json='[\"procedure\"]',"
+            "classifier_version='kahle.retrieval-metadata.v2' "
+            "WHERE version_id='v-1'"
+        )
+
+    report = store.backfill(files_root)
+    metadata = store.for_version("v-1")
+
+    assert report == {"classified": 1, "unchanged": 0, "missing_files": 0}
+    assert metadata["domain"] == "employee_directory"
+    assert metadata["document_type"] == "contact_directory"
+    assert metadata["evidence_capabilities"] == ["procedure", "contact_details"]
+
+
+def test_backfill_preserves_confirmed_metadata_across_classifier_upgrade(tmp_path: Path):
+    db_path = tmp_path / "portal.sqlite3"
+    files_root = tmp_path / "files"
+    _database(db_path)
+    markdown_path = files_root / "doc-1" / "v-1" / "rag.md"
+    markdown_path.parent.mkdir(parents=True)
+    markdown = "# Manuell geprüfte Arbeitsanweisung\n1. Öffnen.\n2. Prüfen.\n"
+    markdown_path.write_text(markdown, encoding="utf-8")
+    store = RetrievalMetadataStore(db_path)
+    store.classify_version(
+        document_id="doc-1",
+        version_id="v-1",
+        title="Manuell geprüfte Arbeitsanweisung",
+        markdown=markdown,
+        content_sha256=hashlib.sha256(markdown_path.read_bytes()).hexdigest(),
+    )
+    store.confirm(
+        version_id="v-1",
+        domain="internal_processes",
+        document_type="process_description",
+        topics=("Manuell",),
+        evidence_capabilities=("procedure",),
+        actor_user_id="portal-admin",
+    )
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE document_retrieval_metadata SET classifier_version=? WHERE version_id='v-1'",
+            ("kahle.retrieval-metadata.v2",),
+        )
+
+    report = store.backfill(files_root)
+    metadata = store.for_version("v-1")
+
+    assert report == {"classified": 0, "unchanged": 1, "missing_files": 0}
+    assert metadata["classification_status"] == "confirmed"
+    assert metadata["document_type"] == "process_description"
+    assert metadata["evidence_capabilities"] == ["procedure"]
+    assert metadata["confirmed_by_user_id"] == "portal-admin"
 
 
 def test_backfill_reports_missing_files_without_inventing_metadata(tmp_path: Path):

@@ -244,6 +244,25 @@ def _contact_information_requested(query: str) -> bool:
             folded,
         )
         or re.search(r"\bin\s+kontakt\b", folded)
+        or _functional_contact_delivery_question(folded)
+    )
+
+
+def _functional_contact_delivery_question(folded_query: str) -> bool:
+    """Recognize a requested destination for a documented functional topic."""
+    if not re.search(rf"\b{_FUNCTIONAL_CONTACT_TOPIC_PATTERN}\b", folded_query):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:wohin|wo|an\s+wen)\b.{0,80}"
+            r"\b(?:hin)?(?:schick|send|reich|geb)\w*\b",
+            folded_query,
+        )
+        or re.search(
+            r"\b(?:hin)?(?:schick|send|reich|geb)\w*\b.{0,80}"
+            r"\b(?:hin|ein|ab)\b",
+            folded_query,
+        )
     )
 
 

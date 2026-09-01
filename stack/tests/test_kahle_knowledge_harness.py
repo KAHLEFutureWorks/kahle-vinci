@@ -782,7 +782,10 @@ def test_central_organization_contact_combines_personio_and_rag_evidence():
             ("personio_directory",),
         ),
         ("Wie läuft der Bewerbungsprozess?", ("rag_chat",)),
-        ("Wohin schicke ich meine Bewerbung?", ("rag_chat",)),
+        (
+            "Wohin schicke ich meine Bewerbung?",
+            ("personio_directory", "rag_chat"),
+        ),
     ),
 )
 def test_area_contact_source_matrix(query, expected_tools):
@@ -797,6 +800,29 @@ def test_area_contact_source_matrix(query, expected_tools):
     )
 
     assert plan.required_tools == expected_tools
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wohin schicke ich meine Bewerbung?",
+        "An wen sende ich meine Bewerbung?",
+        "Wo soll ich meine Krankmeldung hinschicken?",
+    ),
+)
+def test_functional_contact_delivery_wordings_combine_personio_and_rag(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory", "rag_chat")
+    assert plan.information_needs[0].kind == "organization_contact"
 
 
 @pytest.mark.parametrize(
