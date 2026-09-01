@@ -19,7 +19,7 @@ __all__ = ["KnowledgeEvidenceSession", "bind_internal_knowledge_tools"]
 _INTERNAL_TOOL_NAMES = frozenset({"personio_directory", "rag_chat"})
 _ALLOWED_ROLES = frozenset({"user", "admin"})
 _FULL_NAME_AFTER_RELATION = re.compile(
-    r"\b(?:von|für)\s+(?:[A-ZÄÖÜ][\w.'-]*\s+){1,3}[A-ZÄÖÜ][\w.'-]*\b"
+    r"\b(?:von|fur)\s+(?:[\w.'-]+\s+){1,3}[\w.'-]+\b"
 )
 _POSSESSIVE_FULL_NAME = re.compile(
     r"\b(?:[A-ZÄÖÜ][\w.'-]*\s+){1,3}[A-ZÄÖÜ][\w.'-]*s?\s+"
@@ -67,7 +67,7 @@ def _supervisor_candidate_query(
     folded = _fold(current)
     if not _SUPERVISOR_RELATION.search(folded):
         return ""
-    if _FULL_NAME_AFTER_RELATION.search(current) or _POSSESSIVE_FULL_NAME.search(current):
+    if _FULL_NAME_AFTER_RELATION.search(folded) or _POSSESSIVE_FULL_NAME.search(current):
         return ""
     if not _SUPERVISOR_REFERENCE.search(folded):
         return ""

@@ -312,6 +312,35 @@ def test_new_explicit_full_name_replaces_supervisor_candidate(monkeypatch):
     assert client.calls == [(query, "auto", "user-1", "user", "")]
 
 
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wer ist die Führungskraft von max muster?",
+        "Wer ist die Führungskraft von Anna von Muster?",
+    ),
+)
+def test_new_lowercase_or_particle_name_replaces_supervisor_candidate(
+    monkeypatch, query
+):
+    internal = load_internal_knowledge()
+    client = FakePersonioClient()
+    monkeypatch.setattr(internal, "PersonioDirectoryClient", lambda: client)
+
+    tools, _ = internal.bind_internal_knowledge_tools(
+        tools={},
+        request=request(),
+        user=user(),
+        model=vinci(),
+        messages=[
+            {"role": "user", "content": "Wie erreiche ich Erika Beispiel?"},
+            {"role": "user", "content": query},
+        ],
+    )
+    asyncio.run(tools["personio_directory"]["callable"](query=query))
+
+    assert client.calls == [(query, "auto", "user-1", "user", "")]
+
+
 def test_referential_non_supervisor_query_never_inherits_candidate(monkeypatch):
     internal = load_internal_knowledge()
     client = FakePersonioClient()
