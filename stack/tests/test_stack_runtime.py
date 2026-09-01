@@ -50,6 +50,17 @@ def test_foreign_fixed_name_container_is_reported_before_compose_up():
     assert json.loads(result.stdout) == "kb-admin-dashboard"
 
 
+def test_local_compose_project_name_ignores_ambient_project_name():
+    result = run_powershell(
+        "$env:COMPOSE_PROJECT_NAME = 'stale-project'; "
+        "Get-LocalComposeProjectName -ComposeFile "
+        "'C:/kahle-vinci/stack/docker-compose.yml'"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "stack"
+
+
 @pytest.mark.parametrize(
     "container_expression",
     (

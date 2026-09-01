@@ -58,4 +58,5 @@ def test_rollout_checks_running_revision_and_uses_existing_image_switch():
 def test_local_start_includes_kahle_ui_overlay():
     script = LOCAL_START.read_text(encoding="utf-8")
     assert '"stack\\docker-compose.kahle-ui.yml"' in script
-    assert '@("compose", "-f", $composeFile, "-f", $uiFile)' in script
+    assert "$composeProject = Get-LocalComposeProjectName -ComposeFile $composeFile" in script
+    assert '"compose", "--project-name", $composeProject,' in script

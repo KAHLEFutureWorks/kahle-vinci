@@ -98,7 +98,12 @@ if (-not (Test-Path -LiteralPath $uiFile)) {
 # Caddy ist nur fuer die Produktion definiert. Ohne dieses Overlay gibt es
 # lokal keinen Reverse Proxy und /wissen/ ist nicht erreichbar.
 $edgeFile = Join-Path $ProjectRoot "stack\docker-compose.local-edge.yml"
-$composeFiles = @("compose", "-f", $composeFile, "-f", $uiFile)
+$composeProject = Get-LocalComposeProjectName -ComposeFile $composeFile
+$composeFiles = @(
+  "compose", "--project-name", $composeProject,
+  "-f", $composeFile,
+  "-f", $uiFile
+)
 if (-not $NoEdge) {
   $composeFiles += @("-f", $edgeFile)
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("ACME_EMAIL"))) {
@@ -117,10 +122,6 @@ try {
       ForEach-Object { [string]$_.Value.container_name } |
       Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
   )
-  $composeProject = [Environment]::GetEnvironmentVariable("COMPOSE_PROJECT_NAME")
-  if ([string]::IsNullOrWhiteSpace($composeProject)) {
-    $composeProject = Split-Path (Split-Path $composeFile -Parent) -Leaf
-  }
   $existingContainers = @(
     foreach ($containerName in $expectedContainerNames) {
       $inspectJson = & docker inspect $containerName 2>$null

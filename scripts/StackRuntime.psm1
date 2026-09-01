@@ -12,6 +12,17 @@ function ConvertFrom-JsonDocument {
 }
 
 
+function Get-LocalComposeProjectName {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ComposeFile
+  )
+
+  Split-Path (Split-Path $ComposeFile -Parent) -Leaf
+}
+
+
 function Find-ForeignContainerNames {
   [CmdletBinding()]
   param(
@@ -119,6 +130,7 @@ function Get-UnreadyRequiredServices {
 
 Export-ModuleMember -Function `
   ConvertFrom-JsonDocument, `
+  Get-LocalComposeProjectName, `
   Find-ForeignContainerNames, `
   Get-ContainerComposeProject, `
   Select-RequiredRuntimeServices, `
