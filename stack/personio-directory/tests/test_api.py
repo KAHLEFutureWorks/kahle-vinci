@@ -5,6 +5,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -12,7 +13,11 @@ from app.search import DirectoryEvidence
 
 
 class FakeSearch:
+    def __init__(self) -> None:
+        self.queries = []
+
     def search(self, query):
+        self.queries.append(query)
         if query.intent == "onboarding_search":
             claims = (
                 {
@@ -80,6 +85,30 @@ def test_search_rejects_missing_or_wrong_internal_key() -> None:
     with client() as api:
         assert api.post("/internal/search", json=request(role="user")).status_code == 403
         assert api.post("/internal/search", json=request(role="user"), headers={"X-API-Key": "wrong"}).status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_intent"),
+    [
+        ("Serviceassistenzen Neustadt", "directory_search"),
+        ("Wo arbeitet Erika Beispiel?", "person_lookup"),
+        ("Wer ist im Onboarding?", "onboarding_search"),
+        ("Wer ist die Führungskraft von Erika Beispiel?", "supervisor_lookup"),
+    ],
+)
+def test_auto_request_resolves_only_the_local_directory_intent(query: str, expected_intent: str) -> None:
+    fake_search = FakeSearch()
+    app = create_app(search=fake_search, internal_api_key="test-key", start_background=False)
+    with TestClient(app) as api:
+        response = api.post(
+            "/internal/search",
+            json={**request(role="user", intent="auto"), "query": query},
+            headers={"X-API-Key": "test-key"},
+        )
+
+    assert response.status_code == 200
+    assert fake_search.queries[0].intent == expected_intent
+    assert response.json()["resolved_intent"] == expected_intent
 
 
 def test_onboarding_api_never_serializes_contact_fields() -> None:

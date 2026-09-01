@@ -545,9 +545,10 @@ def _explicit_field_filters(
 ) -> dict[str, frozenset[str]]:
     """Extract only field values stated in the question from indexed vocabulary.
 
-    Matching a location in an arbitrary team label is not enough: a request for
-    "in Hannover" must match the person's Office field.  The same convention
-    applies to explicitly stated position, department and team labels.
+    Matching a location in an arbitrary team label is not enough: an exact
+    known office in a request must match the person's Office field. The same
+    convention applies to explicitly stated position, department and team
+    labels.
     """
     normalized = f" {_normalise_text(text)} "
     filters: dict[str, frozenset[str]] = {}
@@ -669,9 +670,4 @@ def _field_value_is_explicitly_requested(
 ) -> bool:
     if field != "office":
         return f" {value} " in query
-    return bool(
-        re.search(
-            rf"\b(?:in(?:\s+der|\s+dem)?|nach|am|(?:am\s+)?standort)\s+{re.escape(value)}\b",
-            query,
-        )
-    )
+    return f" {value} " in query

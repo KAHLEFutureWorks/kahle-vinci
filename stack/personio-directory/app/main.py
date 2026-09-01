@@ -25,7 +25,7 @@ from .config import PersonioConfig
 from .index import QdrantDirectoryIndex
 from .models import DirectoryQuery
 from .personio import PersonioClient
-from .search import DirectoryEvidence, DirectorySearch
+from .search import DirectoryEvidence, DirectorySearch, classify_directory_query
 from .state import SQLiteSyncState
 from .sync import DirectorySync
 
@@ -40,7 +40,7 @@ _SOURCE_ID = re.compile(r"^P[1-9][0-9]*$")
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     intent: Literal[
-        "person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"
+        "auto", "person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"
     ]
     user_id: str = Field(min_length=1, max_length=256)
     user_role: str = Field(min_length=1, max_length=32)
@@ -49,6 +49,9 @@ class SearchRequest(BaseModel):
 
 class SearchResponse(BaseModel):
     status: Literal["ok", "not_found", "not_ready"]
+    resolved_intent: Literal[
+        "person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"
+    ]
     claims: list[dict[str, object]]
     sources: list[dict[str, str]]
     sync_completed_at: str | None
@@ -147,16 +150,21 @@ def create_app(
         active_search = app.state.search
         if active_search is None:
             raise HTTPException(status_code=503, detail="directory_unavailable")
+        resolved_intent = (
+            classify_directory_query(payload.query)
+            if payload.intent == "auto"
+            else payload.intent
+        )
         evidence: DirectoryEvidence = active_search.search(
             DirectoryQuery(
                 text=payload.query,
-                intent=payload.intent,
+                intent=resolved_intent,
                 user_id=payload.user_id,
                 user_role=payload.user_role,
                 candidate_query=payload.candidate_query,
             )
         )
-        return _response_from_evidence(evidence, onboarding=payload.intent == "onboarding_search")
+        return _response_from_evidence(evidence, resolved_intent=resolved_intent)
 
     return app
 
@@ -246,16 +254,19 @@ def _is_stale(value: str | None) -> bool:
     return value is None or _sync_age(value) > timedelta(hours=24)
 
 
-def _response_from_evidence(evidence: DirectoryEvidence, *, onboarding: bool) -> SearchResponse:
+def _response_from_evidence(
+    evidence: DirectoryEvidence, *, resolved_intent: str
+) -> SearchResponse:
     """Keep the HTTP boundary safe even if a future search adapter regresses."""
     sources = _controlled_sources(evidence.sources)
-    if onboarding:
+    if resolved_intent == "onboarding_search":
         source_ids = {source["id"] for source in sources}
         claims = _onboarding_claims(evidence.claims, source_ids)
     else:
         claims = [dict(claim) for claim in evidence.claims]
     return SearchResponse(
         status=evidence.status,
+        resolved_intent=resolved_intent,
         claims=claims,
         sources=sources,
         sync_completed_at=evidence.sync_completed_at,

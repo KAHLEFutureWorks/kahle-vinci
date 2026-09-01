@@ -8,9 +8,10 @@ import re
 from typing import Any, Callable
 
 
-_ALLOWED_INTENTS = frozenset(
+_RESOLVED_INTENTS = frozenset(
     {"person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"}
 )
+_ALLOWED_INTENTS = _RESOLVED_INTENTS | {"auto"}
 _ALLOWED_STATUSES = frozenset({"ok", "not_found", "not_ready"})
 _SOURCE_ID = re.compile(r"^P[1-9][0-9]*$")
 _SYNC_TIMESTAMP = re.compile(
@@ -129,6 +130,7 @@ class PersonioDirectoryClient:
         if not isinstance(data, dict):
             return _unavailable()
         status = data.get("status")
+        resolved_intent = data.get("resolved_intent")
         claims = data.get("claims")
         sources = data.get("sources")
         sync_completed_at = data.get("sync_completed_at")
@@ -149,6 +151,13 @@ class PersonioDirectoryClient:
             or not isinstance(stale, bool)
         ):
             return _unavailable()
+        if intent == "auto":
+            if resolved_intent not in _RESOLVED_INTENTS:
+                return _unavailable()
+        elif resolved_intent is not None and resolved_intent != intent:
+            return _unavailable()
+        else:
+            resolved_intent = intent
         if status in {"ok", "not_found"} and sync_completed_at is None:
             return _unavailable()
 
@@ -170,7 +179,7 @@ class PersonioDirectoryClient:
         controlled_claims = []
         allowed_claim_fields = (
             _ONBOARDING_CLAIM_FIELDS
-            if intent == "onboarding_search"
+            if resolved_intent == "onboarding_search"
             else _DIRECTORY_CLAIM_FIELDS
         )
         for claim in claims:

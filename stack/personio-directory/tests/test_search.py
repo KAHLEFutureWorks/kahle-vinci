@@ -89,6 +89,21 @@ def test_new_alone_does_not_expose_onboarding():
 
 
 @pytest.mark.parametrize(
+    ("query_text", "expected_intent"),
+    [
+        ("Serviceassistenzen Neustadt", "directory_search"),
+        ("Wo arbeitet Erika Beispiel?", "person_lookup"),
+        ("Wer ist im Onboarding?", "onboarding_search"),
+        ("Wer ist die Führungskraft von Erika Beispiel?", "supervisor_lookup"),
+    ],
+)
+def test_auto_contract_uses_the_existing_bounded_directory_classification(
+    query_text: str, expected_intent: str
+) -> None:
+    assert classify_directory_query(query_text) == expected_intent
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "Was weißt du über Erika Beispiel?",

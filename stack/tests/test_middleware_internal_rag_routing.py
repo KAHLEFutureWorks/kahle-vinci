@@ -811,6 +811,108 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
     }
 
 
+def test_personio_client_auto_request_uses_the_validated_resolved_intent():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto")
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": "onboarding_search",
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist im Onboarding?", "auto", "user-1", "admin")
+    )
+
+    assert result == {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    assert captured["json"]["intent"] == "auto"
+
+
+@pytest.mark.parametrize("resolved_intent", [None, "uncontrolled_intent"])
+def test_personio_client_auto_request_rejects_missing_or_unknown_resolved_intent(resolved_intent):
+    module = load_python_module(PERSONIO_CLIENT, f"personio_directory_client_invalid_auto_{resolved_intent}")
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    if resolved_intent is not None:
+        payload["resolved_intent"] = resolved_intent
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist im Onboarding?", "auto", "user-1", "user")
+    )
+
+    assert result["status"] == "directory_unavailable"
+
+
+def test_personio_client_auto_onboarding_rejects_contact_and_personio_id_claim_fields():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto_onboarding_private")
+    captured = {}
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(
+            FakeResponse(
+                status=200,
+                payload={
+                    "status": "ok",
+                    "claims": [
+                        {
+                            "display_name": "Nora Neu",
+                            "business_email": "nora.neu@example.invalid",
+                            "business_phone": "+49 511 000000",
+                            "employment_status": "ONBOARDING",
+                            "personio_id": "private-personio-id",
+                            "source_id": "P1",
+                        }
+                    ],
+                    "sources": [{"id": "P1", "kind": "personio_directory"}],
+                    "sync_completed_at": "2026-08-24T10:15:00Z",
+                    "stale": False,
+                    "resolved_intent": "onboarding_search",
+                },
+            ),
+            captured,
+        ),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist im Onboarding?", "auto", "user-1", "user")
+    )
+
+    assert result["status"] == "directory_unavailable"
+    rendered = json.dumps(result)
+    for private_value in (
+        "nora.neu@example.invalid",
+        "+49 511 000000",
+        "private-personio-id",
+    ):
+        assert private_value not in rendered
+
+
 def test_personio_client_passes_only_a_supervisor_candidate_query_to_the_private_api():
     module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_supervisor_context")
     captured = {}
