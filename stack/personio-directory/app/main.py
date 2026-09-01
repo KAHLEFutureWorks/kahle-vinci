@@ -162,6 +162,7 @@ def create_app(
                 user_id=payload.user_id,
                 user_role=payload.user_role,
                 candidate_query=payload.candidate_query,
+                intent_resolved_by_api=payload.intent == "auto",
             )
         )
         return _response_from_evidence(evidence, resolved_intent=resolved_intent)

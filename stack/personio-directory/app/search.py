@@ -311,6 +311,8 @@ class DirectorySearch:
         )
 
     def _safe_intent(self, query: DirectoryQuery) -> DirectoryIntent:
+        if query.intent_resolved_by_api:
+            return query.intent
         classified = classify_directory_query(query.text)
         if query.intent == "onboarding_search" and classified != "onboarding_search":
             return "directory_search"

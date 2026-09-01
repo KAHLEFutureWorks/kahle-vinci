@@ -789,6 +789,7 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
         "sources": [{"id": "P1", "kind": "personio_directory"}],
         "sync_completed_at": "2026-08-24T10:15:00Z",
         "stale": False,
+        "resolved_intent": "person_lookup",
     }
     client = module.PersonioDirectoryClient(
         base_url="http://personio-directory:8094",
@@ -800,7 +801,13 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
         client.search("Wo arbeitet Max Mustermann?", "person_lookup", "user-1", "admin")
     )
 
-    assert result == payload
+    assert result == {
+        "status": "ok",
+        "claims": [{"display_name": "Max Mustermann", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
     assert captured["url"] == "http://personio-directory:8094/internal/search"
     assert captured["headers"] == {"X-API-Key": "internal-key"}
     assert captured["json"] == {
@@ -868,6 +875,34 @@ def test_personio_client_auto_request_rejects_missing_or_unknown_resolved_intent
     assert result["status"] == "directory_unavailable"
 
 
+@pytest.mark.parametrize("resolved_intent", [None, "uncontrolled_intent"])
+def test_personio_client_explicit_request_rejects_missing_or_unknown_resolved_intent(resolved_intent):
+    module = load_python_module(
+        PERSONIO_CLIENT, f"personio_directory_client_invalid_explicit_{resolved_intent}"
+    )
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    if resolved_intent is not None:
+        payload["resolved_intent"] = resolved_intent
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wo arbeitet Nora Neu?", "person_lookup", "user-1", "user")
+    )
+
+    assert result["status"] == "directory_unavailable"
+
+
 def test_personio_client_auto_onboarding_rejects_contact_and_personio_id_claim_fields():
     module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto_onboarding_private")
     captured = {}
@@ -922,6 +957,7 @@ def test_personio_client_passes_only_a_supervisor_candidate_query_to_the_private
         "sources": [],
         "sync_completed_at": "2026-08-24T10:15:00Z",
         "stale": False,
+        "resolved_intent": "supervisor_lookup",
     }
     client = module.PersonioDirectoryClient(
         base_url="http://personio-directory:8094",
@@ -939,7 +975,13 @@ def test_personio_client_passes_only_a_supervisor_candidate_query_to_the_private
         )
     )
 
-    assert result == payload
+    assert result == {
+        "status": "not_found",
+        "claims": [],
+        "sources": [],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
     assert captured["json"] == {
         "query": "Wer davon ist die Führungskraft?",
         "intent": "supervisor_lookup",

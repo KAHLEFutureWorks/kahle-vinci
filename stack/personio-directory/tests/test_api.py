@@ -8,8 +8,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as main_module
+from app import search as search_module
 from app.main import create_app
-from app.search import DirectoryEvidence
+from app.search import DirectoryEvidence, DirectorySearch
 
 
 class FakeSearch:
@@ -109,6 +111,39 @@ def test_auto_request_resolves_only_the_local_directory_intent(query: str, expec
     assert response.status_code == 200
     assert fake_search.queries[0].intent == expected_intent
     assert response.json()["resolved_intent"] == expected_intent
+
+
+def test_auto_request_classifies_once_before_the_directory_lookup(monkeypatch) -> None:
+    class EmptyDirectoryIndex:
+        def indexed_personio_ids(self) -> set[str]:
+            return set()
+
+        def people_by_personio_ids(self, personio_ids: set[str]) -> dict[str, object]:
+            return {}
+
+    query_text = "Serviceassistenzen Neustadt"
+    calls: list[str] = []
+
+    def count_classification(text: str) -> str:
+        calls.append(text)
+        return "directory_search"
+
+    monkeypatch.setattr(main_module, "classify_directory_query", count_classification)
+    monkeypatch.setattr(search_module, "classify_directory_query", count_classification)
+    directory = DirectorySearch(
+        EmptyDirectoryIndex(), sync_completed_at="2026-08-24T10:15:00Z"
+    )
+    app = create_app(search=directory, internal_api_key="test-key", start_background=False)
+
+    with TestClient(app) as api:
+        response = api.post(
+            "/internal/search",
+            json={**request(role="user", intent="auto"), "query": query_text},
+            headers={"X-API-Key": "test-key"},
+        )
+
+    assert response.status_code == 200
+    assert calls == [query_text]
 
 
 def test_onboarding_api_never_serializes_contact_fields() -> None:

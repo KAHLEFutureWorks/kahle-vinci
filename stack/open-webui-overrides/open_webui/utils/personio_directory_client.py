@@ -151,13 +151,10 @@ class PersonioDirectoryClient:
             or not isinstance(stale, bool)
         ):
             return _unavailable()
-        if intent == "auto":
-            if resolved_intent not in _RESOLVED_INTENTS:
-                return _unavailable()
-        elif resolved_intent is not None and resolved_intent != intent:
+        if resolved_intent not in _RESOLVED_INTENTS:
             return _unavailable()
-        else:
-            resolved_intent = intent
+        if intent != "auto" and resolved_intent != intent:
+            return _unavailable()
         if status in {"ok", "not_found"} and sync_completed_at is None:
             return _unavailable()
 

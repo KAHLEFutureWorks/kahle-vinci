@@ -28,6 +28,7 @@ class DirectoryQuery:
     user_id: str
     user_role: str
     candidate_query: str = ""
+    intent_resolved_by_api: bool = False
 
 
 @dataclass(frozen=True)
