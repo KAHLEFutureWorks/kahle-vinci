@@ -99,6 +99,10 @@ from open_webui.utils.kahle_knowledge_harness import (
     resolve_query_aliases,
     validate_answer as validate_knowledge_harness_answer,
 )
+from open_webui.utils.kahle_internal_knowledge import (
+    _supervisor_candidate_query,
+    bind_internal_knowledge_tools,
+)
 from open_webui.utils.personio_directory_client import PersonioDirectoryClient
 
 from open_webui.utils.mcp.client import MCPClient
@@ -320,42 +324,6 @@ async def _execute_kahle_retrieval_plan(
 def _personio_directory_intent(query: str) -> str:
     """Map a directory need to the Harness' bounded shared sub-intent."""
     return classify_personio_directory_intent(query)
-
-
-def _supervisor_candidate_query(messages: list[dict[str, Any]], query: str) -> str:
-    """Return only the immediately preceding user request for a supervisor follow-up."""
-    if _personio_directory_intent(query) != 'supervisor_lookup':
-        return ''
-    current = str(query or '').strip()
-    if re.search(
-        r'\b(?:von|für)\s+(?:[A-ZÄÖÜ][\w.\'-]*\s+)'
-        r'{1,3}[A-ZÄÖÜ][\w.\'-]*\b',
-        current,
-    ):
-        return ''
-    folded_current = (
-        current.casefold()
-        .replace('ä', 'a')
-        .replace('ö', 'o')
-        .replace('ü', 'u')
-        .replace('ß', 'ss')
-    )
-    if not re.search(
-        r'\b(?:davon|deren|dessen|diese(?:r|n|m|s)?\s+person|'
-        r'sein(?:e|er|em|en|es)?|ihr(?:e|er|em|en|es)?|'
-        r'die\s+fuhrungskraft|er|sie|ihn|ihm)\b',
-        folded_current,
-    ):
-        return ''
-    prior_user_messages = [
-        str(message.get('content') or '').strip()
-        for message in messages
-        if isinstance(message, dict) and message.get('role') == 'user'
-    ]
-    for candidate in reversed(prior_user_messages):
-        if candidate and candidate != current:
-            return candidate
-    return ''
 
 
 def _knowledge_harness_metadata_payload(decision: Any) -> dict[str, Any]:
@@ -4816,6 +4784,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             for name, tool_dict in builtin_tools.items():
                 if name not in tools_dict:
                     tools_dict[name] = tool_dict
+
+        tools_dict, knowledge_evidence_session = bind_internal_knowledge_tools(
+            tools=tools_dict,
+            request=request,
+            user=user,
+            model=model,
+            messages=form_data.get('messages', []) or [],
+        )
+        metadata['kahle_knowledge_evidence_session'] = knowledge_evidence_session
 
         original_user_tool_request = get_last_user_message(
             form_data.get('messages', []) or []

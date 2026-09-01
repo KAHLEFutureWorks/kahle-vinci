@@ -96,7 +96,7 @@ class PersonioDirectoryClient:
             "user_id": str(user_id).strip(),
             "user_role": user_role,
         }
-        if intent == "supervisor_lookup" and str(candidate_query or "").strip():
+        if intent in {"auto", "supervisor_lookup"} and str(candidate_query or "").strip():
             payload["candidate_query"] = str(candidate_query).strip()
         try:
             session_factory = self._session_factory

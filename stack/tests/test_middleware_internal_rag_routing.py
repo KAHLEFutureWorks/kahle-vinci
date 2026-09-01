@@ -849,6 +849,78 @@ def test_personio_client_auto_request_uses_the_validated_resolved_intent():
     assert captured["json"]["intent"] == "auto"
 
 
+def test_personio_client_auto_request_forwards_a_supervisor_candidate_to_the_private_api():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto_supervisor_context")
+    captured = {}
+    payload = {
+        "status": "not_found",
+        "claims": [],
+        "sources": [],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": "supervisor_lookup",
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search(
+            "Wer ist ihre Führungskraft?",
+            "auto",
+            "user-1",
+            "admin",
+            candidate_query="Wer arbeitet im Teiledienst in Hannover?",
+        )
+    )
+
+    assert result["status"] == "not_found"
+    assert captured["json"] == {
+        "query": "Wer ist ihre Führungskraft?",
+        "intent": "auto",
+        "user_id": "user-1",
+        "user_role": "admin",
+        "candidate_query": "Wer arbeitet im Teiledienst in Hannover?",
+    }
+
+
+@pytest.mark.parametrize(
+    "intent",
+    ("person_lookup", "directory_search", "coworker_lookup", "onboarding_search"),
+)
+def test_personio_client_does_not_forward_candidate_for_other_explicit_intents(intent):
+    module = load_python_module(PERSONIO_CLIENT, f"personio_directory_client_{intent}_no_candidate")
+    captured = {}
+    payload = {
+        "status": "not_found",
+        "claims": [],
+        "sources": [],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": intent,
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search(
+            "Synthetische Verzeichnisfrage",
+            intent,
+            "user-1",
+            "admin",
+            candidate_query="Synthetischer Vorgänger",
+        )
+    )
+
+    assert result["status"] == "not_found"
+    assert "candidate_query" not in captured["json"]
+
+
 @pytest.mark.parametrize("resolved_intent", [None, "uncontrolled_intent"])
 def test_personio_client_auto_request_rejects_missing_or_unknown_resolved_intent(resolved_intent):
     module = load_python_module(PERSONIO_CLIENT, f"personio_directory_client_invalid_auto_{resolved_intent}")

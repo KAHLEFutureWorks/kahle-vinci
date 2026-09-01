@@ -77,6 +77,10 @@ def test_personio_credentials_are_only_in_directory_service() -> None:
         "personio_directory_client.py:/app/backend/open_webui/utils/"
         "personio_directory_client.py:ro"
     ) in open_webui
+    assert (
+        "kahle_internal_knowledge.py:/app/backend/open_webui/utils/"
+        "kahle_internal_knowledge.py:ro"
+    ) in open_webui
     assert "personio-directory:\n        condition: service_started" in open_webui
 
 
