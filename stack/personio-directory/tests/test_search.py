@@ -940,3 +940,40 @@ def test_coworkers_never_fall_back_to_office_alone():
 
     assert result.basis is None
     assert result.people == ()
+
+
+def test_compact_service_assistant_location_query_keeps_the_named_office_bound():
+    neustadt = PersonRecord(
+        personio_id="1",
+        first_name="Erika",
+        last_name="Beispiel",
+        display_name="Erika Beispiel",
+        position="Serviceassistentin",
+        department="Service",
+        team="Service Neustadt",
+        office="Neustadt",
+        business_email="erika.beispiel@example.invalid",
+        business_phone="+49 511 000000",
+        employment_status="ACTIVE",
+        source_updated_at="2026-09-01T10:15:00Z",
+    )
+    hannover = PersonRecord(
+        personio_id="2",
+        first_name="Max",
+        last_name="Muster",
+        display_name="Max Muster",
+        position="Serviceassistenz",
+        department="Service",
+        team="Service Hannover",
+        office="Hannover",
+        business_email="max.muster@example.invalid",
+        business_phone="+49 511 000001",
+        employment_status="ACTIVE",
+        source_updated_at="2026-09-01T10:15:00Z",
+    )
+
+    evidence = search([neustadt, hannover]).search(
+        query("Serviceassistenzen Neustadt", "directory_search")
+    )
+
+    assert [claim["display_name"] for claim in evidence.claims] == ["Erika Beispiel"]

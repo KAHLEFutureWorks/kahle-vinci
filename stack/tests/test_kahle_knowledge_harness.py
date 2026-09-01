@@ -1730,3 +1730,49 @@ def test_validator_rejects_unsubstantiated_technical_and_privacy_approval():
     codes = {item["code"] for item in result.violations}
     assert "unsupported_technical_approval" in codes
     assert "unsupported_privacy_approval" in codes
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Serviceassistenzen Neustadt",
+        "Serviceassistentinnen in Neustadt",
+    ),
+)
+def test_compact_current_employee_queries_require_the_personio_directory(query):
+    """A compact current-staff query must not be diverted to document retrieval."""
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("personio_directory",)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie ist die E-Mail-Adresse der Personalabteilung?",
+        "Welche Kontakte gibt es für Bewerbungen?",
+        "Wohin schicke ich meine Bewerbung?",
+        "Wo soll ich meine Krankmeldung hinschicken?",
+    ),
+)
+def test_documented_functional_contact_queries_require_rag_only(query):
+    """A documented mailbox or delivery route is not a current people lookup."""
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query,
+        query,
+        [],
+        "kahle-vinci",
+        {"user_id": "user-1"},
+    )
+
+    assert plan.required_tools == ("rag_chat",)

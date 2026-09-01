@@ -274,3 +274,27 @@ def test_retrieval_error_result_keeps_feedback_link_contract():
 
     assert "ERROR_CODE: {error_code}\\n" in error_block
     assert "FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}" in error_block
+
+
+def test_rag_chat_never_turns_a_search_example_into_a_mailbox_claim(monkeypatch):
+    module = load_tool()
+    tool = configured_tool(
+        module,
+        monkeypatch,
+        [chunk(
+            "Für Fragen wie 'Wie lautet das Funktionspostfach des Marketings?' "
+            "nutze diesen Suchbegriff.\n"
+            "Das dokumentierte Funktionspostfach des Marketings ist "
+            "marketing@example.invalid."
+        )],
+    )
+
+    result = asyncio.run(tool.rag_chat(
+        "Wie lautet das Funktionspostfach des Marketings?",
+        __user__={"id": "user-1"},
+    ))
+    evidence = evidence_from_result(result)
+
+    assert [claim["text"] for claim in evidence["supported_claims"]] == [
+        "Das dokumentierte Funktionspostfach des Marketings ist marketing@example.invalid."
+    ]

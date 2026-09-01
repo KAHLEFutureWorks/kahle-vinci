@@ -2080,6 +2080,31 @@ def test_prerouted_rag_replaces_generic_tool_source_even_without_documents():
     assert block.index("sources[:] = [") < block.index("if canonical_pre_route_events:")
 
 
+def test_knowledge_harness_does_not_replace_a_model_answer_for_a_documented_contact_path():
+    harness = load_python_module(HARNESS, "kahle_harness_contact_path_model_answer")
+    query = "Wie erreiche ich die IT?"
+    rag_result = (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
+        "\"status\":\"supported\",\"supported_claims\":[{\"claim_id\":\"R1C1\","
+        "\"source_id\":\"#1\",\"text\":\"Die IT ist über das interne Ticketsystem "
+        "erreichbar.\",\"evidence_span\":\"Die IT ist über das interne Ticketsystem "
+        "erreichbar.\"}],\"missing_information\":[],\"conflicts\":[],"
+        "\"sources\":[{\"number\":1,\"document_id\":\"it-contact\"}]}"
+    )
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=rag_result,
+    )
+    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
+
+    assert direct_answer(decision, decision.to_dict()) == ""
+
+
 if __name__ == "__main__":
     test_internal_rag_routing_detects_recovery_gutschein()
     test_internal_rag_routing_does_not_treat_internet_as_intern()

@@ -58,3 +58,23 @@ KI bezeichnet ein maschinengestütztes System.
     assert chunks
     assert all("owner_email:" not in chunk.parent_content for chunk in chunks)
     assert chunks[0].heading_path == ("KI-Compliance", "1. Begriffe")
+
+
+def test_parent_child_chunking_marks_search_examples_as_retrieval_hints():
+    markdown = """# Kontakte
+
+## Für Fragen wie
+
+Wie lautet das Funktionspostfach des Marketings?
+
+## Marketing
+
+Das dokumentierte Funktionspostfach ist marketing@example.invalid.
+"""
+
+    chunks = ParentChildChunker().chunk("doc-1", markdown)
+
+    hint_chunks = [chunk for chunk in chunks if chunk.heading_path == ("Kontakte", "Für Fragen wie")]
+    answer_chunks = [chunk for chunk in chunks if chunk.heading_path == ("Kontakte", "Marketing")]
+    assert [chunk.kind for chunk in hint_chunks] == ["retrieval_hint"]
+    assert [chunk.kind for chunk in answer_chunks] == ["text"]

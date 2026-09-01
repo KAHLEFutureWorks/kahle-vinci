@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "kahle_knowledge_harness.py"
@@ -196,3 +198,21 @@ def test_model_prompts_leave_canonical_feedback_link_delivery_to_the_harness():
     ):
         prompt = (ROOT / "open-webui-prompts" / filename).read_text(encoding="utf-8")
         assert "Wenn RAG_Chat `FEEDBACK_LINK` liefert" not in prompt
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("kahle-vinci", "kahle-vinci-thinking", "kahle-vinci-max-thinking"),
+)
+def test_reference_matrix_explicit_mailbox_and_current_staff_needs_both_tools(model):
+    harness = load_harness()
+    query = "Wie lautet das Funktionspostfach und wer arbeitet aktuell im Marketing?"
+
+    current = decision(
+        harness,
+        query,
+        rag_result(status="unsupported", missing=("Noch keine Tool-Ergebnisse.",)),
+        model=model,
+    )
+
+    assert current.retrieval_plan.required_tools == ("personio_directory", "rag_chat")
