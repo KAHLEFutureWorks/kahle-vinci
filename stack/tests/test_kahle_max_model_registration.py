@@ -104,3 +104,4 @@ def test_max_base_and_model_are_in_the_public_registration_contract():
 
     assert register.KAHLE_VINCI_MAX_MODEL_ID in register.PUBLIC_MODEL_IDS
     assert register.KAHLE_VINCI_MAX_BASE_MODEL_ID in register.PUBLIC_MODEL_IDS
+    assert "personio_directory" in register.shared_vinci_tool_ids()

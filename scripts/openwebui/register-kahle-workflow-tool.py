@@ -81,8 +81,15 @@ Routing:
 - If two or more files are attached and the user asks for a comparison, differences, changes, a review, or an old/new version analysis, call files_extract_text once with all relevant file_paths. Never call file_to_md_save, file_to_docx_save, bundle_to_md_save or another *_save tool for the comparison itself.
 - For explicit uploaded file editing/conversion or a requested downloadable output only: use the matching *_save file proxy tool and exact attached filename(s). Never guess upload filenames.
 - For external/current web research without file output: use safe_websearch with a search-engine style query.
-- For KAHLE-internal knowledge without web/file output: use RAG_Chat/rag_chat where available.
-- For every follow-up asking for more detail from internal knowledge, call rag_chat again. Make query standalone and carry forward the prior document/product identifier (for example: "A1a Assessment-Framework 5 Readiness-Dimensionen"). Never answer such follow-ups only from chat history.
+- Internal knowledge source authority:
+  | Information need | Required tool |
+  | --- | --- |
+  | current people, profiles, business contacts, roles, teams, departments, locations, onboarding, and supervisors | personio_directory |
+  | documented processes, responsibilities, shared mailboxes, ticket systems, submission, and contact paths | rag_chat |
+  | both evidence types are actually needed | personio_directory and rag_chat |
+- Compact noun phrases are complete search requests. Keep the user's intent unchanged.
+- Do not use rag_chat, web search, or model knowledge as a fallback when personio_directory has no person or supervisor evidence. Answer only from returned evidence and disclose missing parts.
+- For every follow-up asking for more detail from a documented internal source, call rag_chat again. Make query standalone and carry forward the prior document/product identifier (for example: "A1a Assessment-Framework 5 Readiness-Dimensionen"). Never answer such follow-ups only from chat history.
 - For listing, updating, completing or deleting personal tasks: always use kahle_tasks tools. Never answer task lists from memory.
 - create_calendar_event is a two-step write operation. Never call it on the first request. First require an explicit title/topic, date and time, show a complete summary and ask for confirmation.
 - Call create_calendar_event only when the current user message explicitly confirms the immediately preceding calendar summary. Never invent a title, date or time. The calendar is internal to OpenWebUI and the current tool cannot manage attendees or invitations.
@@ -354,7 +361,7 @@ TOOL_DEFINITIONS = {
         "specs": [
             {
                 "name": "rag_chat",
-                "description": "Durchsucht alle aktiven KAHLE Knowledgebases in Qdrant und liefert zitierbaren internen Kontext. Bei Folgefragen erneut aufrufen und die vorherige Dokument- oder Produktkennung im query beibehalten.",
+                "description": "Liefert ausschließlich dokumentierte KAHLE-Prozesse, Zuständigkeiten, Funktionspostfächer, Ticketsysteme sowie Einreichungs- und Kontaktwege als zitierbare Evidenz. Nicht für aktuelle Personen, Profile, geschäftliche Einzelkontakte, Rollen, Teams, Abteilungen, Standorte, Onboarding oder Führungskräfte verwenden. Bei Folgefragen erneut mit eigenständiger Query und bekannter Dokument- oder Produktkennung aufrufen.",
                 "parameters": {
                     "type": "object",
                     "properties": {"query": {"type": "string"}},
@@ -579,7 +586,7 @@ def resolve_vinci_model_ids(con: sqlite3.Connection) -> list[str]:
 
 def shared_vinci_tool_ids() -> list[str]:
     """Tools every current and future KAHLE-Vinci app model must share."""
-    return ["rag_chat", "kahle_tasks", "kahle_workflow"]
+    return ["personio_directory", "rag_chat", "kahle_tasks", "kahle_workflow"]
 
 
 def ensure_max_vinci_models(con: sqlite3.Connection, now: int) -> dict[str, bool]:

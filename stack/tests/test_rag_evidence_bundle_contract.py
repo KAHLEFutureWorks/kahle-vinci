@@ -261,6 +261,7 @@ def test_future_vinci_models_are_discovered_for_the_shared_harness_binding():
         "vendor-model",
     ]
     assert registration.shared_vinci_tool_ids() == [
+        "personio_directory",
         "rag_chat",
         "kahle_tasks",
         "kahle_workflow",
