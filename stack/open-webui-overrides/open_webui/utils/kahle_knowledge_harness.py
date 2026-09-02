@@ -1308,14 +1308,41 @@ _PERSONIO_CURRENT_FIELDS = frozenset(
         "phone",
     }
 )
-_PERSONIO_OWNED_RAG_FIELDS = _PERSONIO_CURRENT_FIELDS | frozenset(
+_PERSONIO_OWNED_RAG_FIELDS = frozenset(
     {
+        "personio_id",
+        "display_name",
+        "first_name",
+        "last_name",
+        "position",
+        "department",
+        "team",
+        "office",
+        "business_email",
+        "business_phone",
+        "email",
+        "phone",
+        "employment_status",
+        "source_updated_at",
+        "supervisor_personio_id",
         "supervisor",
         "supervisor_id",
         "supervisor_name",
         "manager",
         "manager_id",
         "manager_name",
+    }
+)
+_RAG_CLAIM_ALLOWED_FIELDS = frozenset(
+    {
+        "claim_id",
+        "source_id",
+        "text",
+        "evidence_span",
+        "document_id",
+        "version_id",
+        "claim_type",
+        "field",
     }
 )
 _PERSON_ENTITY_EXCLUSION_TOKENS = frozenset(
@@ -1340,7 +1367,8 @@ _PERSON_ENTITY_EXCLUSION_TOKENS = frozenset(
     }
 )
 _PERSONIO_RELATION_MARKER = re.compile(
-    r"\b(?:fuhrungskraft|vorgesetzt\w*|supervisor|manager\w*)\b"
+    r"\b(?:chef\w*|fuhr\w*|fuhrungskraft|leit\w*|manager\w*|"
+    r"supervisor|teamleit\w*|vorgesetzt\w*)\b"
 )
 
 
@@ -1364,6 +1392,19 @@ def _contains_contact_literal(text: str) -> bool:
             for match in _PHONE_LITERAL.finditer(text)
         )
     )
+
+
+def _claim_clauses(text: str) -> tuple[str, ...]:
+    return tuple(
+        clause.strip()
+        for clause in re.split(r";|[.!?](?=\s|$)|\n+", text)
+        if clause.strip()
+    )
+
+
+def _normalized_claim_field_name(value: Any) -> str:
+    raw = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value or ""))
+    return re.sub(r"[^a-z0-9]+", "_", _fold(raw)).strip("_")
 
 
 def _personio_evidence(personio_result: Any) -> EvidenceBundle:
@@ -1440,12 +1481,13 @@ def _rag_claim_asserts_personio_owned_data(claim: Any) -> bool:
         texts = (str(claim or ""),)
 
     return any(
-        _has_named_person_entity(text)
+        _has_named_person_entity(clause)
         and bool(
-            _PERSONIO_RELATION_MARKER.search(_fold(text))
-            or _contains_contact_literal(text)
+            _PERSONIO_RELATION_MARKER.search(_fold(clause))
+            or _contains_contact_literal(clause)
         )
         for text in texts
+        for clause in _claim_clauses(text)
     )
 
 
@@ -1454,12 +1496,24 @@ def _sanitize_result_driven_rag_claim(claim: Any) -> Any | None:
         return None
     if not isinstance(claim, dict):
         return claim
-    filtered = {
-        key: value
-        for key, value in claim.items()
-        if key not in _PERSONIO_OWNED_RAG_FIELDS
-        and not (key == "field" and str(value or "") in _PERSONIO_OWNED_RAG_FIELDS)
+    normalized = {
+        str(key): _normalized_claim_field_name(key) for key in claim
     }
+    if any(
+        field not in _RAG_CLAIM_ALLOWED_FIELDS | _PERSONIO_OWNED_RAG_FIELDS
+        for field in normalized.values()
+    ):
+        return None
+    filtered = {}
+    for key, value in claim.items():
+        field = normalized[str(key)]
+        if field in _PERSONIO_OWNED_RAG_FIELDS:
+            continue
+        if field == "field":
+            if _normalized_claim_field_name(value) not in _PERSONIO_OWNED_RAG_FIELDS:
+                return None
+            continue
+        filtered[field] = value
     return filtered if set(filtered) - {"claim_id", "source_id"} else None
 
 
@@ -1470,6 +1524,13 @@ def _result_driven_rag_evidence(rag_result: Any, procedural: bool) -> EvidenceBu
         if isinstance(rag_result, EvidenceBundle)
         else _evidence_bundle(str(rag_result or ""), procedural)
     )
+    if evidence.status == "unsupported":
+        return EvidenceBundle(
+            status="unsupported",
+            missing_information=evidence.missing_information,
+            conflicts=evidence.conflicts,
+            sources=evidence.sources,
+        )
     retained: list[Any] = []
     evidence_changed = False
     for claim in evidence.supported_claims:
