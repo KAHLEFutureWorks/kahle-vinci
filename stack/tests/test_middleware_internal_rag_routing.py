@@ -503,6 +503,9 @@ def test_comparison_telemetry_contains_only_technical_tool_names():
     comparison_payload = load_function_from_middleware(
         "_knowledge_routing_comparison_payload"
     )
+    comparison_payload.__globals__["_model_led_routing_comparison"] = (
+        load_function_from_middleware("_model_led_routing_comparison")
+    )
     plan = SimpleNamespace(required_tools=("personio_directory", "rag_chat"))
 
     payload = comparison_payload(plan, actual_tools=("rag_chat",))
@@ -516,6 +519,50 @@ def test_comparison_telemetry_contains_only_technical_tool_names():
         marker not in str(payload).casefold()
         for marker in ("query", "evidence", "erika", "example.invalid")
     )
+
+
+def test_model_led_comparison_treats_selected_tools_as_an_order_independent_set():
+    comparison = load_function_from_middleware("_model_led_routing_comparison")
+
+    payload = comparison(
+        ("personio_directory", "rag_chat"),
+        ("rag_chat", "personio_directory"),
+    )
+
+    assert payload == {
+        "legacy_required_tools": ["personio_directory", "rag_chat"],
+        "actual_tools": ["personio_directory", "rag_chat"],
+        "matches_legacy": True,
+    }
+    assert all(
+        marker not in str(payload).casefold()
+        for marker in ("query", "evidence", "erika", "example.invalid")
+    )
+
+
+def test_model_led_metrics_include_actual_tools_and_pii_free_comparison():
+    metric_fields = load_function_from_middleware(
+        "_knowledge_harness_routing_metric_fields"
+    )
+    metric_fields.__globals__["_knowledge_harness_tool_called"] = (
+        load_function_from_middleware("_knowledge_harness_tool_called")
+    )
+    metric_fields.__globals__["_model_led_routing_comparison"] = (
+        load_function_from_middleware("_model_led_routing_comparison")
+    )
+    metadata = {
+        "kahle_retrieval_tools": ["personio_directory", "rag_chat"],
+        "kahle_knowledge_routing_comparison": {
+            "legacy_required_tools": ["personio_directory", "rag_chat"],
+            "actual_tools": ["personio_directory", "rag_chat"],
+            "matches_legacy": True,
+        },
+    }
+
+    assert metric_fields(metadata) == {
+        "tool_called": "multi_source",
+        "routing_comparison": metadata["kahle_knowledge_routing_comparison"],
+    }
 
 
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():

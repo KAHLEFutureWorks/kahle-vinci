@@ -1308,6 +1308,16 @@ _PERSONIO_CURRENT_FIELDS = frozenset(
         "phone",
     }
 )
+_PERSONIO_OWNED_RAG_FIELDS = _PERSONIO_CURRENT_FIELDS | frozenset(
+    {
+        "supervisor",
+        "supervisor_id",
+        "supervisor_name",
+        "manager",
+        "manager_id",
+        "manager_name",
+    }
+)
 
 
 def _personio_evidence(personio_result: Any) -> EvidenceBundle:
@@ -1371,6 +1381,81 @@ def _personio_authoritative_fields(claims: tuple[Any, ...]) -> set[str]:
         for field in _PERSONIO_CURRENT_FIELDS
         if str(claim.get(field) or "").strip()
     }
+
+
+def _rag_claim_asserts_personio_owned_data(claim: Any) -> bool:
+    """Reject RAG claims that assert current person or supervisor data."""
+    if isinstance(claim, dict):
+        text = str(claim.get("text") or "")
+    else:
+        text = str(claim or "")
+
+    folded = _fold(text)
+    return bool(
+        re.search(
+            r"\b(?:fuhrungskraft|vorgesetzt\w*|supervisor)\b"
+            r"[^.!?]{0,120}\b(?:ist|heisst|lautet)\b",
+            folded,
+        )
+        or re.search(
+            r"\b[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s+"
+            r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s+"
+            r"(?:ist|arbeitet|erreichbar)\b",
+            text,
+        )
+        or re.search(
+            r"\b[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s+"
+            r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s*(?::|\(|-)"
+            r"[^.!?]{0,80}\b[A-Za-z0-9._%+-]+@",
+            text,
+        )
+    )
+
+
+def _sanitize_result_driven_rag_claim(claim: Any) -> Any | None:
+    if _rag_claim_asserts_personio_owned_data(claim):
+        return None
+    if not isinstance(claim, dict):
+        return claim
+    filtered = {
+        key: value
+        for key, value in claim.items()
+        if key not in _PERSONIO_OWNED_RAG_FIELDS
+        and not (key == "field" and str(value or "") in _PERSONIO_OWNED_RAG_FIELDS)
+    }
+    return filtered if set(filtered) - {"claim_id", "source_id"} else None
+
+
+def _result_driven_rag_evidence(rag_result: Any, procedural: bool) -> EvidenceBundle:
+    """Keep model-led RAG evidence within the documented-source authority."""
+    evidence = (
+        rag_result
+        if isinstance(rag_result, EvidenceBundle)
+        else _evidence_bundle(str(rag_result or ""), procedural)
+    )
+    retained = tuple(
+        sanitized
+        for claim in evidence.supported_claims
+        if (sanitized := _sanitize_result_driven_rag_claim(claim)) is not None
+    )
+    if len(retained) == len(evidence.supported_claims):
+        return evidence
+    missing = tuple(
+        dict.fromkeys(
+            (*evidence.missing_information, "Aktuelle Personen- und Supervisor-Daten erfordern Personio-Evidenz.")
+        )
+    )
+    return EvidenceBundle(
+        status="partially_supported" if retained else "unsupported",
+        supported_claims=retained,
+        missing_information=missing,
+        conflicts=tuple(
+            dict.fromkeys(
+                (*evidence.conflicts, "Personio ist führend für aktuelle Stammdaten und Führungskräfte.")
+            )
+        ),
+        sources=evidence.sources,
+    )
 
 
 def _personio_display_names(claims: tuple[Any, ...]) -> tuple[str, ...]:
@@ -1563,9 +1648,19 @@ def _without_superseded_rag_claims(
     return tuple(retained), tuple(dict.fromkeys(conflicts))
 
 
-def merge_evidence(rag_result: Any, personio_result: Any) -> EvidenceBundle:
+def merge_evidence(
+    rag_result: Any, personio_result: Any, *, result_driven: bool = False
+) -> EvidenceBundle:
     """Merge distinct evidence sources while preserving their respective authority."""
-    rag = rag_result if isinstance(rag_result, EvidenceBundle) else _evidence_bundle(str(rag_result or ""), False)
+    rag = (
+        _result_driven_rag_evidence(rag_result, False)
+        if result_driven
+        else (
+            rag_result
+            if isinstance(rag_result, EvidenceBundle)
+            else _evidence_bundle(str(rag_result or ""), False)
+        )
+    )
     personio = _personio_evidence(personio_result)
     personio_fields = _personio_authoritative_fields(personio.supported_claims)
     rag_claims, authority_conflicts = _without_superseded_rag_claims(
@@ -1727,9 +1822,9 @@ def build_result_driven_decision(
     if actual_tools == ("personio_directory",):
         evidence = _personio_evidence(personio_result)
     elif actual_tools == ("rag_chat",):
-        evidence = _evidence_bundle(str(rag_result or ""), procedural)
+        evidence = _result_driven_rag_evidence(rag_result, procedural)
     else:
-        evidence = merge_evidence(rag_result, personio_result)
+        evidence = merge_evidence(rag_result, personio_result, result_driven=True)
 
     retrieval_plan = RetrievalPlan(
         required_tools=actual_tools,

@@ -213,25 +213,33 @@ def _routing_plan_for_execution(routing_mode: str, legacy_plan: Any) -> Any:
     return legacy_plan if routing_mode == 'legacy' else None
 
 
-def _knowledge_routing_comparison_payload(
-    legacy_plan: Any, *, actual_tools: tuple[str, ...] = ()
+def _model_led_routing_comparison(
+    legacy_tools: Any, actual_tools: Any
 ) -> dict[str, Any]:
     allowed_tools = {'personio_directory', 'rag_chat'}
-    legacy_required_tools = [
-        name
-        for name in dict.fromkeys(
-            getattr(legacy_plan, 'required_tools', ()) if legacy_plan else ()
-        )
-        if name in allowed_tools
-    ]
-    selected_tools = [
-        name for name in dict.fromkeys(actual_tools) if name in allowed_tools
-    ]
+    canonical = lambda tools: sorted(
+        {
+            str(tool)
+            for tool in tools or ()
+            if str(tool) in allowed_tools
+        }
+    )
+    legacy_required_tools = canonical(legacy_tools)
+    selected_tools = canonical(actual_tools)
     return {
         'legacy_required_tools': legacy_required_tools,
         'actual_tools': selected_tools,
         'matches_legacy': legacy_required_tools == selected_tools,
     }
+
+
+def _knowledge_routing_comparison_payload(
+    legacy_plan: Any, *, actual_tools: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    return _model_led_routing_comparison(
+        getattr(legacy_plan, 'required_tools', ()) if legacy_plan else (),
+        actual_tools,
+    )
 
 
 def _knowledge_harness_answer_timeout_seconds() -> float:
@@ -441,23 +449,12 @@ def _refresh_model_led_answer_contract(
     metadata['kahle_answer_contract'] = payload['answer_contract']
     metadata['kahle_answer_validation_fallback'] = decision.validation_fallback()
 
-    actual_tools = tuple(dict.fromkeys(session.called_tools()))
     comparison = metadata.get('kahle_knowledge_routing_comparison') or {}
-    legacy_tools = [
-        name
-        for name in comparison.get('legacy_required_tools') or ()
-        if name in {'personio_directory', 'rag_chat'}
-    ]
-    selected_tools = [
-        name
-        for name in actual_tools
-        if name in {'personio_directory', 'rag_chat'}
-    ]
-    metadata['kahle_knowledge_routing_comparison'] = {
-        'legacy_required_tools': legacy_tools,
-        'actual_tools': selected_tools,
-        'matches_legacy': legacy_tools == selected_tools,
-    }
+    comparison = _model_led_routing_comparison(
+        comparison.get('legacy_required_tools') or (), session.called_tools()
+    )
+    metadata['kahle_knowledge_routing_comparison'] = comparison
+    metadata['kahle_retrieval_tools'] = comparison['actual_tools']
     return body
 
 
@@ -552,6 +549,17 @@ def _knowledge_harness_tool_called(metadata: dict[str, Any]) -> str:
     if len(tools) > 1:
         return 'multi_source'
     return str(tools[0]) if tools else ''
+
+
+def _knowledge_harness_routing_metric_fields(metadata: dict[str, Any]) -> dict[str, Any]:
+    fields = {'tool_called': _knowledge_harness_tool_called(metadata)}
+    comparison = metadata.get('kahle_knowledge_routing_comparison')
+    if isinstance(comparison, dict):
+        fields['routing_comparison'] = _model_led_routing_comparison(
+            comparison.get('legacy_required_tools') or (),
+            comparison.get('actual_tools') or (),
+        )
+    return fields
 
 
 def _should_prepare_knowledge_route(
@@ -7888,7 +7896,7 @@ async def streaming_chat_response_handler(response, ctx):
                         ),
                         'intent_kind': str(intent_payload.get('kind') or ''),
                         'required_tool': str(retrieval_payload.get('required_tool') or ''),
-                        'tool_called': _knowledge_harness_tool_called(metadata),
+                        **_knowledge_harness_routing_metric_fields(metadata),
                         'evidence_status': str(evidence_payload.get('status') or ''),
                         'source_count': len(evidence_payload.get('sources') or []),
                         'permission_scope_present': bool(permission_payload.get('user_id')),

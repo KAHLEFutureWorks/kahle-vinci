@@ -1757,7 +1757,13 @@ def _result_driven_personio_payload(*, status="ok"):
     }
 
 
-def _result_driven_rag_payload(*, supported=True, include_current_people=False):
+def _result_driven_rag_payload(
+    *,
+    supported=True,
+    include_current_people=False,
+    include_personio_owned_assertion=False,
+    include_personio_owned_contact_assertion=False,
+):
     claims = []
     if supported:
         claim = {
@@ -1777,6 +1783,26 @@ def _result_driven_rag_payload(*, supported=True, include_current_people=False):
                 {
                     "display_name": "Veralteter Name",
                     "position": "Veraltete Rolle",
+                }
+            )
+        if include_personio_owned_assertion:
+            claim.update(
+                {
+                    "text": (
+                        "Erika Beispiel ist Serviceassistenz; ihre Führungskraft "
+                        "ist Max Leitung."
+                    ),
+                    "evidence_span": (
+                        "Erika Beispiel ist Serviceassistenz; ihre Führungskraft "
+                        "ist Max Leitung."
+                    ),
+                }
+            )
+        if include_personio_owned_contact_assertion:
+            claim.update(
+                {
+                    "text": "Erika Beispiel: erika@example.invalid.",
+                    "evidence_span": "Erika Beispiel: erika@example.invalid.",
                 }
             )
         claims.append(claim)
@@ -1884,6 +1910,87 @@ def test_rag_unsupported_does_not_consume_unexecuted_personio_as_fallback():
     assert decision.retrieval_plan.required_tools == ("rag_chat",)
     assert decision.evidence_bundle.status == "unsupported"
     assert decision.evidence_bundle.sources == ()
+
+
+def test_result_driven_rag_rejects_person_master_and_supervisor_assertions():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            include_personio_owned_assertion=True
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_rag_rejects_named_person_contact_assertions():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            include_personio_owned_contact_assertion=True
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_personio_not_found_drops_rag_person_assertions():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory", "rag_chat"),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=_result_driven_personio_payload(status="not_found"),
+        rag_result=_result_driven_rag_payload(
+            include_personio_owned_assertion=True
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+
+
+def test_result_driven_personio_not_found_keeps_rag_contact_path_as_partial():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory", "rag_chat"),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=_result_driven_personio_payload(status="not_found"),
+        rag_result=_result_driven_rag_payload(),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "partially_supported"
+    assert any(
+        isinstance(claim, dict) and "Ticketsystem" in str(claim.get("text") or "")
+        for claim in decision.evidence_bundle.supported_claims
+    )
 
 
 def test_result_driven_mixed_evidence_keeps_personio_authority_and_rag_path():
