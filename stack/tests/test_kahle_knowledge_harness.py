@@ -1761,8 +1761,10 @@ def _result_driven_rag_payload(
     *,
     supported=True,
     include_current_people=False,
+    include_personio_owned_contact_field=False,
     include_personio_owned_assertion=False,
     include_personio_owned_contact_assertion=False,
+    evidence_span=None,
 ):
     claims = []
     if supported:
@@ -1785,6 +1787,8 @@ def _result_driven_rag_payload(
                     "position": "Veraltete Rolle",
                 }
             )
+        if include_personio_owned_contact_field:
+            claim["business_email"] = "erika@example.invalid"
         if include_personio_owned_assertion:
             claim.update(
                 {
@@ -1805,6 +1809,8 @@ def _result_driven_rag_payload(
                     "evidence_span": "Erika Beispiel: erika@example.invalid.",
                 }
             )
+        if evidence_span is not None:
+            claim["evidence_span"] = evidence_span
         claims.append(claim)
     return (
         "KAHLE_RAG_RESULT\nFOUND: "
@@ -1952,6 +1958,26 @@ def test_result_driven_rag_rejects_named_person_contact_assertions():
     assert decision.answer_contract.allowed_contact_values == ()
 
 
+def test_result_driven_rag_rejects_named_person_contact_in_evidence_span():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            evidence_span="Erika Beispiel hat die Telefonnummer +49 1234 567890."
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
 def test_result_driven_personio_not_found_drops_rag_person_assertions():
     harness = load_harness()
 
@@ -1991,6 +2017,118 @@ def test_result_driven_personio_not_found_keeps_rag_contact_path_as_partial():
         isinstance(claim, dict) and "Ticketsystem" in str(claim.get("text") or "")
         for claim in decision.evidence_bundle.supported_claims
     )
+
+
+@pytest.mark.parametrize(
+    ("called_tools", "personio_result"),
+    (
+        (("rag_chat",), None),
+        (("personio_directory", "rag_chat"), _result_driven_personio_payload(status="not_found")),
+    ),
+)
+def test_result_driven_rag_sanitizes_structured_personio_fields_without_dropping_documented_path(
+    called_tools, personio_result
+):
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=called_tools,
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=personio_result,
+        rag_result=_result_driven_rag_payload(
+            include_current_people=True,
+            include_personio_owned_contact_field=True,
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "partially_supported"
+    claim = decision.evidence_bundle.supported_claims[0]
+    assert claim["text"].startswith("Der dokumentierte Kontaktweg")
+    assert all(
+        field not in claim
+        for field in ("display_name", "position", "business_email")
+    )
+    assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
+
+
+@pytest.mark.parametrize(
+    ("claim_text", "called_tools", "personio_result"),
+    (
+        (
+            "Erika Beispiel hat Max Leitung als Führungskraft.",
+            ("rag_chat",),
+            None,
+        ),
+        (
+            "Max Leitung ist Vorgesetzter von Erika Beispiel.",
+            ("personio_directory", "rag_chat"),
+            _result_driven_personio_payload(status="not_found"),
+        ),
+        (
+            "Erika Beispiel hat die Telefonnummer +49 1234 567890.",
+            ("rag_chat",),
+            None,
+        ),
+    ),
+)
+def test_result_driven_rag_rejects_named_person_relationship_and_contact_formulations(
+    claim_text, called_tools, personio_result
+):
+    harness = load_harness()
+    rag_result = _result_driven_rag_payload().replace(
+        "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+        "das Funktionspostfach ist team@example.invalid.",
+        claim_text,
+    )
+
+    decision = harness.build_result_driven_decision(
+        called_tools=called_tools,
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=personio_result,
+        rag_result=rag_result,
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize(
+    "claim_text",
+    (
+        "Kahle Gruppe ist über team@example.invalid erreichbar.",
+        "Das Team Buchhaltung ist unter team@example.invalid erreichbar.",
+    ),
+)
+def test_result_driven_rag_keeps_functional_contacts_without_person_subject(claim_text):
+    harness = load_harness()
+    rag_result = _result_driven_rag_payload().replace(
+        "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+        "das Funktionspostfach ist team@example.invalid.",
+        claim_text,
+    )
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=rag_result,
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "supported"
+    assert decision.evidence_bundle.supported_claims[0]["text"] == claim_text
+    assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
 
 
 def test_result_driven_mixed_evidence_keeps_personio_authority_and_rag_path():

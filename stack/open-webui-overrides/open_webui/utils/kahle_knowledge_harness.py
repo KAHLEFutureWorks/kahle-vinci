@@ -1318,6 +1318,52 @@ _PERSONIO_OWNED_RAG_FIELDS = _PERSONIO_CURRENT_FIELDS | frozenset(
         "manager_name",
     }
 )
+_PERSON_ENTITY_EXCLUSION_TOKENS = frozenset(
+    {
+        "abteilung",
+        "bereich",
+        "das",
+        "dem",
+        "den",
+        "der",
+        "die",
+        "ein",
+        "eine",
+        "einem",
+        "einen",
+        "gruppe",
+        "kg",
+        "gmbh",
+        "organisation",
+        "team",
+        "unternehmen",
+    }
+)
+_PERSONIO_RELATION_MARKER = re.compile(
+    r"\b(?:fuhrungskraft|vorgesetzt\w*|supervisor|manager\w*)\b"
+)
+
+
+def _has_named_person_entity(text: str) -> bool:
+    """Recognize a likely two-token personal name, excluding organization labels."""
+    for match in re.finditer(
+        r"\b(?:[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]*\s+){1,2}[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]*\b",
+        text,
+    ):
+        tokens = _fold(match.group(0)).split()
+        if not any(token in _PERSON_ENTITY_EXCLUSION_TOKENS for token in tokens):
+            return True
+    return False
+
+
+def _contains_contact_literal(text: str) -> bool:
+    return bool(
+        _EMAIL_LITERAL.search(text)
+        or any(
+            _is_phone_literal(match.group(0).strip())
+            for match in _PHONE_LITERAL.finditer(text)
+        )
+    )
 
 
 def _personio_evidence(personio_result: Any) -> EvidenceBundle:
@@ -1386,29 +1432,20 @@ def _personio_authoritative_fields(claims: tuple[Any, ...]) -> set[str]:
 def _rag_claim_asserts_personio_owned_data(claim: Any) -> bool:
     """Reject RAG claims that assert current person or supervisor data."""
     if isinstance(claim, dict):
-        text = str(claim.get("text") or "")
+        texts = (
+            str(claim.get("text") or ""),
+            str(claim.get("evidence_span") or ""),
+        )
     else:
-        text = str(claim or "")
+        texts = (str(claim or ""),)
 
-    folded = _fold(text)
-    return bool(
-        re.search(
-            r"\b(?:fuhrungskraft|vorgesetzt\w*|supervisor)\b"
-            r"[^.!?]{0,120}\b(?:ist|heisst|lautet)\b",
-            folded,
+    return any(
+        _has_named_person_entity(text)
+        and bool(
+            _PERSONIO_RELATION_MARKER.search(_fold(text))
+            or _contains_contact_literal(text)
         )
-        or re.search(
-            r"\b[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s+"
-            r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s+"
-            r"(?:ist|arbeitet|erreichbar)\b",
-            text,
-        )
-        or re.search(
-            r"\b[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s+"
-            r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+\s*(?::|\(|-)"
-            r"[^.!?]{0,80}\b[A-Za-z0-9._%+-]+@",
-            text,
-        )
+        for text in texts
     )
 
 
@@ -1433,12 +1470,17 @@ def _result_driven_rag_evidence(rag_result: Any, procedural: bool) -> EvidenceBu
         if isinstance(rag_result, EvidenceBundle)
         else _evidence_bundle(str(rag_result or ""), procedural)
     )
-    retained = tuple(
-        sanitized
-        for claim in evidence.supported_claims
-        if (sanitized := _sanitize_result_driven_rag_claim(claim)) is not None
-    )
-    if len(retained) == len(evidence.supported_claims):
+    retained: list[Any] = []
+    evidence_changed = False
+    for claim in evidence.supported_claims:
+        sanitized = _sanitize_result_driven_rag_claim(claim)
+        if sanitized is None:
+            evidence_changed = True
+            continue
+        if sanitized != claim:
+            evidence_changed = True
+        retained.append(sanitized)
+    if not evidence_changed:
         return evidence
     missing = tuple(
         dict.fromkeys(
@@ -1447,7 +1489,7 @@ def _result_driven_rag_evidence(rag_result: Any, procedural: bool) -> EvidenceBu
     )
     return EvidenceBundle(
         status="partially_supported" if retained else "unsupported",
-        supported_claims=retained,
+        supported_claims=tuple(retained),
         missing_information=missing,
         conflicts=tuple(
             dict.fromkeys(
