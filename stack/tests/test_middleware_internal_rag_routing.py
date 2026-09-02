@@ -398,7 +398,7 @@ def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_
 
 
 def test_consecutive_named_supervisor_question_does_not_reuse_the_previous_subject():
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     messages = [
         {"role": "user", "content": "Wer ist die Führungskraft von Anna Beispiel?"},
         {"role": "assistant", "content": "Personio-Treffer."},
@@ -409,7 +409,7 @@ def test_consecutive_named_supervisor_question_does_not_reuse_the_previous_subje
 
 
 def test_polite_pronoun_does_not_override_an_explicit_supervisor_subject():
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     follow_up = "Können Sie mir die Führungskraft von Berta Beispiel nennen?"
     messages = [
         {"role": "user", "content": "Wer ist die Führungskraft von Anna Beispiel?"},
@@ -431,7 +431,7 @@ def test_polite_pronoun_does_not_override_an_explicit_supervisor_subject():
     ),
 )
 def test_referential_supervisor_follow_up_keeps_the_previous_user_context(follow_up):
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     prior_query = "Wer ist Anna Beispiel?"
     messages = [
         {"role": "user", "content": prior_query},
@@ -443,7 +443,7 @@ def test_referential_supervisor_follow_up_keeps_the_previous_user_context(follow
 
 
 def test_possessive_wording_does_not_reuse_context_for_other_intents():
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     prior_query = "Wie funktioniert die Urlaubsfreigabe?"
     messages = [
         {"role": "user", "content": prior_query},
@@ -474,6 +474,48 @@ def test_planned_rag_tool_call_is_not_forced_outside_the_preroute_contract():
         {},
         "Wie ist die E-Mail der Personalabteilung?",
     ) == []
+
+
+def test_knowledge_routing_mode_defaults_to_legacy_and_accepts_only_two_values(
+    monkeypatch,
+):
+    routing_mode = load_function_from_middleware("_knowledge_routing_mode")
+
+    monkeypatch.delenv("KAHLE_KNOWLEDGE_ROUTING_MODE", raising=False)
+    assert routing_mode() == "legacy"
+    monkeypatch.setenv("KAHLE_KNOWLEDGE_ROUTING_MODE", "model_led")
+    assert routing_mode() == "model_led"
+    monkeypatch.setenv("KAHLE_KNOWLEDGE_ROUTING_MODE", "legacy")
+    assert routing_mode() == "legacy"
+    monkeypatch.setenv("KAHLE_KNOWLEDGE_ROUTING_MODE", "unexpected")
+    assert routing_mode() == "legacy"
+
+
+def test_model_led_never_executes_the_side_effect_free_legacy_plan():
+    select_plan = load_function_from_middleware("_routing_plan_for_execution")
+    legacy_plan = object()
+
+    assert select_plan("legacy", legacy_plan) is legacy_plan
+    assert select_plan("model_led", legacy_plan) is None
+
+
+def test_comparison_telemetry_contains_only_technical_tool_names():
+    comparison_payload = load_function_from_middleware(
+        "_knowledge_routing_comparison_payload"
+    )
+    plan = SimpleNamespace(required_tools=("personio_directory", "rag_chat"))
+
+    payload = comparison_payload(plan, actual_tools=("rag_chat",))
+
+    assert payload == {
+        "legacy_required_tools": ["personio_directory", "rag_chat"],
+        "actual_tools": ["rag_chat"],
+        "matches_legacy": False,
+    }
+    assert all(
+        marker not in str(payload).casefold()
+        for marker in ("query", "evidence", "erika", "example.invalid")
+    )
 
 
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
@@ -1207,6 +1249,20 @@ HARNESS = (
     / "utils"
     / "kahle_knowledge_harness.py"
 )
+INTERNAL_KNOWLEDGE = (
+    ROOT
+    / "open-webui-overrides"
+    / "open_webui"
+    / "utils"
+    / "kahle_internal_knowledge.py"
+)
+
+
+def load_internal_knowledge_function(name: str):
+    module = load_python_module(
+        INTERNAL_KNOWLEDGE, f"kahle_internal_knowledge_{name}_{id(object())}"
+    )
+    return getattr(module, name)
 
 
 def load_rag_routing_helpers():
@@ -1326,6 +1382,7 @@ def load_function_from_middleware(name: str):
         "Any": Any,
         "asyncio": asyncio,
         "json": __import__("json"),
+        "os": __import__("os"),
         "output_id": lambda prefix: f"{prefix}-fixed",
         "re": re,
         "unicodedata": unicodedata,
@@ -2079,7 +2136,13 @@ def test_active_harness_timeout_is_wired_to_a_safe_visible_delivery_state():
     assert "'safe_timeout_fallback'" in source
 
 
-def load_fallback_tool_helpers():
+def load_fallback_tool_helpers(
+    *,
+    routing_mode="legacy",
+    tools_override=None,
+    internal_rag_request=False,
+    metadata_override=None,
+):
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
     wanted = {
         "_ascii_fold",
@@ -2096,14 +2159,26 @@ def load_fallback_tool_helpers():
         "Optional": Optional,
         "re": re,
         "unicodedata": unicodedata,
-        "tools": {"kahle_workflow_execute": object()},
-        "metadata": {},
+        "tools": tools_override or {"kahle_workflow_execute": object()},
+        "metadata": metadata_override or {},
         "attached_file_names": [],
         "attached_exact_paths": [],
-        "_looks_like_internal_rag_request": lambda text: False,
+        "_looks_like_internal_rag_request": lambda text: internal_rag_request,
+        "_knowledge_routing_mode": lambda: routing_mode,
     }
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_infer_fallback_tool_calls"]
+
+
+def test_model_led_legacy_function_calling_does_not_force_rag_from_wording():
+    infer_fallback = load_fallback_tool_helpers(
+        routing_mode="model_led",
+        tools_override={"rag_chat": object()},
+        internal_rag_request=True,
+        metadata_override={"_kahle_force_rag_tool_call": True},
+    )
+
+    assert infer_fallback({}, "Wie funktioniert die interne Richtlinie?") == []
 
 
 def test_previous_result_word_request_routes_to_workflow_before_streaming():
@@ -2296,29 +2371,62 @@ def test_prerouted_rag_replaces_generic_tool_source_even_without_documents():
     assert block.index("sources[:] = [") < block.index("if canonical_pre_route_events:")
 
 
-def test_knowledge_harness_does_not_replace_a_model_answer_for_a_documented_contact_path():
-    harness = load_python_module(HARNESS, "kahle_harness_contact_path_model_answer")
-    query = "Wie erreiche ich die IT?"
-    rag_result = (
-        "KAHLE_RAG_RESULT\nFOUND: true\n"
-        "EVIDENCE_BUNDLE_JSON: {\"schema_version\":\"kahle.evidence-bundle.v1\","
-        "\"status\":\"supported\",\"supported_claims\":[{\"claim_id\":\"R1C1\","
-        "\"source_id\":\"#1\",\"text\":\"Die IT ist über das interne Ticketsystem "
-        "erreichbar.\",\"evidence_span\":\"Die IT ist über das interne Ticketsystem "
-        "erreichbar.\"}],\"missing_information\":[],\"conflicts\":[],"
-        "\"sources\":[{\"number\":1,\"document_id\":\"it-contact\"}]}"
+def test_model_led_contract_refresh_never_owns_direct_final_content():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    refresh = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_refresh_model_led_answer_contract"
     )
-    decision = harness.build_decision(
-        query=query,
-        resolved_query=query,
-        messages=[],
-        model_id="kahle-vinci",
-        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
-        rag_result=rag_result,
-    )
-    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
 
-    assert direct_answer(decision, decision.to_dict()) == ""
+    assignments = [
+        node
+        for node in ast.walk(refresh)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "metadata"
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "kahle_direct_final_content"
+            for target in node.targets
+        )
+    ]
+
+    assert assignments == []
+
+
+def test_unrelated_file_form_and_mail_direct_final_paths_remain_present():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert source.count("metadata['kahle_direct_final_content'] = (") >= 2
+    assert "metadata['kahle_direct_final_content'] = final_notice" in source
+    assert "metadata['kahle_direct_final_content'] = mailer_questions" in source
+    assert "metadata['kahle_direct_final_content'] = mail_redirect" in source
+    assert "file_saved_payload = _extract_file_saved_payload(tool_result)" in source
+    assert "tool_final_notice = _extract_final_notice(tool_result)" in source
+
+
+def test_answer_contract_refresh_is_wired_before_each_next_model_generation():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    legacy_handler = source[
+        source.index("async def chat_completion_tools_handler(") : source.index(
+            "async def process_chat_payload("
+        )
+    ]
+    native_loop_start = source.index("while len(tool_calls) > 0")
+    native_loop = source[
+        native_loop_start : source.index(
+            "if DETECT_CODE_INTERPRETER:", native_loop_start
+        )
+    ]
+
+    assert "_refresh_model_led_answer_contract(" in legacy_handler
+    assert "_refresh_model_led_answer_contract(" in native_loop
+    assert native_loop.index("_refresh_model_led_answer_contract(") < native_loop.index(
+        "res = await generate_chat_completion("
+    )
 
 
 if __name__ == "__main__":

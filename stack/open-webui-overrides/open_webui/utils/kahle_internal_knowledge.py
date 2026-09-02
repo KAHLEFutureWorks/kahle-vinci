@@ -9,12 +9,16 @@ from typing import Any
 
 from open_webui.utils.kahle_knowledge_harness import (
     HarnessDecision,
-    build_decision as build_harness_decision,
+    build_result_driven_decision,
 )
 from open_webui.utils.personio_directory_client import PersonioDirectoryClient
 
 
-__all__ = ["KnowledgeEvidenceSession", "bind_internal_knowledge_tools"]
+__all__ = [
+    "KnowledgeEvidenceSession",
+    "bind_internal_knowledge_tools",
+    "upsert_answer_contract_message",
+]
 
 _INTERNAL_TOOL_NAMES = frozenset({"personio_directory", "rag_chat"})
 _ALLOWED_ROLES = frozenset({"user", "admin"})
@@ -106,17 +110,48 @@ class KnowledgeEvidenceSession:
 
     def build_decision(
         self, *, query: str, permission_scope: dict[str, Any]
-    ) -> HarnessDecision:
-        """Use the existing Harness contract until Task 5 makes it result-driven."""
-        return build_harness_decision(
+    ) -> HarnessDecision | None:
+        """Build a decision only from results recorded in this request."""
+        return build_result_driven_decision(
+            called_tools=self.called_tools(),
             query=query,
-            resolved_query=query,
             messages=self._messages,
             model_id=self._model_id,
             permission_scope=permission_scope,
             rag_result=str(self._results.get("rag_chat") or ""),
             personio_result=self._results.get("personio_directory"),
         )
+
+
+def upsert_answer_contract_message(
+    messages: list[dict[str, Any]], decision: HarnessDecision | None
+) -> list[dict[str, Any]]:
+    """Insert one replaceable AnswerContract system message."""
+    if decision is None:
+        return list(messages or [])
+
+    marker = "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
+    updated = [
+        message
+        for message in list(messages or [])
+        if not (
+            isinstance(message, dict)
+            and message.get("role") == "system"
+            and str(message.get("content") or "").startswith(marker)
+        )
+    ]
+    insert_at = 0
+    while (
+        insert_at < len(updated)
+        and isinstance(updated[insert_at], dict)
+        and updated[insert_at].get("role") == "system"
+    ):
+        insert_at += 1
+    updated.insert(
+        insert_at,
+        {"role": "system", "content": decision.answer_prompt()},
+    )
+    return updated
 
 
 def _personio_tool(

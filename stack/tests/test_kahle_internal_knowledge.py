@@ -258,6 +258,131 @@ def test_concurrent_bound_sessions_do_not_share_results(monkeypatch):
     assert session_two.called_tools() == ("personio_directory",)
 
 
+def _personio_evidence(*, status="ok"):
+    return {
+        "status": status,
+        "claims": (
+            [{"display_name": "Erika Beispiel", "source_id": "P1"}]
+            if status == "ok"
+            else []
+        ),
+        "sources": (
+            [{"id": "P1", "kind": "personio_directory"}]
+            if status == "ok"
+            else []
+        ),
+        "sync_completed_at": "2026-08-31T10:15:00Z",
+        "stale": False,
+    }
+
+
+def _rag_evidence(*, supported=True):
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: "
+        + ("true" if supported else "false")
+        + "\nEVIDENCE_BUNDLE_JSON: "
+        + (
+            '{"schema_version":"kahle.evidence-bundle.v1","status":"supported",'
+            '"supported_claims":[{"claim_id":"R1C1","source_id":"R1",'
+            '"text":"Der dokumentierte Kontaktweg ist das Ticketsystem.",'
+            '"evidence_span":"Der dokumentierte Kontaktweg ist das Ticketsystem."}],'
+            '"missing_information":[],"conflicts":[],"sources":[{"id":"R1"}]}'
+            if supported
+            else '{"schema_version":"kahle.evidence-bundle.v1","status":"unsupported",'
+            '"supported_claims":[],"missing_information":["Nicht gefunden."],'
+            '"conflicts":[],"sources":[]}'
+        )
+    )
+
+
+def test_session_without_recorded_internal_tools_has_no_harness_decision():
+    internal = load_internal_knowledge()
+    session = internal.KnowledgeEvidenceSession(model=vinci(), messages=[])
+
+    decision = session.build_decision(
+        query="Allgemeine Unterhaltung",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+    )
+
+    assert decision is None
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "result", "expected_status"),
+    (
+        ("personio_directory", _personio_evidence(), "supported"),
+        ("personio_directory", _personio_evidence(status="not_found"), "unsupported"),
+        ("rag_chat", _rag_evidence(), "supported"),
+        ("rag_chat", _rag_evidence(supported=False), "unsupported"),
+    ),
+)
+def test_session_decision_is_driven_only_by_the_recorded_source(
+    tool_name, result, expected_status
+):
+    internal = load_internal_knowledge()
+    session = internal.KnowledgeEvidenceSession(model=vinci(), messages=[])
+    session.record(tool_name, result)
+
+    decision = session.build_decision(
+        query="Freie natürliche Formulierung",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+    )
+
+    assert decision is not None
+    assert decision.retrieval_plan.required_tools == (tool_name,)
+    assert decision.evidence_bundle.status == expected_status
+
+
+def test_second_internal_tool_rebuilds_one_replaced_answer_contract_message():
+    internal = load_internal_knowledge()
+    session = internal.KnowledgeEvidenceSession(model=vinci(), messages=[])
+    base_messages = [
+        {"role": "system", "content": "Bestehender Systemvertrag."},
+        {"role": "user", "content": "Wer arbeitet dort und wie ist der Kontaktweg?"},
+    ]
+    permission_scope = {"user_id": "user-1", "role": "user", "groups": []}
+
+    session.record("personio_directory", _personio_evidence())
+    first_decision = session.build_decision(
+        query=base_messages[-1]["content"], permission_scope=permission_scope
+    )
+    first_messages = internal.upsert_answer_contract_message(
+        base_messages, first_decision
+    )
+
+    session.record("rag_chat", _rag_evidence())
+    second_decision = session.build_decision(
+        query=base_messages[-1]["content"], permission_scope=permission_scope
+    )
+    second_messages = internal.upsert_answer_contract_message(
+        first_messages, second_decision
+    )
+
+    first_contracts = [
+        message
+        for message in first_messages
+        if message.get("role") == "system"
+        and str(message.get("content") or "").startswith(
+            "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
+        )
+    ]
+    second_contracts = [
+        message
+        for message in second_messages
+        if message.get("role") == "system"
+        and str(message.get("content") or "").startswith(
+            "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
+        )
+    ]
+    assert len(first_contracts) == 1
+    assert len(second_contracts) == 1
+    assert "P1" in first_contracts[0]["content"]
+    assert "R1" not in first_contracts[0]["content"]
+    assert "P1" in second_contracts[0]["content"]
+    assert "R1" in second_contracts[0]["content"]
+    assert second_messages[0] == base_messages[0]
+
+
 @pytest.mark.parametrize(
     "query",
     (

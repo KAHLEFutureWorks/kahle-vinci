@@ -1701,6 +1701,98 @@ def build_decision(
     )
 
 
+def build_result_driven_decision(
+    *,
+    called_tools: tuple[str, ...],
+    query: str,
+    messages: list[dict[str, Any]],
+    model_id: str,
+    permission_scope: dict[str, Any],
+    rag_result: Any = "",
+    personio_result: Any = None,
+) -> HarnessDecision | None:
+    """Validate evidence from internal tools that actually ran in this request."""
+    actual_tools = tuple(
+        dict.fromkeys(
+            str(tool or "")
+            for tool in called_tools
+            if str(tool or "") in {"personio_directory", "rag_chat"}
+        )
+    )
+    if not actual_tools:
+        return None
+
+    original = str(query or "").strip()
+    procedural = _is_procedural(original)
+    if actual_tools == ("personio_directory",):
+        evidence = _personio_evidence(personio_result)
+    elif actual_tools == ("rag_chat",):
+        evidence = _evidence_bundle(str(rag_result or ""), procedural)
+    else:
+        evidence = merge_evidence(rag_result, personio_result)
+
+    retrieval_plan = RetrievalPlan(
+        required_tools=actual_tools,
+        queries=(original,),
+        permission_scope=dict(permission_scope or {}),
+        information_needs=(),
+        mode="model_led",
+    )
+    clarification = bool(
+        "rag_chat" in actual_tools
+        and re.search(r"(?im)^CLARIFICATION_REQUIRED:\s*true\s*$", str(rag_result or ""))
+    )
+    retrieval_events = []
+    for tool in actual_tools:
+        retrieval_events.append({"type": "retrieval/started", "tool": tool})
+        source_count = sum(
+            1
+            for source in evidence.sources
+            if (
+                tool == "personio_directory"
+                and _source_identifier(source).startswith("P")
+            )
+            or (
+                tool == "rag_chat"
+                and not _source_identifier(source).startswith("P")
+            )
+        )
+        retrieval_events.append(
+            {"type": "retrieval/completed", "tool": tool, "source_count": source_count}
+        )
+
+    return HarnessDecision(
+        schema_version=SCHEMA_VERSION,
+        model_profile={
+            "id": str(model_id or ""),
+            "harness_policy": "shared",
+        },
+        user_intent=UserIntent(
+            kind="internal_knowledge",
+            procedural=procedural,
+            clarification_required=clarification,
+            clarification_question=(
+                _extract_marker(str(rag_result or ""), "ANSWER") if clarification else ""
+            ),
+        ),
+        resolved_context=ResolvedContext(
+            original_query=original,
+            retrieval_query=original,
+            aliases=_aliases_in_query(original),
+            conversation_reference=_has_conversation_reference(messages, original),
+        ),
+        retrieval_plan=retrieval_plan,
+        evidence_bundle=evidence,
+        answer_contract=AnswerContract(
+            allowed_contact_values=_contact_values(evidence),
+        ),
+        events=(
+            *retrieval_events,
+            {"type": "evidence/completed", "status": evidence.status},
+        ),
+    )
+
+
 def build_shadow_decision(**kwargs: Any) -> HarnessDecision:
     """Backward-compatible name for callers still running comparison mode."""
     return build_decision(**kwargs)

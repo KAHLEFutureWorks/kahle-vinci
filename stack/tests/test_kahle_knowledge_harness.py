@@ -1732,47 +1732,190 @@ def test_validator_rejects_unsubstantiated_technical_and_privacy_approval():
     assert "unsupported_privacy_approval" in codes
 
 
-@pytest.mark.parametrize(
-    "query",
-    (
-        "Serviceassistenzen Neustadt",
-        "Serviceassistentinnen in Neustadt",
-    ),
-)
-def test_compact_current_employee_queries_require_the_personio_directory(query):
-    """A compact current-staff query must not be diverted to document retrieval."""
-    harness = load_harness()
+def _result_driven_personio_payload(*, status="ok"):
+    return {
+        "status": status,
+        "claims": (
+            [
+                {
+                    "display_name": "Erika Beispiel",
+                    "position": "Serviceassistenz",
+                    "business_email": "person@example.invalid",
+                    "source_id": "P1",
+                }
+            ]
+            if status == "ok"
+            else []
+        ),
+        "sources": (
+            [{"id": "P1", "kind": "personio_directory"}]
+            if status == "ok"
+            else []
+        ),
+        "sync_completed_at": "2026-08-31T10:15:00Z",
+        "stale": False,
+    }
 
-    plan = harness.plan_retrieval(
-        query,
-        query,
-        [],
-        "kahle-vinci",
-        {"user_id": "user-1"},
+
+def _result_driven_rag_payload(*, supported=True, include_current_people=False):
+    claims = []
+    if supported:
+        claim = {
+            "claim_id": "R1C1",
+            "source_id": "R1",
+            "text": (
+                "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+                "das Funktionspostfach ist team@example.invalid."
+            ),
+            "evidence_span": (
+                "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+                "das Funktionspostfach ist team@example.invalid."
+            ),
+        }
+        if include_current_people:
+            claim.update(
+                {
+                    "display_name": "Veralteter Name",
+                    "position": "Veraltete Rolle",
+                }
+            )
+        claims.append(claim)
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: "
+        + ("true" if supported else "false")
+        + "\nEVIDENCE_BUNDLE_JSON: "
+        + __import__("json").dumps(
+            {
+                "schema_version": "kahle.evidence-bundle.v1",
+                "status": "supported" if supported else "unsupported",
+                "supported_claims": claims,
+                "missing_information": (
+                    [] if supported else ["Kein dokumentierter Kontaktweg gefunden."]
+                ),
+                "conflicts": [],
+                "sources": [{"id": "R1", "title": "Kontaktwege"}] if supported else [],
+            },
+            ensure_ascii=False,
+        )
     )
 
-    assert plan.required_tools == ("personio_directory",)
-
 
 @pytest.mark.parametrize(
-    "query",
+    ("called_tools", "expected_tools", "expected_sources"),
     (
-        "Wie ist die E-Mail-Adresse der Personalabteilung?",
-        "Welche Kontakte gibt es für Bewerbungen?",
-        "Wohin schicke ich meine Bewerbung?",
-        "Wo soll ich meine Krankmeldung hinschicken?",
+        (("personio_directory",), ("personio_directory",), {"P1"}),
+        (("rag_chat",), ("rag_chat",), {"R1"}),
+        (
+            ("personio_directory", "rag_chat"),
+            ("personio_directory", "rag_chat"),
+            {"P1", "R1"},
+        ),
     ),
 )
-def test_documented_functional_contact_queries_require_rag_only(query):
-    """A documented mailbox or delivery route is not a current people lookup."""
+def test_result_driven_decision_uses_only_actually_called_sources(
+    called_tools, expected_tools, expected_sources
+):
     harness = load_harness()
 
-    plan = harness.plan_retrieval(
-        query,
-        query,
-        [],
-        "kahle-vinci",
-        {"user_id": "user-1"},
+    decision = harness.build_result_driven_decision(
+        called_tools=called_tools,
+        query="Kompakte freie Formulierung ohne Harness-Routing",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(),
+        personio_result=_result_driven_personio_payload(),
     )
 
-    assert plan.required_tools == ("rag_chat",)
+    assert decision is not None
+    assert decision.retrieval_plan.required_tools == expected_tools
+    assert {source["id"] for source in decision.evidence_bundle.sources} == expected_sources
+
+
+def test_result_driven_decision_is_absent_without_an_actual_internal_tool_call():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=(),
+        query="Allgemeine Unterhaltung",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    assert decision is None
+
+
+def test_personio_not_found_does_not_consume_unexecuted_rag_as_fallback():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory",),
+        query="Serviceassistenzen Neustadt",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(),
+        personio_result=_result_driven_personio_payload(status="not_found"),
+    )
+
+    assert decision is not None
+    assert decision.retrieval_plan.required_tools == ("personio_directory",)
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.sources == ()
+
+
+def test_rag_unsupported_does_not_consume_unexecuted_personio_as_fallback():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie lautet das Funktionspostfach?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(supported=False),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    assert decision is not None
+    assert decision.retrieval_plan.required_tools == ("rag_chat",)
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.sources == ()
+
+
+def test_result_driven_mixed_evidence_keeps_personio_authority_and_rag_path():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat", "personio_directory"),
+        query="Wer arbeitet aktuell dort und wie ist der dokumentierte Kontaktweg?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(include_current_people=True),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    assert decision is not None
+    claims = decision.evidence_bundle.supported_claims
+    assert claims[0]["display_name"] == "Erika Beispiel"
+    assert claims[0]["position"] == "Serviceassistenz"
+    assert all(
+        not isinstance(claim, dict)
+        or (
+            claim.get("display_name") != "Veralteter Name"
+            and claim.get("position") != "Veraltete Rolle"
+        )
+        for claim in claims
+    )
+    assert any(
+        isinstance(claim, dict) and "Ticketsystem" in str(claim.get("text") or "")
+        for claim in claims
+    )
+    assert decision.answer_contract.allowed_contact_values == (
+        "person@example.invalid",
+        "team@example.invalid",
+    )
