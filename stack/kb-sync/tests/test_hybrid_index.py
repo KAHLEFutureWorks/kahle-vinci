@@ -1,4 +1,65 @@
 from app.hybrid_index import BM25Corpus, ParentChildChunker, german_tokens
+import pytest
+
+
+CONTACT_HEADER = "| Funktion | Kontaktart | Kontaktwert | Verwendungszweck | Geltungsbereich |\n| --- | --- | --- | --- | --- |"
+IT_ROW = "| IT | E-Mail | it@example.invalid | Störungen | gruppenweit |"
+MARKETING_ROW = "| Marketing | E-Mail | marketing@example.invalid | Kampagnen | gruppenweit |"
+
+
+def test_contact_child_never_contains_other_contact():
+    markdown = "\n".join(("## Funktionskontakte", CONTACT_HEADER, IT_ROW, MARKETING_ROW))
+    children = ParentChildChunker().chunk("synthetic-doc", markdown)
+    contacts = [child for child in children if child.kind == "functional_contact"]
+    assert len(contacts) == 2
+    assert contacts[0].functional_contact["function"] == "IT"
+    assert contacts[0].functional_contact["row_number"] == 4
+    assert contacts[1].functional_contact["row_number"] == 5
+    assert contacts[0].parent_id != contacts[1].parent_id
+    for contact in contacts:
+        assert contact.content == contact.parent_content == contact.functional_contact["evidence_span"]
+    for child in children:
+        if child.kind != "functional_contact":
+            assert "it@example.invalid" not in child.parent_content
+            assert "marketing@example.invalid" not in child.parent_content
+
+
+def test_contact_rows_keep_global_frontmatter_free_crlf_line_numbers():
+    markdown = "\n".join(("---", "title: Example", "---", "# Wissen", "", "Einleitung.", "", "## Funktionskontakte", CONTACT_HEADER, IT_ROW))
+    children = ParentChildChunker().chunk("synthetic-doc", markdown.replace("\n", "\r\n"))
+    contact = next(child for child in children if child.kind == "functional_contact")
+    assert contact.functional_contact["row_number"] == 8
+    assert contact.content == IT_ROW
+
+
+@pytest.mark.parametrize("hint", ["Für Fragen wie", "Beispielanfragen", "Suchbegriffe", "Synonyme", "Kurzindex"])
+def test_hint_classification_inherits_real_heading_depth(hint):
+    markdown = f"### {hint}\nHinweis.\n#### Unterabschnitt\nBeispiel.\n### Prozess\nEchte Anweisung."
+    children = ParentChildChunker().chunk("synthetic-doc", markdown)
+    assert [child.kind for child in children] == ["retrieval_hint", "retrieval_hint", "text"]
+    assert children[-1].heading_path == ("Prozess",)
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_fenced_contact_example_never_becomes_typed_even_if_row_repeats(fence):
+    markdown = "\n".join((fence, "## Funktionskontakte", CONTACT_HEADER, IT_ROW, fence,
+                           "## Funktionskontakte", CONTACT_HEADER, IT_ROW))
+    children = ParentChildChunker().chunk("synthetic-doc", markdown)
+    contacts = [child for child in children if child.kind == "functional_contact"]
+    assert len(contacts) == 1
+    assert contacts[0].functional_contact["row_number"] == 10
+    assert children[0].kind != "retrieval_hint"
+
+
+def test_invalid_or_oversized_rows_remain_untyped_without_splitting_valid_row():
+    invalid = IT_ROW.replace("it@example.invalid", "not-an-email")
+    oversized = MARKETING_ROW.replace("Kampagnen", "x" * 201)
+    markdown = "\n".join(("## Funktionskontakte", CONTACT_HEADER, invalid, oversized, IT_ROW))
+    children = ParentChildChunker(child_max_chars=200).chunk("synthetic-doc", markdown)
+    contacts = [child for child in children if child.kind == "functional_contact"]
+    assert len(contacts) == 1
+    assert contacts[0].content == IT_ROW
+    assert all(child.functional_contact is None for child in children if child.kind != "functional_contact")
 
 
 def test_german_bm25_preserves_identifiers_and_delegates_idf_to_qdrant():
