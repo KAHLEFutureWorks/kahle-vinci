@@ -2,8 +2,8 @@
 
 Stand: 3. September 2026
 
-Status: Fachlicher Vertrag im Gespräch freigegeben; schriftliche Fassung zur
-abschließenden Durchsicht. Noch nicht implementiert.
+Status: Fachlicher Vertrag und schriftliche Fassung am 3. September 2026 vom
+Nutzer freigegeben. Noch nicht implementiert.
 
 ## 1. Zweck und Einordnung
 
