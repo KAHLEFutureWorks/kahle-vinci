@@ -5,7 +5,7 @@ description: Berechtigungsgefilterte Dense+BM25-Suche mit RRF, Reranking und Que
 # Erzeugt von stack/open-webui-tools/build_tools.py. Nicht direkt bearbeiten.
 # Quellen: functional_contact_contract.py, hybrid_retrieval.py, hybrid_retrieval_adapters.py, rag_chat_hybrid_tool.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pydantic import BaseModel, Field
 from typing import Any, Protocol
@@ -195,6 +195,9 @@ class RetrievedChunk:
     classification_status: str = "review_required"
     classification_version: str = ""
     classification_confidence: float = 0.0
+    chunk_kind: str = "text"
+    functional_contact: dict | None = None
+    contact_error: str = ""
 class SparseQueryEncoder(Protocol):
     def encode_query(self, query: str) -> dict[str, list[int] | list[float]]: ...
 class Reranker(Protocol):
@@ -435,6 +438,11 @@ def pre_rerank_metadata_filter(
                 point for point in selected
                 if _passage_has_explicit_usage_scope(point, entity)
             ]
+    if required.issubset({"functional_contact", "contact_details", "explicit_relationship"}):
+        # The row carries this evidence itself, independently of document classification.
+        selected.extend(point for point in candidates if point not in selected
+                        and (point.get("payload") or {}).get("chunk_kind") == "functional_contact"
+                        and validate_functional_contact((point.get("payload") or {}).get("functional_contact")) is not None)
     return selected
 def _passage_has_explicit_usage_scope(point: dict[str, Any], entity: str) -> bool:
     payload = point.get("payload") or {}
@@ -578,10 +586,10 @@ def deduplicate_reranked(
         terms = set(re.findall(r"[a-z0-9]{3,}", normalized))
         conflict = bool(payload.get("conflict"))
         duplicate = False
-        if terms and not conflict:
+        if terms and not conflict and payload.get("chunk_kind") != "functional_contact":
             for (existing_index, _existing_score), other in zip(selected, selected_terms):
                 existing_payload = candidates[existing_index].get("payload") or {}
-                if existing_payload.get("conflict"):
+                if existing_payload.get("conflict") or existing_payload.get("chunk_kind") == "functional_contact":
                     continue
                 overlap = len(terms.intersection(other)) / max(1, len(terms.union(other)))
                 if overlap >= similarity_threshold:
@@ -619,6 +627,9 @@ def structural_document_overview(
     *, result_limit: int, max_context_chars: int = 40_000,
 ) -> list[tuple[tuple[int, ...], float]]:
     """Group every parent below each numbered main chapter when all chapters fit."""
+    # Contact rows cannot be concatenated into chapter evidence.
+    if any((point.get("payload") or {}).get("chunk_kind") == "functional_contact" for point in candidates):
+        return []
     scores = {index: float(score) for index, score in reranked}
     numbered: dict[int, list[int]] = {}
     for index, point in enumerate(candidates):
@@ -730,6 +741,76 @@ class QdrantHybridRetriever:
             raise RetrievalError("minimum_rerank_score_out_of_range")
         self.minimum_rerank_score = minimum_rerank_score
 
+    @staticmethod
+    def _validate_points(points, scope, today):
+        if not isinstance(points, list):
+            raise RetrievalError("search_response_invalid")
+        for point in points:
+            payload = point.get("payload") if isinstance(point, dict) else None
+            if not isinstance(payload, dict):
+                raise RetrievalError("search_response_invalid")
+            rights = payload.get("knowledgebase_ids")
+            if not isinstance(rights, list) or not all(isinstance(item, str) for item in rights) or not set(rights).intersection(scope.knowledgebase_ids):
+                raise RetrievalError("acl_violation_in_search_response")
+            if payload.get("version_id") not in scope.active_version_ids:
+                raise RetrievalError("non_authoritative_version_returned")
+            if payload.get("status") != "active" or payload.get("published") is not True:
+                raise RetrievalError("inactive_result_returned")
+            try:
+                start, end = (date.fromisoformat(payload[key]) for key in ("valid_from", "valid_until"))
+                if not start <= today <= end:
+                    raise ValueError("outside_validity")
+            except (KeyError, ValueError, TypeError):
+                raise RetrievalError("invalid_result_validity") from None
+        return points
+
+    @staticmethod
+    def _contact(point):
+        payload = point.get("payload") or {}
+        if payload.get("chunk_kind") != "functional_contact":
+            return None
+        contact = validate_functional_contact(payload.get("functional_contact"))
+        if contact is None or payload.get("content") != contact["evidence_span"] or payload.get("parent_content") != contact["evidence_span"]:
+            return None
+        key = json.dumps(functional_contact_key(contact), ensure_ascii=False, separators=(",", ":"))
+        if payload.get("functional_contact_key") != hashlib.sha256(key.encode("utf-8")).hexdigest():
+            return None
+        return contact
+
+    def _contact_check(self, contact, acl, scope, today, observed_values=()):
+        key = json.dumps(functional_contact_key(contact), ensure_ascii=False, separators=(",", ":"))
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        body = {"filter": {"must": [*acl["must"], {"key": "functional_contact_key", "match": {"value": digest}}]},
+                "limit": 100, "with_payload": True, "with_vector": False}
+        values = {contact["value"], *observed_values}
+        for _page in range(10):
+            try:
+                response = requests.post(f"{self.qdrant_url}/collections/{self.alias}/points/scroll", json=body.copy(), timeout=self.timeout)
+                response.raise_for_status()
+                result = response.json()["result"]
+                points = result["points"]
+                if not isinstance(points, list) or "next_page_offset" not in result:
+                    raise ValueError("incomplete_page")
+                for point in points:
+                    try:
+                        self._validate_points([point], scope, today)
+                    except RetrievalError:
+                        # Hidden/stale entries must neither authorize nor expose a conflict.
+                        continue
+                    other = self._contact(point)
+                    if other is None or functional_contact_key(other) != functional_contact_key(contact):
+                        raise ValueError("invalid_contact_response")
+                    values.add(other["value"])
+                offset = result["next_page_offset"]
+                if offset is None:
+                    return "functional_contact_conflict" if len(values) > 1 else ""
+                if not isinstance(offset, (int, str)) or isinstance(offset, bool):
+                    raise ValueError("invalid_offset")
+                body["offset"] = offset
+            except (requests.RequestException, KeyError, TypeError, ValueError):
+                return "functional_contact_conflict_check_incomplete"
+        return "functional_contact_conflict_check_incomplete"
+
     def retrieve(self, query: str, dense_vector: list[float], scope: RetrievalScope,
                  *, candidate_limit: int = 50, result_limit: int = 8,
                  today: date | None = None,
@@ -738,6 +819,7 @@ class QdrantHybridRetriever:
             raise RetrievalError("query_and_dense_vector_required")
         if not 30 <= candidate_limit <= 50 or not 5 <= result_limit <= 8:
             raise RetrievalError("retrieval_limits_out_of_policy")
+        today = today or date.today()
         acl = mandatory_acl_filter(scope, today)
         try:
             sparse = self.sparse_encoder.encode_query(query)
@@ -781,12 +863,22 @@ class QdrantHybridRetriever:
             points = response.json()["result"]["points"]
         except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
             raise RetrievalError("hybrid_search_unavailable") from exc
+        points = self._validate_points(points, scope, today)
+        hint_identities = {
+            (point["payload"].get("document_id"), point["payload"].get("version_id"))
+            for point in points if point["payload"].get("chunk_kind") == "retrieval_hint"
+        }
+        if hint_identities:
+            expanded = self._validate_points(self._document_points({doc for doc, _ in hint_identities if doc}, acl), scope, today)
+            points = points + [point for point in expanded if (point["payload"].get("document_id"), point["payload"].get("version_id")) in hint_identities]
+        points = [point for point in points if point["payload"].get("chunk_kind") != "retrieval_hint"]
         candidates = [
             point for point in self._parent_centered(points, candidate_limit)
             if not _metadata_only(point)
         ]
         if opening_hours_all_locations_intent(query):
-            candidates = self._complete_opening_hours_locations(candidates, acl)
+            candidates = self._complete_opening_hours_locations(candidates, acl, scope, today)
+        candidates = [point for point in candidates if point["payload"].get("chunk_kind") != "retrieval_hint"]
         candidates = pre_rerank_metadata_filter(query, candidates, information_needs)
         if not candidates:
             return []
@@ -816,12 +908,18 @@ class QdrantHybridRetriever:
         }
         selected_document_ids.discard("")
         if selected_document_ids:
-            complete_points = self._document_points(selected_document_ids, acl)
+            complete_points = self._validate_points(self._document_points(selected_document_ids, acl), scope, today)
+            complete_points = [point for point in complete_points if point["payload"].get("document_id") in selected_document_ids and point["payload"].get("chunk_kind") != "retrieval_hint"]
             if complete_points:
                 candidates = [
                     point for point in self._parent_centered(complete_points, 256)
                     if not _metadata_only(point)
                 ]
+        candidates = [point for point in candidates if (
+            point["payload"].get("chunk_kind") != "functional_contact" and not point["payload"].get("functional_contact")
+        ) or self._contact(point) is not None]
+        if not candidates:
+            return []
         try:
             reranked = self.reranker.rerank(
                 query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
@@ -899,11 +997,28 @@ class QdrantHybridRetriever:
                 classification_status=payload.get("classification_status") or "review_required",
                 classification_version=payload.get("classification_version") or "",
                 classification_confidence=float(payload.get("classification_confidence") or 0),
+                chunk_kind=payload.get("chunk_kind") or "text",
+                functional_contact=self._contact(point),
             ))
+        checks = {}
+        observed = {}
+        for point in candidates:
+            contact = self._contact(point)
+            if contact is not None:
+                observed.setdefault(functional_contact_key(contact), set()).add(contact["value"])
+        for index, chunk in enumerate(selected):
+            if chunk.functional_contact is None:
+                continue
+            key = functional_contact_key(chunk.functional_contact)
+            if key not in checks:
+                checks[key] = self._contact_check(chunk.functional_contact, acl, scope, today, observed.get(key, ()))
+            if checks[key]:
+                selected[index] = replace(chunk, content="", parent_content="", functional_contact=None,
+                                          contact_error=checks[key], conflict=checks[key] == "functional_contact_conflict")
         return selected
 
     def _complete_opening_hours_locations(
-        self, candidates: list[dict[str, Any]], acl: dict[str, Any],
+        self, candidates: list[dict[str, Any]], acl: dict[str, Any], scope: RetrievalScope, today: date,
     ) -> list[dict[str, Any]]:
         """Recover location passages omitted from the broad top-50 fusion pool.
 
@@ -938,7 +1053,7 @@ class QdrantHybridRetriever:
                 points = response.json()["result"]["points"]
             except (RetrievalError, requests.RequestException, KeyError, TypeError, ValueError):
                 continue
-            for point in self._parent_centered(points, 8):
+            for point in self._parent_centered(self._validate_points(points, scope, today), 8):
                 identity = str(
                     (point.get("payload") or {}).get("parent_id") or point.get("id") or ""
                 )
@@ -985,6 +1100,8 @@ class QdrantHybridRetriever:
         for point in points:
             payload = point.get("payload") or {}
             parent_id = str(payload.get("parent_id") or point.get("id") or "")
+            if payload.get("chunk_kind") == "functional_contact":
+                parent_id = str(point.get("id") or "")
             if not parent_id or parent_id in seen_parents:
                 continue
             seen_parents.add(parent_id)
@@ -1338,7 +1455,7 @@ def _claim_evidence_spans(query, passage):
     """Select exact relevant sentences; never synthesize a claim across passages."""
     sentences = [
         sentence.strip()
-        for sentence in re.findall(r"[^.!?\n]+[.!?]?", str(passage or ""))
+        for sentence in re.split(r"(?<=[.!?])\s+|\n+", str(passage or ""))
         if sentence.strip()
     ]
     if not sentences:
@@ -1358,7 +1475,7 @@ def _claim_evidence_spans(query, passage):
         scored.append((len(query_terms.intersection(terms)), position, sentence))
     best = max(score for score, _position, _sentence in scored)
     if best <= 0:
-        return sentences[:1]
+        return []
     return [
         sentence for score, _position, sentence in scored
         if score == best
@@ -1369,7 +1486,21 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
     claims = []
     for source in source_items:
         number = source.get("number")
-        passage = str(source.get("evidence_text") or "").strip()
+        passage = str(source.get("evidence_text") or "")
+        if source.get("contact_error"):
+            missing.append(source["contact_error"])
+            continue
+        contact = validate_functional_contact(source.get("functional_contact"))
+        if source.get("chunk_kind") == "functional_contact" or source.get("functional_contact") is not None:
+            if (number and contact is not None and source.get("chunk_kind") == "functional_contact"
+                    and passage == contact["evidence_span"] and source.get("document_id") and source.get("version_id")):
+                claims.append({
+                    "claim_id": f"R{number}C1", "source_id": f"#{number}",
+                    "text": passage, "evidence_span": passage,
+                    "document_id": source["document_id"], "version_id": source["version_id"],
+                    "claim_type": "functional_contact", "functional_contact": contact,
+                })
+            continue
         if number and passage:
             for claim_index, claim in enumerate(_claim_evidence_spans(query, passage), 1):
                 claims.append({
@@ -1380,7 +1511,8 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
                     "document_id": source.get("document_id"),
                     "version_id": source.get("version_id"),
                     "claim_type": (
-                        (source.get("evidence_capabilities") or ["factual_support"])[0]
+                        next((capability for capability in source.get("evidence_capabilities", ())
+                              if capability != "functional_contact"), "factual_support")
                     ),
                 })
     clean_sources = [
@@ -1429,7 +1561,7 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
             missing.append("Eine Datenschutzfreigabe ist in den Quellen nicht bestätigt.")
     return {
         "schema_version": "kahle.evidence-bundle.v1",
-        "status": status,
+        "status": "partially_supported" if missing and source_items else status,
         "supported_claims": claims,
         "missing_information": missing,
         "conflicts": conflicts,
@@ -1528,7 +1660,26 @@ class Tools:
                 query, dense, scope,
                 information_needs=(information_needs if isinstance(information_needs, list) else None),
             )
-            chunks = _filter_evidence_chunks(query, chunks)
+            # A malformed typed row cannot degrade to generic context or recover
+            # its authority from document-wide metadata.
+            valid_chunks = []
+            contact_errors = []
+            for chunk in chunks:
+                if getattr(chunk, "contact_error", ""):
+                    contact_errors.append(chunk)
+                    continue
+                kind = getattr(chunk, "chunk_kind", "text")
+                raw_contact = getattr(chunk, "functional_contact", None)
+                if kind == "retrieval_hint":
+                    continue
+                if kind == "functional_contact" or raw_contact is not None:
+                    contact = validate_functional_contact(raw_contact)
+                    if (kind != "functional_contact" or contact is None
+                            or getattr(chunk, "content", None) != contact["evidence_span"]
+                            or chunk.parent_content != contact["evidence_span"]):
+                        continue
+                valid_chunks.append(chunk)
+            chunks = _filter_evidence_chunks(query, valid_chunks) + contact_errors
         except Exception as exc:
             error_code = (
                 str(exc).strip()
@@ -1551,7 +1702,10 @@ class Tools:
         context, sources = [], []
         for index, chunk in enumerate(chunks, 1):
             heading = " > ".join(chunk.heading_path)
-            context.append(f"[Quelle {index}] {chunk.title} | {heading}\n{chunk.parent_content}")
+            contact_error = getattr(chunk, "contact_error", "")
+            passage = "" if contact_error else chunk.parent_content
+            if passage:
+                context.append(f"[Quelle {index}] {chunk.title} | {heading}\n{passage}")
             sources.append({
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
@@ -1569,8 +1723,13 @@ class Tools:
                 "classification_confidence": float(
                     getattr(chunk, "classification_confidence", 0) or 0
                 ),
-                "evidence_text": chunk.parent_content,
+                "evidence_text": passage,
             })
+            if contact_error:
+                sources[-1]["contact_error"] = contact_error
+            elif getattr(chunk, "functional_contact", None) is not None:
+                sources[-1]["functional_contact"] = chunk.functional_contact
+                sources[-1]["chunk_kind"] = "functional_contact"
         joined_context = "\n\n".join(context)
         evidence = _evidence_bundle(query, joined_context, sources)
         _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,

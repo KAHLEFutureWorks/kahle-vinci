@@ -6,16 +6,183 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 
 PATH = Path(__file__).resolve().parents[1] / "open-webui-tools" / "hybrid_retrieval.py"
+sys.path.insert(0, str(PATH.parent))
 SPEC = importlib.util.spec_from_file_location("hybrid_retrieval", PATH)
 module = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = module
 SPEC.loader.exec_module(module)
+
+
+def contact_search_point(value="it@example.invalid", *, function="IT", **changes):
+    from functional_contact_contract import parse_functional_contacts, functional_contact_key
+    import hashlib
+
+    text = ("## Funktionskontakte\n"
+        "| Funktion | Kontaktart | Kontaktwert | Verwendungszweck | Geltungsbereich |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        f"| {function} | E-Mail | {value} | Störungen | gruppenweit |")
+    contact = parse_functional_contacts(text)[0]
+    key = hashlib.sha256(json.dumps(functional_contact_key(contact), ensure_ascii=False,
+                                    separators=(",", ":")).encode()).hexdigest()
+    payload = dict(document_id="d1", version_id="v1", title="Kontaktregister", source_id="s1",
+        source_url="/wissen/sources/s1", knowledgebase_ids=["service"], status="active", published=True,
+        valid_from="2026-01-01", valid_until="2026-12-31", heading_path=["Funktionskontakte"],
+        content=contact["evidence_span"], parent_content=contact["evidence_span"], parent_id="p1",
+        chunk_kind="functional_contact", functional_contact=contact, functional_contact_key=key)
+    payload.update(changes)
+    return {"id": value, "score": .9, "payload": payload}
+
+
+def run_contact_search(monkeypatch, initial, *, pages=None, query="Kontaktkanäle", expanded=None):
+    calls, reranked_documents = [], []
+
+    def post(url, json, timeout):
+        calls.append((url, json))
+        if url.endswith("/query"):
+            result = {"points": initial}
+        elif any(item.get("key") == "functional_contact_key" for item in json["filter"]["must"]):
+            if isinstance(pages, Exception):
+                raise pages
+            position = sum(1 for _, body in calls if any(
+                item.get("key") == "functional_contact_key" for item in body.get("filter", {}).get("must", []))) - 1
+            result = pages[position] if pages is not None else {"points": initial, "next_page_offset": None}
+        else:
+            result = {"points": expanded if expanded is not None else initial, "next_page_offset": None}
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"result": result})
+
+    def rerank(query, documents, top_n):
+        reranked_documents.extend(documents)
+        return [(index, .99) for index in range(len(documents))]
+
+    monkeypatch.setattr(module.requests, "post", post)
+    retriever = module.QdrantHybridRetriever("http://qdrant.invalid", "test",
+        SimpleNamespace(encode_query=lambda _: {"build_id": "test", "indices": [1], "values": [1.0]}),
+        SimpleNamespace(rerank=rerank))
+    result = retriever.retrieve(query, [1.0], module.RetrievalScope("u", ("service",), ("v1",)),
+                                today=date(2026, 9, 3))
+    return result, calls, reranked_documents
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"knowledgebase_ids": ["secret"]}, "acl_violation"),
+    ({"version_id": "stale"}, "non_authoritative"),
+    ({"published": False}, "inactive"),
+    ({"valid_from": "2027-01-01"}, "validity"),
+    ({"valid_until": "2025-01-01"}, "validity"),
+    ({"valid_from": None}, "validity"),
+    ({"valid_until": "not-a-date"}, "validity"),
+])
+def test_contact_search_rejects_untrusted_payload_before_reranker(monkeypatch, changes, reason):
+    def forbidden_rerank(*args, **kwargs):
+        pytest.fail("untrusted payload reached reranker")
+
+    monkeypatch.setattr(module, "pre_rerank_metadata_filter", forbidden_rerank)
+    with pytest.raises(module.RetrievalError, match=reason):
+        run_contact_search(monkeypatch, [contact_search_point(**changes)])
+
+
+def test_contact_conflict_checks_all_pages_under_acl(monkeypatch):
+    first, conflicting = contact_search_point(), contact_search_point("other@example.invalid")
+    result, calls, _ = run_contact_search(monkeypatch, [first], pages=[
+        {"points": [first], "next_page_offset": "page2"},
+        {"points": [conflicting], "next_page_offset": None},
+    ])
+    assert all(chunk.functional_contact is None for chunk in result)
+    assert [chunk.contact_error for chunk in result] == ["functional_contact_conflict"]
+    assert all("@" not in chunk.content + chunk.parent_content for chunk in result)
+    scrolls = [body for url, body in calls if url.endswith("/scroll")]
+    assert len(scrolls) == 2 and scrolls[1]["offset"] == "page2"
+    assert all(body["limit"] == 100 for body in scrolls)
+    assert {item["key"] for item in scrolls[0]["filter"]["must"]} >= {
+        "knowledgebase_ids", "version_id", "status", "published", "valid_from", "valid_until", "functional_contact_key",
+    }
+
+
+def test_hidden_contact_conflict_does_not_become_visible(monkeypatch):
+    first = contact_search_point()
+    hidden = contact_search_point("hidden@example.invalid", knowledgebase_ids=["secret"])
+    result, _, _ = run_contact_search(monkeypatch, [first], pages=[{"points": [first, hidden], "next_page_offset": None}])
+    assert len(result) == 1 and result[0].functional_contact["value"] == "it@example.invalid"
+    assert not result[0].conflict and not result[0].contact_error
+
+
+@pytest.mark.parametrize("mode", ["timeout", "limit"])
+def test_incomplete_contact_conflict_check_withholds_value(monkeypatch, mode):
+    first = contact_search_point()
+    pages = module.requests.Timeout() if mode == "timeout" else [
+        {"points": [first], "next_page_offset": f"page{i}"} for i in range(10)
+    ]
+    result, _, _ = run_contact_search(monkeypatch, [first], pages=pages)
+    assert [chunk.contact_error for chunk in result] == ["functional_contact_conflict_check_incomplete"]
+    assert all(chunk.functional_contact is None and "@" not in chunk.parent_content for chunk in result)
+
+
+def test_hint_expands_verified_document_but_never_reaches_reranker(monkeypatch):
+    answer = contact_search_point()
+    hint = contact_search_point(chunk_kind="retrieval_hint", content="Suchhilfe Kontaktkanäle", parent_content="Suchhilfe Kontaktkanäle")
+    result, _, documents = run_contact_search(monkeypatch, [hint], expanded=[answer], pages=[{"points": [answer], "next_page_offset": None}])
+    assert len(result) == 1 and result[0].functional_contact is not None
+    assert all("Suchhilfe" not in text for text in documents)
+
+
+def test_contact_rows_not_deduplicated_by_shared_parent(monkeypatch):
+    first = contact_search_point()
+    other = contact_search_point("other@example.invalid")
+    result = module.QdrantHybridRetriever._parent_centered([first, other], 50)
+    assert len(result) == 2
+
+
+def test_unrelated_sentence_has_no_claim_span():
+    (claim_spans,) = load_tool_helpers("_claim_evidence_spans")
+    assert claim_spans("Kontaktkanäle", "Der Stapler steht im Lager.") == []
+
+
+def test_structured_contact_survives_document_capability_filter():
+    point = contact_search_point()
+    generic = {"payload": {"evidence_capabilities": ["procedure"],
+        "classification_status": "confirmed", "classification_confidence": 1.0}}
+    selected = module.pre_rerank_metadata_filter("Kontaktkanäle", [point, generic],
+        information_needs=[{"kind": "organization_contact", "evidence_capabilities": ["contact_details"]}])
+    assert selected == [point]
+
+
+def test_conflict_for_one_key_keeps_independent_contact(monkeypatch):
+    first = contact_search_point()
+    conflict = contact_search_point("other@example.invalid")
+    independent = contact_search_point("marketing@example.invalid", function="Marketing")
+    result, _, _ = run_contact_search(monkeypatch, [first, independent], pages=[
+        {"points": [first, conflict], "next_page_offset": None},
+        {"points": [independent], "next_page_offset": None},
+    ])
+    assert result[0].contact_error == "functional_contact_conflict"
+    assert result[1].functional_contact["value"] == "marketing@example.invalid"
+
+
+def test_document_expansion_payload_is_checked_before_reranker(monkeypatch):
+    hint = contact_search_point(chunk_kind="retrieval_hint", content="Suchhilfe", parent_content="Suchhilfe")
+    with pytest.raises(module.RetrievalError, match="invalid_result_validity"):
+        run_contact_search(monkeypatch, [hint], expanded=[contact_search_point(valid_until="2025-01-01")])
+
+
+def test_contact_under_numbered_heading_never_merges_into_chapter():
+    point = contact_search_point(heading_path=["1. Kontakte"])
+    other = contact_search_point("other@example.invalid", heading_path=["1. Kontakte"])
+    assert module.structural_document_overview([point, other], [(0, .9), (1, .8)], result_limit=8) == []
+
+
+def test_conflicting_initial_hits_cannot_be_erased_by_empty_scroll(monkeypatch):
+    result, _, _ = run_contact_search(monkeypatch,
+        [contact_search_point(), contact_search_point("other@example.invalid")],
+        pages=[{"points": [], "next_page_offset": None}])
+    assert len(result) == 2
+    assert all(chunk.contact_error == "functional_contact_conflict" and chunk.functional_contact is None for chunk in result)
 
 
 def load_tool_helpers(*names):
@@ -622,7 +789,7 @@ def test_low_relevance_results_are_rejected_after_reranking(monkeypatch):
                 "payload": {"document_id": "doc", "version_id": "v1", "title": "Unpassend",
                             "content": "anderes Thema", "knowledgebase_ids": ["service"], "status": "active",
                             "published": True, "source_id": "s", "source_url": "/s",
-                            "valid_until": "2026-09-01"},
+                            "valid_from": "2026-01-01", "valid_until": "2026-09-01"},
             }]}}
 
     monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: Response())
@@ -829,7 +996,7 @@ def test_named_document_overview_returns_every_main_chapter_and_no_frontmatter(m
                 "chunk_order": order, "heading_path": heading,
                 "knowledgebase_ids": ["richtlinien"], "status": "active",
                 "published": True, "source_id": "source-1", "source_url": "/source/v1",
-                "valid_until": "2026-11-03", "authority": "5:process", "conflict": False,
+                "valid_from": "2026-01-01", "valid_until": "2026-11-03", "authority": "5:process", "conflict": False,
             },
         }
 
@@ -899,7 +1066,7 @@ def test_title_only_tool_query_still_returns_the_complete_document_overview(monk
                 "chunk_order": number, "heading_path": ["KI-Compliance", f"{number}. Kapitel"],
                 "knowledgebase_ids": ["richtlinien"], "status": "active", "published": True,
                 "source_id": "source-1", "source_url": "/source/v1",
-                "valid_until": "2026-11-03", "authority": "3:executive_policy", "conflict": False,
+                "valid_from": "2026-01-01", "valid_until": "2026-11-03", "authority": "3:executive_policy", "conflict": False,
             },
         }
 
@@ -942,7 +1109,7 @@ def test_normative_question_prefers_authoritative_sources_and_removes_duplicate_
                 "chunk_order": 1, "heading_path": [title, "Vorgaben"],
                 "knowledgebase_ids": ["richtlinien"], "status": "active", "published": True,
                 "source_id": identifier, "source_url": f"/source/{identifier}",
-                "valid_until": "2026-11-03", "authority": authority, "conflict": False,
+                "valid_from": "2026-01-01", "valid_until": "2026-11-03", "authority": authority, "conflict": False,
             },
         }
 
@@ -1084,7 +1251,7 @@ def test_named_entity_uses_acl_filtered_hybrid_order_when_reranker_is_unavailabl
             "content": "Geschäftsführer: Thomas Keller (keller@kahle.de)",
             "parent_content": "Geschäftsführer: Thomas Keller (keller@kahle.de)",
             "knowledgebase_ids": ["allgemein"], "status": "active", "published": True,
-            "source_id": "s", "source_url": "/s", "valid_until": "2026-11-01",
+            "source_id": "s", "source_url": "/s", "valid_from": "2026-01-01", "valid_until": "2026-11-01",
         },
     }]
 
@@ -1123,7 +1290,7 @@ def test_sparse_encoder_outage_falls_back_to_acl_filtered_dense_search(monkeypat
             "content": "Engin Bayir ist als Führungskraft hinterlegt.",
             "parent_content": "Engin Bayir ist als Führungskraft hinterlegt.",
             "knowledgebase_ids": ["allgemein"], "status": "active", "published": True,
-            "source_id": "s", "source_url": "/s", "valid_until": "2026-11-01",
+            "source_id": "s", "source_url": "/s", "valid_from": "2026-01-01", "valid_until": "2026-11-01",
         },
     }]
 

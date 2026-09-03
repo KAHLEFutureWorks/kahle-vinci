@@ -15,6 +15,7 @@ import re
 import time
 import requests
 from pydantic import BaseModel, Field
+from functional_contact_contract import validate_functional_contact
 
 
 def _feedback_link(chat_id, message_id):
@@ -347,7 +348,7 @@ def _claim_evidence_spans(query, passage):
     """Select exact relevant sentences; never synthesize a claim across passages."""
     sentences = [
         sentence.strip()
-        for sentence in re.findall(r"[^.!?\n]+[.!?]?", str(passage or ""))
+        for sentence in re.split(r"(?<=[.!?])\s+|\n+", str(passage or ""))
         if sentence.strip()
     ]
     if not sentences:
@@ -367,7 +368,7 @@ def _claim_evidence_spans(query, passage):
         scored.append((len(query_terms.intersection(terms)), position, sentence))
     best = max(score for score, _position, _sentence in scored)
     if best <= 0:
-        return sentences[:1]
+        return []
     return [
         sentence for score, _position, sentence in scored
         if score == best
@@ -380,7 +381,21 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
     claims = []
     for source in source_items:
         number = source.get("number")
-        passage = str(source.get("evidence_text") or "").strip()
+        passage = str(source.get("evidence_text") or "")
+        if source.get("contact_error"):
+            missing.append(source["contact_error"])
+            continue
+        contact = validate_functional_contact(source.get("functional_contact"))
+        if source.get("chunk_kind") == "functional_contact" or source.get("functional_contact") is not None:
+            if (number and contact is not None and source.get("chunk_kind") == "functional_contact"
+                    and passage == contact["evidence_span"] and source.get("document_id") and source.get("version_id")):
+                claims.append({
+                    "claim_id": f"R{number}C1", "source_id": f"#{number}",
+                    "text": passage, "evidence_span": passage,
+                    "document_id": source["document_id"], "version_id": source["version_id"],
+                    "claim_type": "functional_contact", "functional_contact": contact,
+                })
+            continue
         if number and passage:
             for claim_index, claim in enumerate(_claim_evidence_spans(query, passage), 1):
                 claims.append({
@@ -391,7 +406,8 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
                     "document_id": source.get("document_id"),
                     "version_id": source.get("version_id"),
                     "claim_type": (
-                        (source.get("evidence_capabilities") or ["factual_support"])[0]
+                        next((capability for capability in source.get("evidence_capabilities", ())
+                              if capability != "functional_contact"), "factual_support")
                     ),
                 })
     clean_sources = [
@@ -440,7 +456,7 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
             missing.append("Eine Datenschutzfreigabe ist in den Quellen nicht bestätigt.")
     return {
         "schema_version": "kahle.evidence-bundle.v1",
-        "status": status,
+        "status": "partially_supported" if missing and source_items else status,
         "supported_claims": claims,
         "missing_information": missing,
         "conflicts": conflicts,
@@ -545,7 +561,26 @@ class Tools:
                 query, dense, scope,
                 information_needs=(information_needs if isinstance(information_needs, list) else None),
             )
-            chunks = _filter_evidence_chunks(query, chunks)
+            # A malformed typed row cannot degrade to generic context or recover
+            # its authority from document-wide metadata.
+            valid_chunks = []
+            contact_errors = []
+            for chunk in chunks:
+                if getattr(chunk, "contact_error", ""):
+                    contact_errors.append(chunk)
+                    continue
+                kind = getattr(chunk, "chunk_kind", "text")
+                raw_contact = getattr(chunk, "functional_contact", None)
+                if kind == "retrieval_hint":
+                    continue
+                if kind == "functional_contact" or raw_contact is not None:
+                    contact = validate_functional_contact(raw_contact)
+                    if (kind != "functional_contact" or contact is None
+                            or getattr(chunk, "content", None) != contact["evidence_span"]
+                            or chunk.parent_content != contact["evidence_span"]):
+                        continue
+                valid_chunks.append(chunk)
+            chunks = _filter_evidence_chunks(query, valid_chunks) + contact_errors
         except Exception as exc:
             error_code = (
                 str(exc).strip()
@@ -568,7 +603,10 @@ class Tools:
         context, sources = [], []
         for index, chunk in enumerate(chunks, 1):
             heading = " > ".join(chunk.heading_path)
-            context.append(f"[Quelle {index}] {chunk.title} | {heading}\n{chunk.parent_content}")
+            contact_error = getattr(chunk, "contact_error", "")
+            passage = "" if contact_error else chunk.parent_content
+            if passage:
+                context.append(f"[Quelle {index}] {chunk.title} | {heading}\n{passage}")
             sources.append({
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
@@ -586,8 +624,13 @@ class Tools:
                 "classification_confidence": float(
                     getattr(chunk, "classification_confidence", 0) or 0
                 ),
-                "evidence_text": chunk.parent_content,
+                "evidence_text": passage,
             })
+            if contact_error:
+                sources[-1]["contact_error"] = contact_error
+            elif getattr(chunk, "functional_contact", None) is not None:
+                sources[-1]["functional_contact"] = chunk.functional_contact
+                sources[-1]["chunk_kind"] = "functional_contact"
         joined_context = "\n\n".join(context)
         evidence = _evidence_bundle(query, joined_context, sources)
         _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
