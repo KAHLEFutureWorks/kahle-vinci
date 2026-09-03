@@ -10,6 +10,11 @@ import re
 import unicodedata
 from typing import Any
 
+try:
+    from open_webui.utils.functional_contact_contract import functional_contact_key, validate_functional_contact
+except ModuleNotFoundError:  # Isolated offline contract tests use the generated module.
+    from functional_contact_contract import functional_contact_key, validate_functional_contact
+
 
 SCHEMA_VERSION = "kahle.knowledge-harness.v1"
 
@@ -109,6 +114,7 @@ class AnswerContract:
     preserve_document_sources: bool = True
     preserve_feedback_link: bool = True
     allowed_contact_values: tuple[str, ...] = ()
+    allowed_contact_bindings: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,10 @@ class HarnessDecision:
             "true ist, kennzeichne diesen Stand ausdrücklich als möglicherweise veraltet. "
             "E-Mail-Adressen und Telefonnummern darfst du ausschließlich wortgleich aus "
             "answer_contract.allowed_contact_values übernehmen. "
+            "Im model_led-Vertrag sind ausschließlich allowed_contact_bindings maßgeblich: "
+            "Übernimm Kontaktwert, Funktion, Verwendungszweck, Geltungsbereich und Quellen-ID "
+            "aus derselben Bindung. Eine Bindung erlaubt keine zusätzliche Personen- oder "
+            "Führungskräfteaussage. Kontaktseiten benötigen ebenfalls eine Bindung. "
             "Erzeuge genau eine endgültige Antwort."
         )
 
@@ -1163,7 +1173,9 @@ def rag_result_from_sources(sources: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _declared_evidence_bundle(text: str) -> EvidenceBundle | None:
+def _declared_evidence_bundle(
+    text: str, *, result_driven: bool = False
+) -> EvidenceBundle | None:
     raw = _extract_marker(text, "EVIDENCE_BUNDLE_JSON")
     if not raw:
         return None
@@ -1185,6 +1197,15 @@ def _declared_evidence_bundle(text: str) -> EvidenceBundle | None:
         _source_identifier(item) for item in sources if _source_identifier(item)
     }
     claims = tuple(value.get("supported_claims") or ())
+    evidence = EvidenceBundle(
+        status=status,
+        supported_claims=claims,
+        missing_information=tuple(str(item) for item in value.get("missing_information") or ()),
+        conflicts=tuple(str(item) for item in value.get("conflicts") or ()),
+        sources=sources,
+    )
+    if result_driven:
+        return _validate_result_driven_rag_contract(evidence)
     claim_ids: list[str] = []
     for claim in claims:
         if not isinstance(claim, dict):
@@ -1209,13 +1230,7 @@ def _declared_evidence_bundle(text: str) -> EvidenceBundle | None:
             conflicts=("evidence_bundle_claim_id_duplicate",),
             sources=sources,
         )
-    return EvidenceBundle(
-        status=status,
-        supported_claims=claims,
-        missing_information=tuple(str(item) for item in value.get("missing_information") or ()),
-        conflicts=tuple(str(item) for item in value.get("conflicts") or ()),
-        sources=sources,
-    )
+    return evidence
 
 
 def _supported_claims(context: str) -> tuple[str, ...]:
@@ -1243,9 +1258,11 @@ def _procedure_is_supported(context: str) -> bool:
     return sum(bool(re.search(pattern, folded)) for pattern in action_patterns) >= 3
 
 
-def _evidence_bundle(rag_result: str, procedural: bool) -> EvidenceBundle:
+def _evidence_bundle(
+    rag_result: str, procedural: bool, *, result_driven: bool = False
+) -> EvidenceBundle:
     text = str(rag_result or "")
-    declared = _declared_evidence_bundle(text)
+    declared = _declared_evidence_bundle(text, result_driven=result_driven)
     if declared is not None:
         return declared
     found = bool(re.search(r"(?im)^FOUND:\s*true\s*$", text))
@@ -1342,7 +1359,7 @@ _RAG_CLAIM_ALLOWED_FIELDS = frozenset(
         "document_id",
         "version_id",
         "claim_type",
-        "field",
+        "functional_contact",
     }
 )
 _PERSON_ENTITY_EXCLUSION_TOKENS = frozenset(
@@ -1367,7 +1384,9 @@ _PERSON_ENTITY_EXCLUSION_TOKENS = frozenset(
     }
 )
 _PERSONIO_RELATION_MARKER = re.compile(
-    r"\b(?:chef\w*|fuhr\w*|fuhrungskraft|leit\w*|manager\w*|"
+    # Match inflections, not arbitrary word stems such as Fuhrpark or Leitfaden.
+    r"\b(?:chef\w*|fuhr(?:e|st|t|en|te|test|ten|tet)|fuhrungskraft|fuhrungskrafte|"
+    r"leit(?:e|est|et|en|ete|etest|eten|etet|er(?:in(?:nen)?|[ns]?)|ung(?:en)?)|manager\w*|"
     r"supervisor|teamleit\w*|vorgesetzt\w*)\b"
 )
 
@@ -1405,6 +1424,123 @@ def _claim_clauses(text: str) -> tuple[str, ...]:
 def _normalized_claim_field_name(value: Any) -> str:
     raw = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value or ""))
     return re.sub(r"[^a-z0-9]+", "_", _fold(raw)).strip("_")
+
+
+def _rag_claim_contract_error(evidence: EvidenceBundle) -> str:
+    """Check producer keys and identifiers before inspecting or stripping content."""
+    source_ids = [_source_identifier(source) for source in evidence.sources]
+    for source, source_id in zip(evidence.sources, source_ids):
+        carriers = [key for key in ("id", "number", "source_id") if key in source]
+        if len(carriers) != 1 or not re.fullmatch(r"(?:R)?[1-9]\d*", source_id):
+            return "evidence_bundle_source_id_invalid"
+        raw = source[carriers[0]]
+        if carriers[0] == "number":
+            if type(raw) is not int or raw < 1:
+                return "evidence_bundle_source_id_invalid"
+        elif not isinstance(raw, str) or not re.fullmatch(r"(?:R|#)[1-9]\d*", raw):
+            return "evidence_bundle_source_id_invalid"
+    if len(source_ids) != len(set(source_ids)):
+        return "evidence_bundle_source_id_duplicate"
+    claim_ids: set[str] = set()
+    for claim in evidence.supported_claims:
+        if not isinstance(claim, dict):
+            # Legacy context passages have no structured fields to canonicalize.
+            continue
+        if set(claim) - (_RAG_CLAIM_ALLOWED_FIELDS | _PERSONIO_OWNED_RAG_FIELDS | {"field"}):
+            return "evidence_bundle_claim_fields_invalid"
+        if "field" in claim and _normalized_claim_field_name(claim["field"]) not in _PERSONIO_OWNED_RAG_FIELDS:
+            return "evidence_bundle_claim_fields_invalid"
+        source_id = claim.get("source_id")
+        if (
+            not isinstance(source_id, str)
+            or not re.fullmatch(r"(?:R|#)[1-9]\d*", source_id)
+            or _citation_identifier(source_id) not in source_ids
+        ):
+            return "evidence_bundle_claim_source_invalid"
+        claim_id = claim.get("claim_id")
+        if not isinstance(claim_id, str) or not re.fullmatch(r"R[1-9]\d*C[1-9]\d*", claim_id):
+            return "evidence_bundle_claim_id_invalid"
+        if claim_id.strip() in claim_ids:
+            return "evidence_bundle_claim_id_duplicate"
+        claim_ids.add(claim_id.strip())
+        if claim.get("claim_type") == "functional_contact" or "functional_contact" in claim:
+            source = evidence.sources[source_ids.index(_citation_identifier(source_id))]
+            contact = validate_functional_contact(claim.get("functional_contact"))
+            if (set(claim) != _RAG_CLAIM_ALLOWED_FIELDS or claim.get("claim_type") != "functional_contact"
+                    or not claim_id.startswith("R" + source_id.lstrip("#R") + "C")
+                    or contact is None or source.get("chunk_kind") != "functional_contact"
+                    or validate_functional_contact(source.get("functional_contact")) != contact
+                    or claim.get("text") != contact["evidence_span"] or claim.get("evidence_span") != contact["evidence_span"]
+                    or any(type(claim.get(key)) is not str or not claim[key] or claim[key] != source.get(key)
+                           for key in ("document_id", "version_id"))):
+                return "evidence_bundle_functional_contact_invalid"
+    return ""
+
+
+def _model_led_contact_bindings(evidence: EvidenceBundle) -> tuple[dict[str, Any], ...]:
+    """Only typed source-bound rows or actual Personio fields authorize values."""
+    if evidence.status == "unsupported":
+        return ()
+    sources = {_source_identifier(source): source for source in evidence.sources}
+    bindings = []
+    for position, claim in enumerate(evidence.supported_claims, 1):
+        if not isinstance(claim, dict):
+            continue
+        source_id = claim.get("source_id")
+        if not isinstance(source_id, str):
+            continue
+        source = sources.get(_citation_identifier(source_id), {})
+        if source.get("kind") == "personio_directory" and re.fullmatch(r"P[1-9]\d*", source_id):
+            for name, channel in (("business_email", "email"), ("business_phone", "phone")):
+                value = claim.get(name)
+                if not isinstance(value, str) or value != value.strip():
+                    continue
+                valid = (_EMAIL_LITERAL.fullmatch(value) if channel == "email" else
+                         re.fullmatch(r"\+?\d[\d ()/.-]*\d", value) and _is_phone_literal(value))
+                if valid:
+                    bindings.append({"source_kind": "personio_directory", "source_id": source_id,
+                        "claim_id": f"{source_id}C{position}", "channel": channel, "value": value})
+        elif claim.get("claim_type") == "functional_contact":
+            # Recheck here too: direct EvidenceBundle inputs use the same gate.
+            isolated = EvidenceBundle(status="supported", supported_claims=(claim,), sources=(source,))
+            if _rag_claim_contract_error(isolated):
+                continue
+            contact = claim["functional_contact"]
+            bindings.append({"source_kind": "rag_chat", "source_id": source_id, "claim_id": claim["claim_id"],
+                **{key: contact[key] for key in ("channel", "value", "function", "purpose", "scope", "row_number")},
+                "document_id": claim["document_id"], "version_id": claim["version_id"]})
+    return tuple(bindings)
+
+
+def _validate_result_driven_rag_contract(evidence: EvidenceBundle) -> EvidenceBundle:
+    error = _rag_claim_contract_error(evidence)
+    if not error:
+        by_key: dict[tuple, set[str]] = {}
+        for claim in evidence.supported_claims:
+            if isinstance(claim, dict) and claim.get("claim_type") == "functional_contact":
+                contact = claim["functional_contact"]
+                by_key.setdefault(functional_contact_key(contact), set()).add(contact["value"])
+        conflicting = {key for key, values in by_key.items() if len(values) > 1}
+        if conflicting:
+            rejected = {_citation_identifier(claim["source_id"]) for claim in evidence.supported_claims
+                        if isinstance(claim, dict) and claim.get("claim_type") == "functional_contact"
+                        and functional_contact_key(claim["functional_contact"]) in conflicting}
+            retained = tuple(claim for claim in evidence.supported_claims
+                             if not isinstance(claim, dict) or _citation_identifier(claim.get("source_id", "")) not in rejected)
+            return EvidenceBundle(status="partially_supported" if retained and evidence.status != "unsupported" else "unsupported",
+                supported_claims=retained if evidence.status != "unsupported" else (),
+                missing_information=(*evidence.missing_information, "functional_contact_conflict"),
+                conflicts=(*evidence.conflicts, "functional_contact_conflict"),
+                sources=tuple(source for source in evidence.sources if _source_identifier(source) not in rejected))
+        return evidence
+    return EvidenceBundle(
+        status="unsupported",
+        missing_information=evidence.missing_information + (
+            "Das EvidenceBundle enthält einen ungültigen RAG-Claim-Vertrag.",
+        ),
+        conflicts=tuple(dict.fromkeys((*evidence.conflicts, error))),
+        sources=evidence.sources,
+    )
 
 
 def _personio_evidence(personio_result: Any) -> EvidenceBundle:
@@ -1484,7 +1620,6 @@ def _rag_claim_asserts_personio_owned_data(claim: Any) -> bool:
         _has_named_person_entity(clause)
         and bool(
             _PERSONIO_RELATION_MARKER.search(_fold(clause))
-            or _contains_contact_literal(clause)
         )
         for text in texts
         for clause in _claim_clauses(text)
@@ -1496,33 +1631,19 @@ def _sanitize_result_driven_rag_claim(claim: Any) -> Any | None:
         return None
     if not isinstance(claim, dict):
         return claim
-    normalized = {
-        str(key): _normalized_claim_field_name(key) for key in claim
+    # The contract has already been checked. Never rename or overwrite a key.
+    filtered = {
+        key: value for key, value in claim.items() if key in _RAG_CLAIM_ALLOWED_FIELDS
     }
-    if any(
-        field not in _RAG_CLAIM_ALLOWED_FIELDS | _PERSONIO_OWNED_RAG_FIELDS
-        for field in normalized.values()
-    ):
-        return None
-    filtered = {}
-    for key, value in claim.items():
-        field = normalized[str(key)]
-        if field in _PERSONIO_OWNED_RAG_FIELDS:
-            continue
-        if field == "field":
-            if _normalized_claim_field_name(value) not in _PERSONIO_OWNED_RAG_FIELDS:
-                return None
-            continue
-        filtered[field] = value
     return filtered if set(filtered) - {"claim_id", "source_id"} else None
 
 
 def _result_driven_rag_evidence(rag_result: Any, procedural: bool) -> EvidenceBundle:
     """Keep model-led RAG evidence within the documented-source authority."""
     evidence = (
-        rag_result
+        _validate_result_driven_rag_contract(rag_result)
         if isinstance(rag_result, EvidenceBundle)
-        else _evidence_bundle(str(rag_result or ""), procedural)
+        else _evidence_bundle(str(rag_result or ""), procedural, result_driven=True)
     )
     if evidence.status == "unsupported":
         return EvidenceBundle(
@@ -1982,7 +2103,8 @@ def build_result_driven_decision(
         retrieval_plan=retrieval_plan,
         evidence_bundle=evidence,
         answer_contract=AnswerContract(
-            allowed_contact_values=_contact_values(evidence),
+            allowed_contact_values=tuple(dict.fromkeys(binding["value"] for binding in _model_led_contact_bindings(evidence))),
+            allowed_contact_bindings=_model_led_contact_bindings(evidence),
         ),
         events=(
             *retrieval_events,
