@@ -3,12 +3,13 @@ version: 1.0.0
 description: Berechtigungsgefilterte Dense+BM25-Suche mit RRF, Reranking und Quellen.
 """
 # Erzeugt von stack/open-webui-tools/build_tools.py. Nicht direkt bearbeiten.
-# Quellen: hybrid_retrieval.py, hybrid_retrieval_adapters.py, rag_chat_hybrid_tool.py
+# Quellen: functional_contact_contract.py, hybrid_retrieval.py, hybrid_retrieval_adapters.py, rag_chat_hybrid_tool.py
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pydantic import BaseModel, Field
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 import hashlib
 import json
 import math
@@ -18,6 +19,141 @@ import requests
 import time
 import unicodedata
 
+
+CONTACT_SCHEMA = "kahle.functional-contact.v1"
+CONTACT_HEADER = ("Funktion", "Kontaktart", "Kontaktwert", "Verwendungszweck", "Geltungsbereich")
+CONTACT_CHANNELS = {"E-Mail": "email", "Telefon": "phone", "Kontaktseite": "url"}
+CONTACT_HINT_HEADINGS = frozenset({"Für Fragen wie", "Beispielanfragen", "Suchbegriffe", "Synonyme", "Kurzindex"})
+CONTACT_MAX_ROW_CHARS = 900
+_FC_KEYS = frozenset({"schema_version", "function", "channel", "value", "purpose", "scope", "row_number", "evidence_span"})
+_FC_EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+_FC_PHONE = re.compile(r"(?<!\w)\+?\d[\d ()/.-]*\d(?!\w)")
+_FC_URL = re.compile(r"https?://[^\s<>\[\]\"']+", re.IGNORECASE)
+_FC_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$")
+_FC_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+def _fc_phone_valid(value: str) -> bool:
+    if not re.fullmatch(r"\+?\d[\d ()/.-]*\d", value):
+        return False
+    if len(re.sub(r"\D", "", value)) < 6:
+        return False
+    return re.fullmatch(r"\d{1,4}[.-]\d{1,2}[.-]\d{2,4}", value) is None
+def _fc_value_valid(channel: str, value: str) -> bool:
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return False
+    if channel == "email":
+        return _FC_EMAIL.fullmatch(value) is not None
+    if channel == "phone":
+        return _fc_phone_valid(value)
+    if channel != "url" or any(character.isspace() for character in value):
+        return False
+    if any(character in value for character in '<>"\\'):
+        return False
+    try:
+        url = urlsplit(value)
+        # Accessing port also rejects malformed numeric ports.
+        port = url.port
+        return bool(
+            value.startswith("https://") and url.scheme == "https" and url.hostname
+            and url.username is None and url.password is None
+            and (port is None or 0 < port <= 65535)
+        )
+    except ValueError:
+        return False
+def _fc_cells(line: str) -> tuple[str, ...]:
+    value = line.strip()
+    if not value.startswith("|") or not value.endswith("|"):
+        return ()
+    return tuple(cell.strip() for cell in value[1:-1].split("|"))
+def _fc_row(line: str, number: int, limit: int) -> dict | None:
+    if len(line) > limit or "\n" in line or "\r" in line:
+        return None
+    cells = _fc_cells(line)
+    if len(cells) != 5 or not all(cells):
+        return None
+    function, label, value, purpose, scope = cells
+    channel = CONTACT_CHANNELS.get(label)
+    if channel is None or not _fc_value_valid(channel, value):
+        return None
+    if any(any(ord(char) < 32 or ord(char) == 127 for char in cell) for cell in cells):
+        return None
+    return {
+        "schema_version": CONTACT_SCHEMA, "function": function, "channel": channel,
+        "value": value, "purpose": purpose, "scope": scope,
+        "row_number": number, "evidence_span": line,
+    }
+def validate_functional_contact(value: object) -> dict | None:
+    """Validate exact keys/types and bind every field to the unchanged row."""
+    if not isinstance(value, dict) or set(value) != _FC_KEYS:
+        return None
+    if type(value["row_number"]) is not int or value["row_number"] < 1:
+        return None
+    if any(type(value[key]) is not str or not value[key] for key in _FC_KEYS - {"row_number"}):
+        return None
+    parsed = _fc_row(value["evidence_span"], value["row_number"], CONTACT_MAX_ROW_CHARS)
+    return parsed if parsed == value else None
+def functional_contact_key(contact: dict) -> tuple[str, str, str, str]:
+    """Business identity; distinct values with this identity conflict."""
+    return (contact["function"], contact["channel"], contact["purpose"], contact["scope"])
+def parse_functional_contacts(markdown: str, *, max_row_chars: int = 900) -> tuple[dict, ...]:
+    """Read complete rows in explicit sections of canonical, frontmatter-free Markdown."""
+    if not isinstance(markdown, str) or type(max_row_chars) is not int or max_row_chars < 1:
+        return ()
+    lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    headings: list[tuple[int, str]] = []
+    fence: tuple[str, int] | None = None
+    table = False
+    records = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        number = index + 1
+        index += 1
+        marker = _FC_FENCE.match(line)
+        if fence is not None:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and not marker[2].strip():
+                fence = None
+            continue
+        if marker:
+            fence = (marker[1][0], len(marker[1]))
+            table = False
+            continue
+        heading = _FC_HEADING.match(line)
+        if heading:
+            level, title = len(heading[1]), heading[2]
+            headings = [(depth, name) for depth, name in headings if depth < level]
+            headings.append((level, title))
+            table = False
+            continue
+        names = [name for _, name in headings]
+        active = "Funktionskontakte" in names and not CONTACT_HINT_HEADINGS.intersection(names)
+        if not active or line.startswith(("    ", "\t")):
+            table = False
+            continue
+        if _fc_cells(line) == CONTACT_HEADER:
+            separator = _fc_cells(lines[index]) if index < len(lines) else ()
+            table = len(separator) == 5 and all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator)
+            if table:
+                index += 1
+            continue
+        if not line.strip().startswith("|"):
+            table = False
+            continue
+        if table:
+            record = _fc_row(line, number, min(max_row_chars, CONTACT_MAX_ROW_CHARS))
+            if record is not None:
+                records.append(record)
+    return tuple(records)
+def extract_contact_literals(text: str) -> tuple[tuple[str, str], ...]:
+    """Extract candidates for output validation, never for granting permission."""
+    if not isinstance(text, str):
+        return ()
+    values = [("email", match[0]) for match in _FC_EMAIL.finditer(text)]
+    values.extend(
+        ("phone", match[0].strip()) for match in _FC_PHONE.finditer(text)
+        if _fc_phone_valid(match[0].strip())
+    )
+    values.extend(("url", match[0].rstrip(".,;:!?)}")) for match in _FC_URL.finditer(text))
+    return tuple(dict.fromkeys(values))
 
 class RetrievalError(RuntimeError):
     pass
