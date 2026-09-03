@@ -2774,3 +2774,86 @@ def test_result_driven_personio_invalid_contact_field_cannot_grant(bad):
     decision = harness.build_result_driven_decision(called_tools=("personio_directory",), query="Kontakt", messages=[],
         model_id="kahle-vinci", permission_scope={"user_id": "u"}, personio_result=payload)
     assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("answer", [
+    "other@example.invalid [1]",
+    "+49 1234 567890 [1]",
+    "https://other.example.invalid/contact [1]",
+    "[it@example.invalid](mailto:other@example.invalid) [1]",
+    "[Kontakt](mailto:other%40example.invalid) [1]",
+    "<a href='mailto:other&#64;example.invalid'>Kontakt</a> [1]",
+])
+def test_contact_validation_rejects_unbound_output_without_logging_values(answer):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    result = harness.validate_answer(answer, decision)
+    assert result.status == "retry_required"
+    assert "unbound_contact_literal" in {item["code"] for item in result.violations}
+    assert "example.invalid" not in json.dumps(result.to_dict())
+
+
+@pytest.mark.parametrize("answer", [
+    "IT: it@example.invalid [1]",
+    "[it@example.invalid](mailto:it@example.invalid) [1]",
+])
+def test_contact_validation_accepts_current_typed_binding(answer):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    assert harness.validate_answer(answer, decision).status == "accepted"
+
+
+@pytest.mark.parametrize(("answer", "accepted"), [
+    ("[Quelle](https://docs.example.invalid/d1?owner=other@example.invalid) [1]", True),
+    ("[other@example.invalid](https://docs.example.invalid/d1?owner=other@example.invalid) [1]", False),
+    ("https://docs.example.invalid/d1?owner=other@example.invalid/extra [1]", False),
+    ("[it@example.invalid](https://docs.example.invalid/d1?owner=other@example.invalid) [1]", False),
+])
+def test_contact_validation_reference_url_is_exact_and_does_not_authorize_label(answer, accepted):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    result = harness.validate_answer(answer, decision, reference_urls=("https://docs.example.invalid/d1?owner=other@example.invalid",))
+    assert (result.status == "accepted") is accepted
+
+
+def test_contact_validation_does_not_trust_detached_allowed_values():
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False).to_dict()
+    decision["answer_contract"]["allowed_contact_values"] = ["other@example.invalid"]
+    decision["answer_contract"]["allowed_contact_bindings"] = [{"channel": "email", "value": "other@example.invalid"}]
+    assert harness.validate_answer("other@example.invalid [1]", decision).status == "retry_required"
+
+
+@pytest.mark.parametrize(("kind", "channel", "value"), [
+    ("Telefon", "phone", "+49 1234 567890"),
+    ("Kontaktseite", "url", "https://support.example.invalid/tickets"),
+])
+def test_contact_validation_accepts_typed_phone_and_url(kind, channel, value):
+    harness = load_harness()
+    bundle = _typed_rag_contact_bundle()
+    row = f"| IT | {kind} | {value} | Störungen | gruppenweit |"
+    for record in (bundle["supported_claims"][0], bundle["sources"][0]):
+        record["functional_contact"].update(channel=channel, value=value, evidence_span=row)
+    bundle["supported_claims"][0].update(text=row, evidence_span=row)
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle), False)
+    assert harness.validate_answer(f"IT: {value} [1]", decision).status == "accepted"
+
+
+@pytest.mark.parametrize(("answer", "accepted"), [
+    ("**it@example.invalid** [1]", True),
+    ("`it@example.invalid` [1]", True),
+    ("[Quelle](/wissen/api/portal/sources/v1) [1]", True),
+    ("[Quelle](/wissen/api/portal/sources/v1/other) [1]", False),
+    ("[Kontakt](/contact) [1]", False),
+    ("[Kontakt](//other.example.invalid/contact) [1]", False),
+    ("[it@example.invalid](/wissen/api/portal/sources/v1) [1]", False),
+    ("<a href='/wissen/api/portal/sources/v1'>it@example.invalid</a> [1]", False),
+    ("[Quelle][doc] [1]\n\n[doc]: /wissen/api/portal/sources/v1", True),
+    ("[Kontakt][doc] [1]\n\n[doc]: /contact", False),
+    ("[it@example.invalid][doc] [1]\n\n[doc]: /wissen/api/portal/sources/v1", False),
+])
+def test_contact_validation_checks_rendered_labels_and_relative_targets(answer, accepted):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    result = harness.validate_answer(answer, decision, reference_urls=("/wissen/api/portal/sources/v1",))
+    assert (result.status == "accepted") is accepted

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,58 @@ def load_reporter():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def shadow_run(status="accepted", delivery="observed"):
+    return {
+        "case_id": "trusted_case", "profile": "employee",
+        "metrics": {
+            "model_id": "KAHLE-Vinci", "intent_kind": "employee_directory",
+            "actual_tools": ["personio_directory"], "source_kinds": ["personio_directory"],
+            "evidence_status": "supported", "source_count": 1,
+            "permission_scope_present": True, "validation_mode": "shadow",
+            "delivery_status": delivery, "final_validation_status": status,
+            "assertions": {"forbidden_fields_absent": True},
+        },
+    }
+
+
+@pytest.mark.parametrize("status, passed", [
+    ("accepted", True), ("retry_required", False),
+    ("observation_error", False), ("not_run", False),
+])
+def test_shadow_report_separates_delivery_from_observed_quality(status, passed):
+    reporter = load_reporter()
+    report = reporter.build_acceptance_report(
+        [shadow_run(status)], matrix=trusted_matrix(), profile_authorization={"employee": True},
+    )
+    assert (report["summary"]["passed"] == 1) is passed
+    result = report["results"][0]
+    assert result["validation_mode"] == "shadow"
+    assert result["delivery_status"] == "observed"
+    assert result["validation_status"] == status
+
+
+def test_shadow_report_does_not_treat_a_replaced_answer_as_unmodified_delivery():
+    reporter = load_reporter()
+    report = reporter.build_acceptance_report(
+        [shadow_run("accepted", "safe_fallback")], matrix=trusted_matrix(),
+        profile_authorization={"employee": True},
+    )
+    assert report["summary"]["failed"] == 1
+
+
+def test_shadow_report_counts_findings_and_missing_observations_separately():
+    reporter = load_reporter()
+    runs = [shadow_run(status) for status in ("accepted", "retry_required", "observation_error", "not_run")]
+    runs[1]["answer"] = "private@example.invalid"
+    report = reporter.build_acceptance_report(runs, matrix=trusted_matrix(), profile_authorization={"employee": True})
+    assert report["observations"] == [{
+        "model_id": "KAHLE-Vinci", "profile": "employee", "sample_size": 4,
+        "checked": 2, "flagged": 1, "observation_errors": 1, "not_observed": 1,
+        "flagged_rate": 0.5,
+    }]
+    assert "private@example.invalid" not in json.dumps(report)
 
 
 def trusted_matrix(*, models=("KAHLE-Vinci",), profiles=("employee",), cases=None):

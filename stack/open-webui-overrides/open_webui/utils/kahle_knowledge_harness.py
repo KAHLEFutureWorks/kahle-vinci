@@ -5,15 +5,17 @@ rewrite prompts, execute tools, emit UI events or modify an assistant answer.
 """
 
 from dataclasses import asdict, dataclass, field
+from html import unescape
 import json
 import re
 import unicodedata
 from typing import Any
+from urllib.parse import unquote
 
 try:
-    from open_webui.utils.functional_contact_contract import functional_contact_key, validate_functional_contact
+    from open_webui.utils.functional_contact_contract import extract_contact_literals, functional_contact_key, validate_functional_contact
 except ModuleNotFoundError:  # Isolated offline contract tests use the generated module.
-    from functional_contact_contract import functional_contact_key, validate_functional_contact
+    from functional_contact_contract import extract_contact_literals, functional_contact_key, validate_functional_contact
 
 
 SCHEMA_VERSION = "kahle.knowledge-harness.v1"
@@ -481,12 +483,16 @@ def _mapping(value: Any) -> dict[str, Any]:
 def validate_answer(
     answer: str,
     decision: HarnessDecision | dict[str, Any],
+    *,
+    reference_urls: tuple[str, ...] = (),
 ) -> AnswerValidation:
     """Validate a completed answer without changing its content.
 
     The checks intentionally use only deterministic structure and explicit
     language patterns. Semantic repair belongs to the answer model, which
     receives ``retry_prompt`` when this result requires another attempt.
+    ``reference_urls`` must come from separately validated current tool metadata,
+    never from model-authored text or a prefix-based allowlist.
     """
     text = str(answer or "").strip()
     evidence = _mapping(_decision_value(decision, "evidence_bundle"))
@@ -502,6 +508,63 @@ def validate_answer(
 
     if not text:
         add("answer_missing", "Die Antwort ist leer.")
+
+    if retrieval_plan.get("mode") == "model_led":
+        # The serialized contract is not an independent source of authority.
+        current = EvidenceBundle(
+            status=evidence.get("status", "unsupported"),
+            supported_claims=tuple(evidence.get("supported_claims") or ()),
+            sources=tuple(evidence.get("sources") or ()),
+        )
+        bindings = _model_led_contact_bindings(current)
+        allowed = {(item["channel"], item["value"]) for item in bindings
+                   if item in (contract.get("allowed_contact_bindings") or ())}
+        contact_text = unescape(text)
+        # Common Markdown formatting is presentation, not part of a mailbox.
+        contact_text = re.sub(r"(`+|\*\*|__)(.+?)\1", r"\2", contact_text)
+        reference_set = set(reference_urls)
+        links = re.findall(r"\[([^\]]*)\]\(([^\s]+?)\)", contact_text)
+        definitions = {}
+        for name, target in re.findall(r"(?m)^ {0,3}\[([^\]]+)\]:[ \t]*<?([^\s>]+)>?", contact_text):
+            definitions.setdefault(" ".join(name.split()).casefold(), target)
+            links.append(("", target))
+        for label, name in re.findall(r"\[([^\]]+)\](?:\[([^\]]*)\])?", contact_text):
+            target = definitions.get(" ".join((name or label).split()).casefold())
+            if target:
+                links.append((label, target))
+        links.extend((label, target) for _, target, label in re.findall(
+            r"<a\b[^>]*\bhref\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</a\s*>",
+            contact_text, flags=re.I | re.S,
+        ))
+        for label, target in links:
+            # Decode URI escapes for comparison, not as an authorization source.
+            decoded_target = unquote(target)
+            displayed = set(extract_contact_literals(label))
+            targeted = set(extract_contact_literals(decoded_target))
+            if displayed and displayed != targeted:
+                add("contact_link_mismatch", "Angezeigter Kontakt und Linkziel stimmen nicht überein.")
+            permitted_target = target in reference_set or ("url", target) in allowed
+            for scheme, channel in (("mailto:", "email"), ("tel:", "phone")):
+                if decoded_target.lower().startswith(scheme):
+                    permitted_target |= (channel, decoded_target[len(scheme):]) in allowed
+            if not permitted_target:
+                add("unbound_link_target", "Das Linkziel ist nicht durch aktuelle Kontakt- oder Quellenmetadaten freigegeben.")
+
+        def check_url(match: re.Match) -> str:
+            token = match[0]
+            if token.rstrip(".,;:!?)}") in reference_set:
+                return " "
+            urls = [value for channel, value in extract_contact_literals(token) if channel == "url"]
+            if len(urls) == 1 and (urls[0] in reference_set or ("url", urls[0]) in allowed):
+                return " "
+            return token
+
+        # Mask only complete approved URL tokens, never prefixes or link labels.
+        contact_text = re.sub(r"(?:https?://|/wissen/)[^\s<>\[\]\"']+", check_url, contact_text, flags=re.I)
+        contact_text = unquote(contact_text)
+        for channel, value in extract_contact_literals(contact_text):
+            if (channel, value) not in allowed:
+                add("unbound_contact_literal", "Die Antwort enthält einen Kontakt ohne aktuelle Quellenbindung.")
 
     folded_text = _fold(text)
     resolved_context = _mapping(_decision_value(decision, "resolved_context"))

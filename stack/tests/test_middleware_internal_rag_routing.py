@@ -1306,10 +1306,16 @@ INTERNAL_KNOWLEDGE = (
 
 
 def load_internal_knowledge_function(name: str):
-    module = load_python_module(
-        INTERNAL_KNOWLEDGE, f"kahle_internal_knowledge_{name}_{id(object())}"
-    )
-    return getattr(module, name)
+    import sys
+    override_root = str(ROOT / "open-webui-overrides")
+    sys.path.insert(0, override_root)
+    try:
+        module = load_python_module(
+            INTERNAL_KNOWLEDGE, f"kahle_internal_knowledge_{name}_{id(object())}"
+        )
+        return getattr(module, name)
+    finally:
+        sys.path.remove(override_root)
 
 
 def load_rag_routing_helpers():
@@ -2153,6 +2159,89 @@ def test_active_harness_records_validation_without_generating_replacement_answer
     assert "retry_form_data" not in source
     assert "metadata['kahle_answer_validation']" in source
     assert "'kahle_answer_validation': metadata['kahle_answer_validation']" in source
+
+
+@pytest.mark.parametrize("internal_request", [False, True])
+def test_model_led_shadow_keeps_initial_stream_visible(internal_request):
+    gate = load_function_from_middleware("_should_suppress_initial_rag_response")
+    assert gate(rag_tool_available=True, internal_rag_required=internal_request,
+                prerouted=False, routing_mode="model_led") is False
+
+
+def shadow_observation_fixture():
+    observer = load_function_from_middleware("_observe_model_led_answer")
+    harness = load_python_module(HARNESS, "kahle_shadow_observation_harness")
+    observer.__globals__["validate_knowledge_harness_answer"] = harness.validate_answer
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",), query="Wie erfasse ich eine Anfrage?", messages=[],
+        model_id="kahle-vinci", permission_scope={"user_id": "synthetic-user"},
+        rag_result='EVIDENCE_BUNDLE_JSON: ' + json.dumps({
+            "schema_version": "kahle.evidence-bundle.v1", "status": "supported",
+            "sources": [{"number": 1, "document_id": "d1", "version_id": "v1"}],
+            "supported_claims": [{"claim_id": "R1C1", "source_id": "#1", "text": "Anfrage erfassen."}],
+            "missing_information": [], "conflicts": [],
+        }),
+    )
+    return observer, decision.to_dict()
+
+
+@pytest.mark.parametrize("text, status", [
+    ("Anfrage erfassen. [1]", "accepted"),
+    ("unapproved@example.invalid [1]", "retry_required"),
+])
+def test_shadow_observation_reports_quality_without_replacing_answer(text, status):
+    observer, payload = shadow_observation_fixture()
+    output = [{"type": "message", "content": [{"type": "output_text", "text": text}]}]
+    before = json.dumps(output)
+    report = observer(output, payload)
+    assert json.dumps(output) == before
+    assert report["mode"] == "shadow"
+    assert report["attempts"][0]["status"] == status
+    assert len(report["attempts"]) == 1
+    assert "example.invalid" not in json.dumps(report)
+
+
+def test_shadow_observation_checks_all_displayed_text_parts():
+    observer, payload = shadow_observation_fixture()
+    output = [{"type": "message", "content": [
+        {"type": "output_text", "text": "unapproved@example.invalid"},
+        {"type": "output_text", "text": "Anfrage erfassen. [1]"},
+    ]}]
+    report = observer(output, payload)
+    assert report["attempts"][0]["status"] == "retry_required"
+
+
+def test_shadow_observation_failure_is_non_mutating_and_privacy_safe():
+    observer, payload = shadow_observation_fixture()
+    def broken_validator(*args, **kwargs):
+        raise ValueError("private@example.invalid")
+    observer.__globals__["validate_knowledge_harness_answer"] = broken_validator
+    output = [{"type": "message", "content": [{"type": "output_text", "text": "Antwort"}]}]
+    before = json.dumps(output)
+    report = observer(output, payload)
+    assert json.dumps(output) == before
+    assert report["attempts"][0]["status"] == "observation_error"
+    assert "example.invalid" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("target, accepted", [
+    ("/wissen/api/portal/sources/v1", True),
+    ("/wissen/api/portal/sources/v1/../other", False),
+    ("/wissen/api/portal/sources/v1?next=https://other.example.invalid", False),
+])
+def test_shadow_observation_uses_only_valid_current_source_urls(target, accepted):
+    observer, payload = shadow_observation_fixture()
+    output = [{"type": "message", "content": [{"type": "output_text", "text": f"[Quelle]({target}) [1]"}]}]
+    report = observer(output, payload, sources=[{"source_url": target}])
+    assert (report["attempts"][0]["status"] == "accepted") is accepted
+
+
+def test_shadow_observation_does_not_mistake_feedback_ids_for_phone_contacts():
+    observer, payload = shadow_observation_fixture()
+    link = "/wissen/?feedback=1&chat_id=12345678&message_id=98765432"
+    output = [{"type": "message", "content": [{"type": "output_text", "text": f"Anfrage erfassen. [1]\n[Wissensfehler melden]({link})"}]}]
+    report = observer(output, payload, feedback_link=link)
+    assert report["attempts"][0]["status"] == "accepted"
 
 
 def test_realtime_chat_save_persists_harness_validation_and_metrics_server_side():

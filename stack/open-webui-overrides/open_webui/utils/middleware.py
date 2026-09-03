@@ -1700,7 +1700,10 @@ def _stream_safe_output(output: list, *, suppress_message_text: bool = False) ->
 
 def _should_suppress_initial_rag_response(
     *, rag_tool_available: bool, internal_rag_required: bool, prerouted: bool,
+    routing_mode: str = 'legacy',
 ) -> bool:
+    if routing_mode == 'model_led':
+        return False
     return rag_tool_available and internal_rag_required and not prerouted
 
 
@@ -4122,6 +4125,46 @@ def _last_kahle_answer_text(output: list[dict[str, Any]]) -> str:
     return ''
 
 
+def _observe_model_led_answer(
+    output: list[dict[str, Any]], harness_payload: dict[str, Any],
+    *, sources: list[dict[str, Any]] | tuple = (), feedback_link: str = '',
+) -> dict[str, Any]:
+    """Observe delivered model text; never mutate it or request a correction."""
+    try:
+        reference_urls = tuple(
+            source['source_url'] for source in sources
+            if isinstance(source, dict) and isinstance(source.get('source_url'), str)
+            and re.fullmatch(r'/wissen/api/portal/sources/[A-Za-z0-9_-]{1,100}', source['source_url'])
+        )
+        if re.fullmatch(
+            r'/wissen/\?feedback=1&chat_id=[A-Za-z0-9_-]{1,100}'
+            r'&message_id=[A-Za-z0-9_-]{1,100}'
+            r'(?:&(?:document_ids|knowledgebase_ids)=[A-Za-z0-9_%,-]{0,3000})*',
+            feedback_link,
+        ):
+            reference_urls += (feedback_link,)
+        text = '\n'.join(
+            str(part.get('text') or '')
+            for item in output if item.get('type') == 'message'
+            for part in item.get('content') or [] if part.get('type') == 'output_text'
+        )
+        observation = validate_knowledge_harness_answer(
+            text, harness_payload, reference_urls=reference_urls,
+        ).to_dict()
+    except Exception:
+        # Diagnostics must not become a new delivery dependency or leak evidence.
+        observation = {
+            'schema_version': 'kahle.answer-validation.v1',
+            'status': 'observation_error',
+            'violations': [{'code': 'observation_error'}],
+        }
+    return {
+        'schema_version': 'kahle.answer-validation-run.v1',
+        'mode': 'shadow',
+        'attempts': [observation],
+    }
+
+
 def process_messages_with_output(
     messages: list[dict],
     reasoning_format: str | None = None,
@@ -6419,6 +6462,7 @@ async def streaming_chat_response_handler(response, ctx):
             initial_user_message = get_last_user_message(form_data.get('messages', []) or [])
             initial_tools = metadata.get('tools', {}) or {}
             suppress_initial_rag_response = _should_suppress_initial_rag_response(
+                routing_mode=_knowledge_routing_mode(),
                 rag_tool_available='rag_chat' in initial_tools,
                 internal_rag_required=(
                     not metadata.get('kahle_mailer_drafting_followup')
@@ -7847,6 +7891,13 @@ async def streaming_chat_response_handler(response, ctx):
                 validation_attempts = []
                 validation_fallback_used = False
                 harness_payload = _ephemeral_kahle_harness_payload(request)
+                shadow_validation = bool(
+                    harness_payload
+                    and (harness_payload.get('retrieval_plan') or {}).get('mode') == 'model_led'
+                )
+                if shadow_validation:
+                    _append_canonical_rag_source_links(output, canonical_rag_sources)
+                    _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
                 if (
                     metadata.get('kahle_knowledge_harness_active')
                     and harness_payload
@@ -7865,6 +7916,12 @@ async def streaming_chat_response_handler(response, ctx):
                         'schema_version': 'kahle.answer-validation-run.v1',
                         'attempts': validation_attempts,
                     }
+                elif metadata.get('kahle_knowledge_harness_active') and shadow_validation:
+                    metadata['kahle_answer_validation'] = _observe_model_led_answer(
+                        output, harness_payload, sources=canonical_rag_sources,
+                        feedback_link=canonical_rag_feedback_link,
+                    )
+                    validation_attempts = metadata['kahle_answer_validation']['attempts']
                 elif metadata.get('kahle_knowledge_harness_active') and harness_payload:
                     validation = validate_knowledge_harness_answer(
                         _last_kahle_answer_text(output), harness_payload
@@ -7901,6 +7958,7 @@ async def streaming_chat_response_handler(response, ctx):
                         'source_count': len(evidence_payload.get('sources') or []),
                         'permission_scope_present': bool(permission_payload.get('user_id')),
                         'validation_attempts': len(validation_attempts),
+                        **({'validation_mode': 'shadow'} if shadow_validation else {}),
                         'retry_count': max(0, len(validation_attempts) - 1),
                         'fallback_used': validation_fallback_used,
                         'final_validation_status': (
@@ -7915,6 +7973,7 @@ async def streaming_chat_response_handler(response, ctx):
                             'safe_fallback'
                             if validation_fallback_used
                             else (
+                                'observed' if shadow_validation else
                                 validation_attempts[-1].get('status')
                                 if validation_attempts
                                 else 'not_run'
@@ -7925,8 +7984,9 @@ async def streaming_chat_response_handler(response, ctx):
                         'latency_ms': elapsed_ms,
                     }
 
-                _append_canonical_rag_source_links(output, canonical_rag_sources)
-                _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
+                if not shadow_validation:
+                    _append_canonical_rag_source_links(output, canonical_rag_sources)
+                    _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
 
                 # Mark all in-progress items as completed
                 for item in output:

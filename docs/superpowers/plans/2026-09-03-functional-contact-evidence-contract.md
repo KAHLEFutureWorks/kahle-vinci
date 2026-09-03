@@ -10,6 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-03-functional-contact-evidence-contract-design.md`, ergänzt `docs/superpowers/specs/2026-09-01-model-led-knowledge-routing-design.md`.
 
+**Aktuelle Freigabe vom 3. September 2026:** Zuerst ohne neue Ausgabesperre,
+Korrekturlauf oder Ersatzantwort testen. Task 5 wurde auf Beobachtung umgestellt.
+Zusatzprüfung erst als gesonderter Test bei gehäuften, reproduzierbaren Fehlern.
+Keine automatische Aktivierung und kein unbelegter Fehlerquoten-Grenzwert.
+
 ## Global Constraints
 
 - Persönliche Kontakte kommen ausschließlich aus Personio.
@@ -286,32 +291,29 @@ Der Prozessbeleg bleibt erhalten, beide Kontaktfreigaben bleiben leer.
 - [ ] GREEN: beide RAG-only/Personio-not-found-Pfade, typisierte Kontakte, generisches Prozesswissen, strukturierte Tampering-Fälle, Schlüssel-Kollisionen, fehlende IDs, Monotonie, gemischte Evidenz. Exakte Task-5-Suite ausführen und reporten.
 - [ ] Commit: `fix(knowledge): authorize contacts from typed source bindings`. Angepassten ursprünglichen Task 5 erst nach Review als abgeschlossen ausweisen.
 
-### Task 5: Vor Sichtbarkeit validieren, inklusive Kontaktseiten
+### Task 5: Antworten zunächst nur beobachten, nicht blockieren
+
+**Änderungsfreigabe vom 3. September 2026:** Der Nutzer hat zuerst Modellführung
+und Tests ohne zusätzliche Ausgabesperre gewählt. Dieser Abschnitt ersetzt
+den früheren Task 5 mit Pufferung, Korrekturlauf und Ersatzantwort vollständig.
 
 **Files:** Modify `stack/open-webui-overrides/open_webui/utils/middleware.py`,
 `kahle_knowledge_harness.py`, `stack/tests/test_middleware_internal_rag_routing.py`,
-`test_kahle_knowledge_harness.py`.
+`test_kahle_knowledge_harness.py`; Reporter und Reporttests aus Task 6 für
+beobachtete Qualität statt erzwungener Freigabe ergänzen.
 
-**Consumes:** Task-4-AnswerContract und ursprüngliches `AnswerValidation.retry_prompt()`.
-**Produces:** ursprüngliches Task-7-Verhalten: ein sichtbarer gültiger Finaltext
-oder neutrale Enthaltung nach maximal einem werkzeuglosen Korrekturlauf.
+**Consumes:** tatsächliche EvidenceBundles und vollständige Kontaktbindungen.
+**Produces:** Beobachtungsmetadaten mit `mode: shadow`, getrenntem
+`delivery_status: observed` und unverändertem Prüfergebnis
+`final_validation_status`. Keine Garantie fehlerfreier Modellantworten.
 
-- [ ] Mit vorhandenen Stream-Fixtures diese Assertions vor Implementierung ergänzen:
-
-```python
-# In the fixture recording final text events and correction requests:
-assert "unapproved@example.invalid" not in "".join(final_text_events)
-assert correction_request["tools"] == []
-assert executed_tools.count("rag_chat") == 1
-assert len(final_text_events) == 1
-```
-
-- [ ] RED: `& .\.venv-verify\Scripts\python.exe -m pytest stack/tests/test_middleware_internal_rag_routing.py stack/tests/test_kahle_knowledge_harness.py -q -p no:cacheprovider -k "validation or retry or stream or timeout or contact"`.
-- [ ] Finale Textausgabe und Persistierung nur bei tatsächlich internem Toolturn puffern. Toolstatus darf sichtbar bleiben. Quellenereignisse dürfen keinen ungeprüften Antworttext als Nebenkanal ausgeben. Kein LLM-Aufruf im Outlet-Filter.
-- [ ] Vor Ausgabe alle E-Mail-/Telefon-/URL-Literale prüfen. Kontaktwerte müssen aus aktuellen Bindungen stammen. Quellen-/Feedback-URLs ausschließlich aus separat validierten aktuellen Metadaten erlauben, nicht beliebige Links mit ähnlichem Prefix. Anzeige-/Zielabweichung bei Markdown-Links und Mailto-Ziele prüfen. Ein zugelassener Quellenlink autorisiert keine darin zusätzlich angezeigte persönliche Adresse.
-- [ ] Erstfehler: dasselbe Modell mit gleichem EvidenceBundle und `tools: []` einmal korrigieren lassen; bestehenden Antworttimeout verwenden. Zweitfehler/Timeout: stabile neutrale Enthaltung ohne Person, Kontaktwert oder erfundenen Weg. Allgemeine Turns behalten normales Streaming.
-- [ ] GREEN für valid first, invalid/valid retry, invalid both, timeout, nichtinterne Turns, Persistence, Quellen-/Feedbacklinks und verbotene Kontaktseiten aus Fließtext. Quellenzuordnung als Modell-Abnahme prüfen; keine universelle semantische Garantie behaupten.
-- [ ] Gesamte vierteilige Task-5-Zielsuite zusätzlich ausführen. Commit: `fix(knowledge): gate internal contact answers before display`.
+- [ ] Bestehende Kontakt-/Linkprüfungen als reine Beobachtung erhalten. Der Rückgabewert darf keine Ausgabe sperren, ersetzen oder einen Modellaufruf auslösen. Den uncommitteten neuen Ersatzantwortzweig entfernen; bestehende betriebliche Timeoutbehandlung nicht mit einem Kontaktguard verwechseln.
+- [ ] RED-Verhaltenstests: Eine Antwort mit unbelegtem Kontakt bleibt unverändert; die Beobachtung meldet den Verstoß. Auch Fehler der Beobachtung verändern die Antwort nicht und werden als `observation_error` ohne Rohdaten markiert. Alle Textteile der sichtbaren Antwort berücksichtigen.
+- [ ] `model_led` verwendet keine Legacy-Frageheuristik zur anfänglichen Ausgabesperre. Allgemeine Antworten behalten Streaming. Legacy und unabhängige Schutzprüfungen für Zugriffe, Dateien und externe Aktionen bleiben unverändert.
+- [ ] Beobachtung verwendet tatsächliche Quellen und separat geprüfte aktuelle technische Links. Keine generischen Textkontakte als Freigabe; Quellen- und Linktext bleiben getrennt. Diagnosen enthalten keine Kontaktwerte.
+- [ ] Reporter unterscheidet Auslieferung und Qualität: `observed` allein ist kein bestandenes Ergebnis. Fehlende Beobachtung, erkannte Verstöße und Beobachtungsfehler bleiben sichtbar. Keine automatisch aktivierte Zusatzprüfung.
+- [ ] GREEN: vierteilige bisherige Zielsuite sowie `stack/tests/test_kahle_harness_acceptance_report.py`, danach Full Verify. Keine Live-Modellabnahme aus Offline-Fixtures ableiten.
+- [ ] Commit nach Review: `feat(knowledge): observe contact answers without blocking delivery`.
 
 ### Task 6: Outcome-Matrix, Vorlage und Migrationsanleitung
 
@@ -338,7 +340,7 @@ genau dort migriert, nicht durch einen zweiten Reporter ersetzt.
 
 - [ ] RED/GREEN: `& .\.venv-verify\Scripts\python.exe -m pytest stack/tests/test_kahle_harness_acceptance_report.py -q -p no:cacheprovider`.
 - [ ] Strikte aktuelle Personenfälle Personio-only; Funktionskontaktfälle RAG-only; explizit gemischte Fälle beide. Mehrdeutige Bereichskontakte RAG erforderlich, Personio zusätzlich zulässig. `actual_tools` nur aus Ausführung, niemals Legacy-Plan.
-- [ ] Neue synthetische Fälle: bestätigte Kontaktzeile für jede Art, unmigrierter Fließtext, fehlender/mehrdeutiger Geltungsbereich, kollidierende Zeilen, unzugängliche/alte Version, falsche Funktion bei richtigem Wert, Hint-Treffer und ungültiger erster Stream. Alte Supervisor-Folgefragen und kompakte Nomenphrasen erhalten.
+- [ ] Neue synthetische Fälle: bestätigte Kontaktzeile für jede Art, unmigrierter Fließtext, fehlender/mehrdeutiger Geltungsbereich, kollidierende Zeilen, unzugängliche/alte Version, falsche Funktion bei richtigem Wert, Hint-Treffer und fehlerhafte Antwort ohne Ersatz. Auffälligkeiten messen, nicht durch einen Korrekturlauf verdecken. Alte Supervisor-Folgefragen und kompakte Nomenphrasen erhalten.
 - [ ] Vorlage enthält außerhalb des kopierbaren Tabellenabschnitts die Pflegeanleitung; unter `## Funktionskontakte` nur exakte Header und Separator, keine fingierten Produktivkontakte. Anleitung erklärt Verantwortlichkeit, Veröffentlichung, neue Version, Konflikte, vorübergehendes Nichtnennen und Rollback-Grenze.
 - [ ] Saved Reports nur Fallkennung, technische Status-/Tool-/Quellenarten und boolesche Resultate; keine Rohfragen, Antworten, Belege oder Kontaktwerte. Commit: `test(knowledge): add typed contact acceptance and migration guide`.
 
@@ -373,7 +375,7 @@ demselben Build außerhalb der Sandbox prüfen. Keine Fehler als Erfolg umdeuten
 - [ ] Vor lokalem Start Mount-Herkunft prüfen: `KAHLE_ROOT` muss die zu testenden Dateien tatsächlich bereitstellen. Keine Dateien ungefragt in `C:/kahle-vinci` kopieren. Eine Worktree-/Host-Abweichung ist ein Setup-Problem, kein Rolloutnachweis. Geschützte Env nur über `scripts/start-stack.ps1`; keine aufgelöste Compose-Ausgabe.
 - [ ] Lokale Dienste KB-Sync (neue erzeugte Datei im Image), Personio und OpenWebUI kontrolliert neu bauen/erstellen. Vor Reindex bestehende lokale Wiederherstellungsmöglichkeit prüfen und Collection-/Aliaszustand datensparsam sichern. Keine Originalquellen ändern. Kanonischen `/reindex-all`-Aufruf aus ursprünglichem Task 9 verwenden, nur HTTP-Status und Erfolgsboolean berichten.
 - [ ] Matrix für KAHLE-Vinci, Thinking und Max-Thinking ausführen. Positive Kontaktfälle benötigen eine ausdrücklich kontrollierte synthetische, freigegebene Testquelle. Fehlt die dafür notwendige lokale Freigabe-/Testdatenmöglichkeit, Abnahme als blockiert melden; keine echten Dokumente oder Freigaben automatisch ersetzen. Kein automatisches Umschreiben realer Kontakte.
-- [ ] UI unter `http://localhost:3004` mit Browser-Skill prüfen: sichtbare Tools, Quellen-/Feedbacklinks, eine stabile Antwort, keine ungültigen Zwischenwerte, Supervisor-Folgekontext, unmigrierte Kontaktquelle. Für unabhängige Namen frische Chats verwenden.
+- [ ] UI unter `http://localhost:3004` mit Browser-Skill prüfen: sichtbare Tools, Quellen-/Feedbacklinks, Streaming ohne neue Antwortsperre oder Ersatz, Supervisor-Folgekontext, unmigrierte Kontaktquelle. Fehlerhafte Zwischenwerte ausdrücklich erfassen und bewerten, nicht nachträglich verstecken. Für unabhängige Namen frische Chats verwenden.
 - [ ] Dokumentation aus verifiziertem Verhalten aktualisieren: ADR-008, Kontaktquellenmatrix, neue erzeugte Kopien, lokale Aktivierung, Reindex und Rückfall auf alte Legacy-Regeln. Kein „produktiv installiert“ behaupten.
 - [ ] Commit nur verifizierte Dokumentation/Aktivierung: `chore(knowledge): verify model-led functional contacts locally`.
 - [ ] Abschließenden Review über die gesamte Release-A-Änderung seit `508deb7` durchführen, nicht nur seit diesem Plan. Erst bei erfüllten Tests/Abnahmen Release A abschließen. Task 10 bleibt freigabepflichtig. Kurze nutzbare Testprompts und einen nichttechnischen Teams-Text mitliefern.
@@ -388,7 +390,7 @@ demselben Build außerhalb der Sandbox prüfen. Keine Fehler als Erfolg umdeuten
 | Herkunft, exakte Keys, direkte Bundle-Eingänge | Tasks 3–4 |
 | Personio-/RAG-Quellenhoheit, Prozesswissen bleibt nutzbar | Tasks 4–5 |
 | Konflikte ohne versteckte Quellenlecks | Task 3 |
-| Erstprüfung, begrenzter Retry, Quellen-/Feedbacklinks | Task 5 |
+| Beobachtung ohne Antwortersatz, Quellen-/Feedbacklinks | Task 5 |
 | Redaktionelle Vorlage, Übergangsregel, datensparsame Matrix | Task 6 |
 | Neuindexierung, Full, drei Modelle, UI, kein Produktionsrollout | Task 7 |
 

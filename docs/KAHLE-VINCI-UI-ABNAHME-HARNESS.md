@@ -1,6 +1,45 @@
 # UI-Abnahme für KAHLE-Vinci und den Wissens-Harness
 
-Stand: 24. August 2026
+Stand: 3. September 2026
+
+## Erste Testphase: Modellführung ohne zusätzliche Ausgabesperre
+
+Freigegeben ist zunächst der beobachtende Ansatz. Der Harness liefert dem Modell
+geprüfte Quellen, vollständige Kontaktzuordnungen und klare Antwortregeln.
+Die zusätzliche Antwortprüfung hält den Text nicht zurück, ruft kein Modell
+zur Korrektur auf und ersetzt keine Antwort. Zugriffsrechte, veröffentlichte
+Versionen und Personio-Quellenhoheit bleiben verbindlich.
+
+Die Prüfung protokolliert nur technische Ergebnisse im Modus `shadow`.
+`delivery_status: observed` bedeutet ausgegeben und beobachtet, nicht fachlich
+bestanden. `final_validation_status` bleibt separat erhalten. Der vorhandene
+Status `retry_required` bezeichnet hier nur einen Prüfbefund, keinen ausgeführten
+oder automatisch geplanten Korrekturlauf. Der
+Reporter zählt je Modell und Profil geprüfte Antworten, Auffälligkeiten,
+Beobachtungsfehler und fehlende Beobachtungen. `flagged_rate` ist der Anteil
+markierter unter tatsächlich geprüften Antworten, keine bewiesene Modellfehlerquote.
+Auffälligkeiten fachlich gegen die freigegebene Testquelle prüfen; auch eine
+automatische Prüfung kann falsch liegen. Fehlende Beobachtungen nicht als Erfolg zählen.
+
+Für jede Modellvariante dieselben Fälle und freigegebenen synthetischen Quellen
+verwenden, einschließlich:
+
+- Allgemein: „Formuliere diese Notiz freundlicher: Bitte lege den Schlüssel zurück.“
+- Funktionskontakt: „Wie erreiche ich die IT für Störungen im Testbereich?“
+- Quellenlücke: dieselbe Frage mit einer ausschließlich im Fließtext gepflegten Kontaktquelle.
+- Personenfrage: „Wie erreiche ich die synthetische Testperson Erika Beispiel geschäftlich?“
+- Prozessfrage: „Wie erfasse ich nach unserer Testanleitung eine Anfrage?“
+
+Anfängliche Antworten und Fehler unverändert bewerten. Keine Rohantworten,
+Kontaktwerte, Dokumentpassagen oder realen Personen in gespeicherte Testberichte
+übernehmen. Normierte Berichte enthalten nur Fallkennungen, technische Statuswerte
+und boolesche Bewertungen. Zusätzliche Ausgabeprüfungen werden erst bei gehäuften,
+reproduzierbaren Fehlern als begrenzter Vergleichstest erwogen. Es gibt keinen
+automatischen Schwellwert und keine automatische Aktivierung.
+
+Die lokale Modell-/UI-Abnahme beginnt erst nach erfolgreichem Offline-Gate und
+mit freigegebenen synthetischen Testdaten. Unit-Tests und simulierte Reports
+belegen noch keine tatsächliche Modellqualität.
 
 ## Ziel
 

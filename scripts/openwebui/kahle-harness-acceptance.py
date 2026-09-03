@@ -27,6 +27,7 @@ ALLOWED_VALIDATION_STATUS = (
     "retry_required",
     "timeout",
     "not_run",
+    "observation_error",
 )
 ALLOWED_PROFILES = ("employee", "manager", "user", "admin", "pending")
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -176,6 +177,11 @@ def _run_failures(
     } or (
         not delivery_status and metrics.get("final_validation_status") == "accepted"
     )
+    if metrics.get("validation_mode") == "shadow":
+        accepted_delivery = (
+            delivery_status == "observed"
+            and metrics.get("final_validation_status") == "accepted"
+        )
     if not accepted_delivery:
         failures.append("answer_not_accepted")
     tools_requiring_feedback = expected_tools if contract else actual_tools
@@ -344,6 +350,9 @@ def _safe_result(
         or metrics.get("final_validation_status")
         or ""
     )
+    shadow = metrics.get("validation_mode") == "shadow"
+    if shadow:
+        validation_status = metrics.get("final_validation_status")
     return {
         "case_id": case_id if case_id in known_case_ids else "unknown_case",
         "model_id": model_id if model_id in known_model_ids else "unknown_model",
@@ -359,6 +368,11 @@ def _safe_result(
         "validation_status": _safe_value(
             validation_status, ALLOWED_VALIDATION_STATUS, "unknown"
         ),
+        **({
+            "validation_mode": "shadow",
+            "delivery_status": _safe_value(metrics.get("delivery_status"),
+                ("observed", "safe_fallback", "safe_timeout_fallback"), "unknown"),
+        } if shadow else {}),
         "latency_ms": int(latency) if isinstance(latency, (int, float)) else None,
         "assertions": assertions,
     }
@@ -467,10 +481,34 @@ def build_acceptance_report(
         for metrics in accepted_metrics
         if isinstance(metrics.get("latency_ms"), (int, float))
     ]
+    observations = {}
+    for run in normalized_runs:
+        model_id, profile, case_id = _run_identity(run)
+        metrics = run.get("metrics") or {}
+        if (model_id not in models or profile not in profiles or case_id not in contracts
+                or authorization.get(profile) is not True
+                or not isinstance(metrics, Mapping) or metrics.get("validation_mode") != "shadow"):
+            continue
+        row = observations.setdefault((model_id, profile), {
+            "model_id": model_id, "profile": profile, "sample_size": 0,
+            "checked": 0, "flagged": 0, "observation_errors": 0, "not_observed": 0,
+        })
+        row["sample_size"] += 1
+        status = metrics.get("final_validation_status")
+        if status in ("accepted", "retry_required"):
+            row["checked"] += 1
+            row["flagged"] += int(status == "retry_required")
+        elif status == "observation_error":
+            row["observation_errors"] += 1
+        else:
+            row["not_observed"] += 1
+    for row in observations.values():
+        row["flagged_rate"] = round(row["flagged"] / row["checked"], 4) if row["checked"] else None
     return {
         "schema_version": SCHEMA_VERSION,
         "summary": counts,
         "coverage": coverage,
+        "observations": list(observations.values()),
         "results": [
             _safe_result(
                 run,

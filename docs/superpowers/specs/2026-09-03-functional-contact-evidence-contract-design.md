@@ -2,8 +2,24 @@
 
 Stand: 3. September 2026
 
-Status: Fachlicher Vertrag und schriftliche Fassung am 3. September 2026 vom
-Nutzer freigegeben. Noch nicht implementiert.
+Status: Fachlicher Vertrag am 3. September 2026 freigegeben; Quellenvertrag
+in Schritten 1–4 implementiert. Lokale Modellabnahme noch offen.
+
+## Änderungsentscheidung: zuerst beobachten und testen
+
+Der Nutzer hat am 3. September 2026 nach Klärung der Auswirkungen entschieden:
+Zunächst führen Quellenverträge und Harness-Anweisungen das Modell zur Antwort.
+Zusätzliche Antwortprüfungen dienen nur der Auswertung. Keine neue Pufferung,
+kein automatischer Korrekturlauf und keine Ersatzantwort aufgrund dieser Prüfung.
+Dies ersetzt die nachfolgenden historischen Anforderungen an Prüfung vor Ausgabe.
+
+ACLs, Veröffentlichung, aktive Versionen, Personio-Quellenhoheit und typisierte
+Kontaktbindungen bleiben verbindlich. Beobachtete Fehler werden pro Modell und
+Fall getrennt von erfolgreicher Auslieferung bewertet. Eine zusätzliche Prüfung
+kommt erst als begrenzter Test bei gehäuften, reproduzierbaren Fehlern infrage;
+es gibt keinen erfundenen Grenzwert und keine automatische Aktivierung.
+Die erste Modellabnahme vergleicht ausschließlich den unbeeinflussten Ansatz.
+Offline-Vertragstests belegen keine tatsächliche Modellfehlerquote.
 
 ## 1. Zweck und Einordnung
 
