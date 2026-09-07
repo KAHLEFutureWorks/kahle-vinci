@@ -33,6 +33,13 @@ _SUPERVISOR_RELATION = re.compile(r"\b(?:fuhrungskraft|vorgesetzt\w*|chef|chefin
 _SUPERVISOR_REFERENCE = re.compile(
     r"\b(?:seine|ihre|deren|dessen|die\s+fuhrungskraft|er|sie)\b"
 )
+_SUPERVISOR_REFERENCE_ONLY_WORDS = frozenset(
+    {
+        "bitte", "davon", "denen", "deren", "dessen", "die", "du", "er",
+        "fuhrungskraft", "ihnen", "ihre", "ist", "kannst", "mir", "nennen",
+        "seine", "sie", "vorgesetzte", "vorgesetzten", "wer",
+    }
+)
 
 
 def _value(obj: Any, name: str) -> str:
@@ -74,6 +81,14 @@ def _supervisor_candidate_query(
     if _FULL_NAME_AFTER_RELATION.search(folded) or _POSSESSIVE_FULL_NAME.search(current):
         return ""
     if not _SUPERVISOR_REFERENCE.search(folded):
+        return ""
+    remaining_words = {
+        word for word in re.findall(r"[a-z0-9]+", folded)
+        if word not in _SUPERVISOR_REFERENCE_ONLY_WORDS
+    }
+    if remaining_words:
+        # An explicitly named area/location belongs to the current question.
+        # Only genuinely referential prompts may inherit an earlier subject.
         return ""
 
     prior_user_messages = [

@@ -153,6 +153,29 @@ def test_structured_contact_survives_document_capability_filter():
     assert selected == [point]
 
 
+def test_functional_responsibility_rejects_unclassified_unrelated_sources():
+    unrelated = {
+        "payload": {
+            "domain": "internal_communications",
+            "evidence_capabilities": ["contact_details"],
+            "classification_status": "review_required",
+            "classification_confidence": 0.0,
+        }
+    }
+
+    selected = module.pre_rerank_metadata_filter(
+        "An wen wende ich mich, wenn ein Kunde eine Mahnung erhält?",
+        [unrelated],
+        information_needs=[{
+            "kind": "functional_responsibility",
+            "domain": "customer_processes",
+            "evidence_capabilities": ["approved_functional_responsibility"],
+        }],
+    )
+
+    assert selected == []
+
+
 def test_conflict_for_one_key_keeps_independent_contact(monkeypatch):
     first = contact_search_point()
     conflict = contact_search_point("other@example.invalid")
@@ -406,6 +429,135 @@ def test_general_customer_lock_keeps_explicit_privacy_contact_for_lock_requests(
         "dafür als Datenschutz-Anlaufstelle zuständig?",
         [contact],
     ) == [contact]
+
+
+def test_specific_responsibility_query_drops_generic_contact_from_unrelated_document():
+    (filter_chunks,) = load_tool_helpers("_filter_evidence_chunks")
+    unrelated = type("Chunk", (), {
+        "title": "KAHLE Speak Nutzer Kontext",
+        "heading_path": ("Fragen und Probleme",),
+        "parent_content": (
+            "Bei jeglichen Problemen oder Fragen wende dich an den AI Officer "
+            "unter ai@example.invalid."
+        ),
+    })()
+
+    assert filter_chunks(
+        "Ein Kunde hat eine Mahnung erhalten, obwohl er bezahlt hat. An wen wende ich mich intern?",
+        [unrelated],
+    ) == []
+
+
+def test_procedure_scope_companions_keep_explicit_applicability_from_same_document():
+    process = contact_search_point(
+        chunk_kind="text",
+        functional_contact=None,
+        document_id="process-doc",
+        parent_id="process-parent",
+        content="Öffne die DSE-Einstellungen und dokumentiere die Sperre.",
+        parent_content="Öffne die DSE-Einstellungen und dokumentiere die Sperre.",
+    )
+    scope = contact_search_point(
+        chunk_kind="text",
+        functional_contact=None,
+        document_id="process-doc",
+        parent_id="scope-parent",
+        heading_path=["Hinweis"],
+        content="Diese Anleitung gilt für Hannover, Wunstorf und Wedemark.",
+        parent_content="Diese Anleitung gilt für Hannover, Wunstorf und Wedemark.",
+    )
+    unrelated = contact_search_point(
+        chunk_kind="text",
+        functional_contact=None,
+        document_id="other-doc",
+        parent_id="other-parent",
+        heading_path=["Geltungsbereich"],
+        content="Andere Regelung.",
+        parent_content="Andere Regelung.",
+    )
+
+    assert module.procedure_scope_companions([process], [process, scope, unrelated]) == [scope]
+
+
+def test_procedure_scope_companions_add_process_summary_when_scope_was_selected():
+    scope = contact_search_point(
+        chunk_kind="text",
+        functional_contact=None,
+        document_id="process-doc",
+        parent_id="scope-parent",
+        heading_path=["Geltungsbereich"],
+        content="Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark.",
+        parent_content="Für andere Standorte gilt ein abweichender Kontaktweg.",
+    )
+    introduction = contact_search_point(
+        chunk_kind="text",
+        functional_contact=None,
+        document_id="process-doc",
+        parent_id="intro-parent",
+        heading_path=["Ziel und Zweck"],
+        content="Die Sperre verhindert eine Befragung.",
+        parent_content="Die Sperre verhindert eine Befragung.",
+    )
+    process_summary = contact_search_point(
+        chunk_kind="text",
+        functional_contact=None,
+        document_id="process-doc",
+        parent_id="summary-parent",
+        heading_path=["Kurzablauf des Gesamtprozesses"],
+        content="1. Melde die Kundennummer. 2. Passe die DSE-Einstellungen an.",
+        parent_content="1. Melde die Kundennummer. 2. Passe die DSE-Einstellungen an.",
+    )
+
+    assert module.procedure_scope_companions(
+        [scope], [scope, introduction, process_summary]
+    ) == [process_summary]
+
+
+def test_procedure_retrieval_adds_scope_companion_from_selected_document(monkeypatch):
+    process = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="process-parent", content="Öffne die DSE-Einstellungen.",
+        parent_content="Öffne die DSE-Einstellungen und dokumentiere die Werbesperre.",
+    )
+    scope = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="scope-parent", heading_path=["Wichtig"],
+        content="Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark.",
+        parent_content="Für andere Standorte gilt ein abweichender Kontaktweg.",
+    )
+
+    result, _, _ = run_contact_search(
+        monkeypatch,
+        [process],
+        query="Wie hinterlege ich einen Werbewiderspruch in Vaudis?",
+        expanded=[process, scope],
+    )
+
+    assert any("andere Standorte" in chunk.parent_content for chunk in result)
+
+
+def test_procedure_retrieval_adds_process_summary_when_scope_was_selected(monkeypatch):
+    scope = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="scope-parent", heading_path=["Geltungsbereich"],
+        content="Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark.",
+        parent_content="Für andere Standorte gilt ein abweichender Kontaktweg.",
+    )
+    process_summary = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="summary-parent", heading_path=["Kurzablauf des Gesamtprozesses"],
+        content="1. Melde die Kundennummer. 2. Passe die DSE-Einstellungen an.",
+        parent_content="1. Melde die Kundennummer. 2. Passe die DSE-Einstellungen an.",
+    )
+
+    result, _, _ = run_contact_search(
+        monkeypatch,
+        [scope],
+        query="Wie hinterlege ich einen Werbewiderspruch in Hannover?",
+        expanded=[scope, process_summary],
+    )
+
+    assert any("Passe die DSE-Einstellungen" in chunk.parent_content for chunk in result)
 
 
 def test_ambiguous_customer_lock_query_requires_purpose_clarification():

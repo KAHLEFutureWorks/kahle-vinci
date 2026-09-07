@@ -54,11 +54,18 @@ def test_core_vinci_prompts_clarify_ambiguous_internal_requests_without_guessing
 
         assert "zwei oder mehr plausible Bedeutungen" in prompt, file_name
         assert "genau eine kurze Rueckfrage" in prompt, file_name
-        assert "Nutzerabsicht nicht veraendern" in prompt, file_name
-        assert "datenschutz@kahle.de" in prompt, file_name
+        assert "Übernimm die Nutzerabsicht unverändert" in prompt, file_name
+        assert "erfinde keine fehlenden Fakten" in prompt, file_name
+        assert "datenschutz@kahle.de" not in prompt, file_name
+        assert "marketing@kahle.de" not in prompt, file_name
+        assert "krankmeldung@kahle.de" not in prompt, file_name
+        assert "PFLICHT-WEITERLEITUNGEN" not in prompt, file_name
+        assert "KAHLE Knowledge Harness" in prompt, file_name
+        assert "EvidenceBundle" in prompt, file_name
+        assert "Ergänze keine Kontakte" in prompt, file_name
 
 
-def test_core_vinci_prompts_do_not_forward_marketing_opt_out_to_privacy():
+def test_core_vinci_prompts_require_evidence_for_processes_and_contacts():
     prompt_root = ROOT / "open-webui-prompts"
     for file_name in (
         "kahle-vinci-systemprompt.md",
@@ -67,9 +74,10 @@ def test_core_vinci_prompts_do_not_forward_marketing_opt_out_to_privacy():
         prompt = (prompt_root / file_name).read_text(encoding="utf-8")
 
         assert "Datenschutz / Legal / Werbesperre" not in prompt, file_name
-        assert "Werbewiderspruch" in prompt, file_name
-        assert "besondere Merkmale" in prompt, file_name
-        assert "Finanzdaten" in prompt, file_name
+        assert "dokumentierte Prozesse" in prompt, file_name
+        assert "Funktionspostfächer" in prompt, file_name
+        assert "Ergänze keine Kontakte" in prompt, file_name
+        assert "EvidenceBundle" in prompt, file_name
 
 
 def test_core_vinci_prompts_redirect_email_drafts_to_mailer():

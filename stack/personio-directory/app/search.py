@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -109,6 +110,12 @@ class CoworkerResult:
     people: tuple[PersonRecord, ...]
 
 
+@dataclass(frozen=True)
+class SupervisorResult:
+    people: tuple[PersonRecord, ...]
+    claim_metadata: dict[str, object] | None = None
+
+
 class DirectoryIndex(Protocol):
     """Read-only subset supplied by ``QdrantDirectoryIndex``."""
 
@@ -194,12 +201,17 @@ class DirectorySearch:
             )
         if intent == "supervisor_lookup":
             named_supervisor = self._supervisor_for_named_person(query.text, people)
+            supervisor_result = (
+                SupervisorResult(named_supervisor)
+                if named_supervisor
+                else self._supervisors_from_candidate_query(
+                    query.candidate_query or query.text, people
+                )
+            )
             return self._evidence(
-                self._supervisors_from_candidate_query(query.candidate_query, people)
-                if query.candidate_query.strip()
-                else named_supervisor
-                or self._supervisors_from_candidate_query(query.text, people),
+                supervisor_result.people,
                 sync_completed_at=sync_completed_at,
+                claim_metadata=supervisor_result.claim_metadata,
             )
         return self._evidence(
             self._directory_candidates(
@@ -250,11 +262,11 @@ class DirectorySearch:
 
     def _supervisors_from_candidate_query(
         self, candidate_query: str, people: Iterable[PersonRecord]
-    ) -> tuple[PersonRecord, ...]:
-        """Resolve a manager only when one prior candidate explicitly evidences it."""
+    ) -> SupervisorResult:
+        """Resolve a manager only from explicit Personio relationships."""
         candidate_text = str(candidate_query or "").strip()
         if not candidate_text:
-            return ()
+            return SupervisorResult(())
         candidate_intent = classify_directory_query(candidate_text)
         if candidate_intent not in {
             "person_lookup",
@@ -262,26 +274,79 @@ class DirectorySearch:
             "onboarding_search",
             "supervisor_lookup",
         }:
-            return ()
-        candidates = (
-            self._exact_person_matches(candidate_text, people, allow_typo=False)
-            if candidate_intent == "person_lookup"
-            else self._directory_candidates(
-                candidate_text,
-                people,
-                ignore_unstructured_terms=candidate_intent == "onboarding_search",
+            return SupervisorResult(())
+        all_people = tuple(people)
+        if candidate_intent == "person_lookup":
+            candidates = self._exact_person_matches(
+                candidate_text, all_people, allow_typo=False
             )
+            if len(candidates) != 1:
+                return SupervisorResult(())
+            supervisor_id = candidates[0].supervisor_personio_id
+            supervisors = tuple(
+                person
+                for person in all_people
+                if person.personio_id == supervisor_id
+            )
+            return SupervisorResult(supervisors if len(supervisors) == 1 else ())
+
+        active_people = tuple(
+            person for person in all_people if person.employment_status == "ACTIVE"
         )
-        people_by_id = {person.personio_id: person for person in people}
-        supervisor_ids = {
+        candidates = self._directory_candidates(
+            candidate_text,
+            active_people,
+            ignore_unstructured_terms=candidate_intent == "onboarding_search",
+        )
+        if not candidates:
+            return SupervisorResult(())
+        counts = Counter(
             person.supervisor_personio_id
             for person in candidates
             if person.supervisor_personio_id
-        }
-        if len(supervisor_ids) != 1:
-            return ()
-        supervisor = people_by_id.get(supervisor_ids.pop())
-        return (supervisor,) if supervisor is not None else ()
+        )
+        if not counts:
+            return SupervisorResult(())
+        ranked_supervisors = counts.most_common()
+        supervisor_id, dominant_support = ranked_supervisors[0]
+        runner_up_support = ranked_supervisors[1][1] if len(ranked_supervisors) > 1 else 0
+        if (
+            dominant_support > runner_up_support
+            and any(person.personio_id == supervisor_id for person in candidates)
+        ):
+            candidates = tuple(
+                person for person in candidates if person.personio_id != supervisor_id
+            )
+            counts = Counter(
+                person.supervisor_personio_id
+                for person in candidates
+                if person.supervisor_personio_id
+            )
+            if not counts:
+                return SupervisorResult(())
+            supervisor_id, support_count = counts.most_common(1)[0]
+        else:
+            support_count = counts[supervisor_id]
+        candidate_count = len(candidates)
+        if support_count * 10 < candidate_count * 9:
+            return SupervisorResult(())
+        supervisors = tuple(
+            person
+            for person in active_people
+            if person.personio_id == supervisor_id
+        )
+        if len(supervisors) != 1:
+            return SupervisorResult(())
+        return SupervisorResult(
+            supervisors,
+            {
+                "supervisor_scope": "organizational_unit",
+                "candidate_count": candidate_count,
+                "support_count": support_count,
+                "support_ratio": support_count / candidate_count,
+                "single_candidate_basis": candidate_count == 1,
+            },
+        )
 
     def _supervisor_for_named_person(
         self, text: str, people: Iterable[PersonRecord]
@@ -425,6 +490,7 @@ class DirectorySearch:
             "team", "position_and_office", "department_and_office"
         ]
         | None = None,
+        claim_metadata: dict[str, object] | None = None,
     ) -> DirectoryEvidence:
         claims: list[dict[str, object]] = []
         sources: list[dict[str, str]] = []
@@ -441,6 +507,8 @@ class DirectorySearch:
             if relationship_basis is not None:
                 claim["relationship_basis"] = relationship_basis
                 claim["relationship_disclaimer"] = _COLLABORATION_DISCLAIMER
+            if claim_metadata:
+                claim.update(claim_metadata)
             claims.append(claim)
             sources.append({"id": source_id, "kind": "personio_directory"})
         return DirectoryEvidence(

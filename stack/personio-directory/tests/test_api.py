@@ -146,6 +146,53 @@ def test_auto_request_classifies_once_before_the_directory_lookup(monkeypatch) -
     assert calls == [query_text]
 
 
+def test_supervisor_consensus_api_exposes_only_safe_aggregate_evidence() -> None:
+    class SupervisorConsensusSearch:
+        def search(self, query):
+            return DirectoryEvidence(
+                "ok",
+                (
+                    {
+                        "display_name": "Erika Beispiel",
+                        "position": "Bereichsleitung",
+                        "source_id": "P1",
+                        "supervisor_scope": "organizational_unit",
+                        "candidate_count": 10,
+                        "support_count": 9,
+                        "support_ratio": 0.9,
+                        "single_candidate_basis": False,
+                    },
+                ),
+                ({"id": "P1", "kind": "personio_directory"},),
+                "2026-08-24T10:15:00Z",
+                False,
+            )
+
+    app = create_app(
+        search=SupervisorConsensusSearch(),
+        internal_api_key="test-key",
+        start_background=False,
+    )
+    with TestClient(app) as api:
+        response = api.post(
+            "/internal/search",
+            json={
+                **request(role="user", intent="supervisor_lookup"),
+                "query": "Wer ist die Führungskraft der Disposition?",
+            },
+            headers={"X-API-Key": "test-key"},
+        )
+
+    assert response.status_code == 200
+    claim = response.json()["claims"][0]
+    assert claim["candidate_count"] == 10
+    assert claim["support_count"] == 9
+    assert claim["support_ratio"] == 0.9
+    rendered = json.dumps(response.json())
+    assert "supervisor_personio_id" not in rendered
+    assert "candidate_names" not in rendered
+
+
 def test_onboarding_api_never_serializes_contact_fields() -> None:
     with client() as api:
         response = api.post(

@@ -4,7 +4,7 @@ This first migration step observes the existing OpenWebUI path.  It does not
 rewrite prompts, execute tools, emit UI events or modify an assistant answer.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from html import unescape
 import json
 import re
@@ -60,6 +60,13 @@ class ResolvedContext:
     retrieval_query: str
     aliases: dict[str, str] = field(default_factory=dict)
     conversation_reference: bool = False
+    intent: str = ""
+    information_needs: tuple[str, ...] = ()
+    entities: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    context_references: tuple[str, ...] = ()
+    ambiguities: tuple[str, ...] = ()
+    required_clarification: bool = False
+    clarification_question: str = ""
 
 
 @dataclass(frozen=True)
@@ -286,6 +293,44 @@ def _organizational_contact_question(query: str) -> bool:
     return bool(
         _organization_unit_reference(folded)
         or re.search(rf"\b{_FUNCTIONAL_CONTACT_TOPIC_PATTERN}\b", folded)
+    )
+
+
+def _explicit_functional_contact_question(query: str) -> bool:
+    """Recognize a documented shared channel rather than a person's contact."""
+    folded = _fold(query)
+    return bool(
+        re.search(r"\bfunktionspostfach\w*\b", folded)
+        or re.search(r"\bkontaktseite\w*\b", folded)
+        or re.search(
+            r"\b(?:gemeinsam\w*|zentral\w*)\b.{0,50}"
+            r"\b(?:e-?mail|telefon(?:nummer)?|durchwahl|kontakt)\b",
+            folded,
+        )
+    )
+
+
+def _explicit_current_staff_request(query: str) -> bool:
+    folded = _fold(query)
+    return bool(
+        re.search(r"\bwer\s+arbeitet\b", folded)
+        or re.search(r"\bwelche\s+(?:mitarbeiter|mitarbeitenden|kollegen)\b", folded)
+    )
+
+
+def _non_knowledge_tool_request(query: str) -> bool:
+    """Keep transformations and personal task commands on their native tools."""
+    folded = _fold(query).strip()
+    return bool(
+        re.match(
+            r"^(?:bitte\s+)?(?:formulier|schreib|uberarbeit|korrigier|ubersetz)\w*\b",
+            folded,
+        )
+        or re.match(r"^(?:bitte\s+)?erinner\w*\s+mich\b", folded)
+        or re.search(
+            r"\b(?:meine|mir)\b.{0,35}\b(?:aufgaben|to-?dos?|erinnerungen)\b",
+            folded,
+        )
     )
 
 
@@ -854,6 +899,8 @@ def _directory_information_need(query: str) -> bool:
     folded = _fold(query)
     if _functional_responsibility_question(folded):
         return False
+    if _explicit_functional_contact_question(folded) and not _explicit_current_staff_request(folded):
+        return False
     if _organizational_contact_question(folded):
         return True
     if _organization_unit_directory_question(folded):
@@ -937,6 +984,8 @@ def _explicit_onboarding_people_request(folded_query: str) -> bool:
 
 def _rag_information_need(query: str) -> bool:
     folded = _fold(query)
+    if _explicit_functional_contact_question(folded):
+        return True
     if _organizational_contact_question(folded):
         return True
     if _directory_information_need(query) and re.search(
@@ -1010,6 +1059,25 @@ def _information_needs(query: str) -> tuple[InformationNeed, ...]:
                 evidence_capabilities=("approved_functional_responsibility",),
             ),
         )
+    if _explicit_functional_contact_question(folded):
+        needs = [
+            InformationNeed(
+                kind="functional_contact",
+                domain="internal_organization",
+                document_types=("contact_directory", "responsibility_matrix"),
+                evidence_capabilities=("functional_contact", "contact_details"),
+            )
+        ]
+        if _explicit_current_staff_request(folded):
+            needs.insert(
+                0,
+                InformationNeed(
+                    kind="directory_record",
+                    domain="employee_directory",
+                    evidence_capabilities=("current_person_record",),
+                ),
+            )
+        return tuple(needs)
     if _organizational_contact_question(folded):
         return (
             InformationNeed(
@@ -1142,6 +1210,13 @@ def plan_retrieval(
     """Select required evidence sources from information needs, not model choice."""
     del query, messages, model_id
     retrieval_query = str(resolved_query or "").strip()
+    if _non_knowledge_tool_request(retrieval_query):
+        return RetrievalPlan(
+            required_tools=(),
+            queries=(retrieval_query,),
+            permission_scope=dict(permission_scope or {}),
+            information_needs=(),
+        )
     directory_needed = _directory_information_need(retrieval_query)
     rag_needed = _rag_information_need(retrieval_query)
     required_tools = (
@@ -1183,6 +1258,165 @@ def resolve_query_aliases(query: str) -> str:
             flags=re.IGNORECASE,
         )
     return resolved
+
+
+_REQUEST_LOCATIONS = (
+    "Hannover",
+    "Wunstorf",
+    "Wedemark",
+    "Walsrode",
+    "Neustadt",
+    "Nienburg",
+    "Stadthagen",
+)
+_REQUEST_SYSTEMS = ("Vaudis", "Personio", "SharePoint")
+_CONVERSATION_REFERENCE = re.compile(
+    r"(?iu)(?:^\s*und\b|\b(?:dann|dort|davon|dazu|das|dies|diese[rmns]?)\b)"
+)
+_EXPLICIT_PERSON_AFTER_VON = re.compile(
+    r"(?iu)\bvon\s+([A-ZÄÖÜ][\wÄÖÜäöüß.-]+\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]+)"
+)
+
+
+def _request_entities(text: str) -> dict[str, tuple[str, ...]]:
+    raw = str(text or "")
+    folded = _fold(raw)
+    locations = tuple(
+        location for location in _REQUEST_LOCATIONS if _fold(location) in folded
+    )
+    systems = tuple(system for system in _REQUEST_SYSTEMS if _fold(system) in folded)
+    person_match = _EXPLICIT_PERSON_AFTER_VON.search(raw)
+    persons = (person_match.group(1).rstrip("?.!"),) if person_match else ()
+    return {
+        "persons": persons,
+        "organizational_units": (),
+        "locations": locations,
+        "systems": systems,
+    }
+
+
+def _prior_conversation_turns(
+    messages: list[dict[str, Any]], current_query: str
+) -> tuple[str, str]:
+    prior_user = ""
+    prior_assistant = ""
+    skipped_current = False
+    for message in reversed(messages or []):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        content = str(message.get("content") or "").strip()
+        if role == "user" and not skipped_current and content == current_query:
+            skipped_current = True
+            continue
+        if role == "assistant" and not prior_assistant:
+            prior_assistant = content
+            continue
+        if role == "user":
+            prior_user = content
+            break
+    return prior_user, prior_assistant
+
+
+def _prior_topic_anchor(
+    messages: list[dict[str, Any]], current_query: str, prior_user: str
+) -> str:
+    """Return the nearest standalone user turn in one referential chain."""
+    if not prior_user or not _CONVERSATION_REFERENCE.search(prior_user):
+        return ""
+    prior_users: list[str] = []
+    skipped_current = False
+    for message in reversed(messages or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        if not skipped_current and content == current_query:
+            skipped_current = True
+            continue
+        if not content:
+            continue
+        prior_users.append(content)
+        if len(prior_users) >= 4:
+            break
+    for candidate in prior_users[1:]:
+        candidate_entities = _request_entities(resolve_query_aliases(candidate))
+        if (
+            not _CONVERSATION_REFERENCE.search(candidate)
+            or candidate_entities["systems"]
+            or candidate_entities["persons"]
+        ):
+            return candidate
+    return ""
+
+
+def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedContext:
+    """Resolve bounded conversational references without inventing evidence."""
+    original = str(query or "").strip()
+    retrieval_query = resolve_query_aliases(original)
+    entities = _request_entities(retrieval_query)
+    prior_user, prior_assistant = _prior_conversation_turns(messages, original)
+    topic_anchor = _prior_topic_anchor(messages, original, prior_user)
+    conversation_reference = bool(
+        prior_user
+        and (
+            _CONVERSATION_REFERENCE.search(original)
+            or (
+                prior_assistant.rstrip().endswith("?")
+                and len(_fold(original).split()) <= 5
+            )
+        )
+    )
+    ambiguities: tuple[str, ...] = ()
+    clarification_question = ""
+
+    if (
+        conversation_reference
+        and " oder " in _fold(prior_assistant)
+        and len(_fold(original).split()) <= 4
+    ):
+        ambiguities = ("Der unmittelbar vorherige Turn enthält mehrere Alternativen.",)
+        clarification_question = prior_assistant.strip()
+    elif conversation_reference and not entities["persons"]:
+        context_query = topic_anchor or prior_user
+        combined = f"{context_query} {original}"
+        prior_folded = _fold(context_query)
+        current_locations = entities["locations"]
+        if "werbung" in prior_folded and "vaudis" in prior_folded:
+            location_suffix = (
+                f" am Standort {current_locations[0]}" if current_locations else ""
+            )
+            retrieval_query = (
+                "Wie wird ein Werbewiderspruch in Vaudis"
+                f"{location_suffix} durchgeführt?"
+            )
+        else:
+            retrieval_query = combined
+        resolved_entities = _request_entities(retrieval_query)
+        entities = {
+            key: entities[key] or resolved_entities[key]
+            for key in entities
+        }
+
+    needs = tuple(need.kind for need in _information_needs(retrieval_query))
+    return ResolvedContext(
+        original_query=original,
+        retrieval_query=retrieval_query,
+        aliases=_aliases_in_query(original),
+        conversation_reference=conversation_reference,
+        intent=_intent_kind(retrieval_query),
+        information_needs=needs,
+        entities=entities,
+        context_references=(
+            ("prior_user", "topic_anchor")
+            if conversation_reference and topic_anchor
+            else ("prior_user",)
+            if conversation_reference
+            else ()
+        ),
+        ambiguities=ambiguities,
+        required_clarification=bool(ambiguities),
+        clarification_question=clarification_question,
+    )
 
 
 def _extract_marker(text: str, name: str) -> str:
@@ -2007,7 +2241,14 @@ def build_decision(
 ) -> HarnessDecision:
     """Build an observable decision without changing the live answer path."""
     original = str(query or "").strip()
-    retrieval_query = str(resolved_query or original).strip()
+    resolved_context = resolve_request(original, messages)
+    supplied_retrieval_query = str(resolved_query or "").strip()
+    retrieval_query = (
+        supplied_retrieval_query
+        if supplied_retrieval_query and supplied_retrieval_query != original
+        else resolved_context.retrieval_query
+    )
+    resolved_context = replace(resolved_context, retrieval_query=retrieval_query)
     procedural = _is_procedural(retrieval_query)
     retrieval_plan = plan_retrieval(
         original,
@@ -2063,12 +2304,7 @@ def build_decision(
             clarification_required=clarification,
             clarification_question=clarification_question,
         ),
-        resolved_context=ResolvedContext(
-            original_query=original,
-            retrieval_query=retrieval_query,
-            aliases=_aliases_in_query(original),
-            conversation_reference=_has_conversation_reference(messages, original),
-        ),
+        resolved_context=resolved_context,
         retrieval_plan=retrieval_plan,
         evidence_bundle=evidence,
         answer_contract=AnswerContract(
@@ -2105,7 +2341,8 @@ def build_result_driven_decision(
         return None
 
     original = str(query or "").strip()
-    procedural = _is_procedural(original)
+    resolved_context = resolve_request(original, messages)
+    procedural = _is_procedural(resolved_context.retrieval_query)
     if actual_tools == ("personio_directory",):
         evidence = _personio_evidence(personio_result)
     elif actual_tools == ("rag_chat",):
@@ -2115,7 +2352,7 @@ def build_result_driven_decision(
 
     retrieval_plan = RetrievalPlan(
         required_tools=actual_tools,
-        queries=(original,),
+        queries=(resolved_context.retrieval_query,),
         permission_scope=dict(permission_scope or {}),
         information_needs=(),
         mode="model_led",
@@ -2157,12 +2394,7 @@ def build_result_driven_decision(
                 _extract_marker(str(rag_result or ""), "ANSWER") if clarification else ""
             ),
         ),
-        resolved_context=ResolvedContext(
-            original_query=original,
-            retrieval_query=original,
-            aliases=_aliases_in_query(original),
-            conversation_reference=_has_conversation_reference(messages, original),
-        ),
+        resolved_context=resolved_context,
         retrieval_plan=retrieval_plan,
         evidence_bundle=evidence,
         answer_contract=AnswerContract(

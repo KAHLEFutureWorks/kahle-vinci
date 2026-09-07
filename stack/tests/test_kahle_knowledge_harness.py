@@ -135,6 +135,112 @@ def test_retrieval_alias_resolution_expands_only_documented_whole_tokens():
     assert module.resolve_query_aliases("Studie und Hinweis") == "Studie und Hinweis"
 
 
+def test_request_resolution_turns_a_process_followup_into_a_standalone_query():
+    harness = load_harness()
+    original = "Und wie geht es dann, wenn ich in Hannover bin?"
+    messages = [
+        {
+            "role": "user",
+            "content": "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das in Vaudis?",
+        },
+        {
+            "role": "assistant",
+            "content": "Für andere Standorte ist ein abweichender Kontaktweg dokumentiert.",
+        },
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.original_query == original
+    assert "Werbewiderspruch" in resolved.retrieval_query
+    assert "Vaudis" in resolved.retrieval_query
+    assert "Hannover" in resolved.retrieval_query
+    assert resolved.entities["locations"] == ("Hannover",)
+    assert resolved.entities["systems"] == ("Vaudis",)
+    assert resolved.conversation_reference is True
+    assert resolved.required_clarification is False
+
+
+def test_request_resolution_keeps_the_process_anchor_across_two_location_followups():
+    harness = load_harness()
+    original = "Und was ist, wenn ich in Nienburg bin?"
+    messages = [
+        {
+            "role": "user",
+            "content": "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das in Vaudis?",
+        },
+        {
+            "role": "assistant",
+            "content": "Der dokumentierte Ablauf hängt vom Standort ab.",
+        },
+        {
+            "role": "user",
+            "content": "Und wie geht es dann, wenn ich in Hannover bin?",
+        },
+        {
+            "role": "assistant",
+            "content": "Für Hannover gilt der dokumentierte interne Ablauf.",
+        },
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.retrieval_query == (
+        "Wie wird ein Werbewiderspruch in Vaudis am Standort Nienburg durchgeführt?"
+    )
+    assert resolved.entities["locations"] == ("Nienburg",)
+    assert resolved.entities["systems"] == ("Vaudis",)
+    assert resolved.context_references == ("prior_user", "topic_anchor")
+
+
+def test_request_resolution_keeps_a_standalone_query_semantically_unchanged():
+    harness = load_harness()
+    original = "Wer arbeitet im Teiledienst in Hannover?"
+
+    resolved = harness.resolve_request(original, [{"role": "user", "content": original}])
+
+    assert resolved.original_query == original
+    assert resolved.retrieval_query == original
+    assert resolved.conversation_reference is False
+
+
+def test_request_resolution_does_not_carry_an_old_name_over_a_new_name():
+    harness = load_harness()
+    original = "Und wer ist die Führungskraft von Berta Beispiel?"
+    messages = [
+        {"role": "user", "content": "Wo arbeitet Anna Adler?"},
+        {"role": "assistant", "content": "Anna Adler arbeitet im Service."},
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.retrieval_query == original
+    assert resolved.entities["persons"] == ("Berta Beispiel",)
+    assert "Anna Adler" not in resolved.retrieval_query
+
+
+def test_request_resolution_marks_an_unresolved_either_or_followup_for_clarification():
+    harness = load_harness()
+    original = "Wie geht das?"
+    messages = [
+        {"role": "user", "content": "Wie sperre ich einen Kunden?"},
+        {
+            "role": "assistant",
+            "content": "Geht es um einen Werbewiderspruch oder eine allgemeine Kundensperre?",
+        },
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.required_clarification is True
+    assert "Werbewiderspruch" in resolved.clarification_question
+    assert "allgemeine Kundensperre" in resolved.clarification_question
+
+
 def test_process_overview_with_explicitly_excluded_steps_is_not_procedural():
     harness = load_harness()
     query = (
@@ -312,6 +418,55 @@ def test_retrieval_plan_uses_required_evidence_sources(query, tools):
 
     assert plan.required_tools == tools
     assert plan.required_tool == (tools[0] if len(tools) == 1 else "multi_source")
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Formuliere das freundlicher: Bitte stellt die Kundenfahrzeuge nach der Fertigmeldung auf die vorgesehenen Plätze.",
+        "Formuliere diese Notiz freundlicher: Bitte lege den Schlüssel zurück.",
+        "Erinnere mich morgen um 9 Uhr an die Reifenbestellung.",
+        "Zeige mir meine offenen Aufgaben.",
+    ),
+)
+def test_retrieval_plan_keeps_transformations_and_task_commands_out_of_knowledge_tools(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci", {"user_id": "user-1"}
+    )
+
+    assert plan.required_tools == ()
+    assert plan.information_needs == ()
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie lautet das Funktionspostfach des Marketings?",
+        "Welche gemeinsame Telefonnummer hat der Datenschutz?",
+        "Wo melde ich eine Störung, wenn Vaudis an meinem Arbeitsplatz nicht startet?",
+    ),
+)
+def test_retrieval_plan_routes_documented_contact_and_support_paths_to_rag(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci", {"user_id": "user-1"}
+    )
+
+    assert plan.required_tools == ("rag_chat",)
+
+
+def test_retrieval_plan_routes_explicit_mailbox_and_current_staff_to_both_sources():
+    harness = load_harness()
+    query = "Wie lautet das Funktionspostfach und wer arbeitet aktuell im Marketing?"
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci", {"user_id": "user-1"}
+    )
+
+    assert plan.required_tools == ("personio_directory", "rag_chat")
 
 
 @pytest.mark.parametrize(
@@ -745,7 +900,7 @@ def test_organization_area_contact_wordings_route_to_personio_and_rag(query):
     assert plan.information_needs[0].kind == "organization_contact"
 
 
-def test_central_organization_contact_combines_personio_and_rag_evidence():
+def test_central_organization_contact_uses_documented_rag_evidence():
     harness = load_harness()
     query = "Wie lautet die zentrale E-Mail-Adresse der Personalabteilung?"
 
@@ -757,8 +912,8 @@ def test_central_organization_contact_combines_personio_and_rag_evidence():
         {"user_id": "user-1"},
     )
 
-    assert plan.required_tools == ("personio_directory", "rag_chat")
-    assert plan.information_needs[0].kind == "organization_contact"
+    assert plan.required_tools == ("rag_chat",)
+    assert plan.information_needs[0].kind == "functional_contact"
 
 
 @pytest.mark.parametrize(
@@ -1076,14 +1231,11 @@ def test_rag_organization_contact_uses_only_an_exact_cited_contact_literal():
         rag_result=rag,
     )
 
-    assert decision.evidence_bundle.status == "partially_supported"
+    assert decision.evidence_bundle.status == "supported"
     assert decision.answer_contract.allowed_contact_values == (
         "team@example.invalid",
     )
-    assert decision.direct_answer() == (
-        "Dokumentierter Kontaktweg:\n\n"
-        "Der freigegebene Kontakt ist team@example.invalid. [#1]"
-    )
+    assert decision.direct_answer() == ""
 
 
 def test_previous_assistant_contact_value_is_never_treated_as_evidence():
@@ -1733,7 +1885,7 @@ def test_validator_rejects_unsubstantiated_technical_and_privacy_approval():
     assert "unsupported_privacy_approval" in codes
 
 
-def _result_driven_personio_payload(*, status="ok"):
+def _result_driven_personio_payload(*, status="ok", extra_claim_fields=None):
     return {
         "status": status,
         "claims": (
@@ -1743,6 +1895,7 @@ def _result_driven_personio_payload(*, status="ok"):
                     "position": "Serviceassistenz",
                     "business_email": "person@example.invalid",
                     "source_id": "P1",
+                    **(extra_claim_fields or {}),
                 }
             ]
             if status == "ok"
@@ -1877,6 +2030,34 @@ def test_result_driven_decision_uses_only_actually_called_sources(
     assert decision is not None
     assert decision.retrieval_plan.required_tools == expected_tools
     assert {source["id"] for source in decision.evidence_bundle.sources} == expected_sources
+
+
+def test_personio_supervisor_consensus_metadata_reaches_the_evidence_bundle():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory",),
+        query="Wer ist die Führungskraft der Disposition?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=_result_driven_personio_payload(
+            extra_claim_fields={
+                "supervisor_scope": "organizational_unit",
+                "candidate_count": 10,
+                "support_count": 9,
+                "support_ratio": 0.9,
+                "single_candidate_basis": False,
+            }
+        ),
+    )
+
+    assert decision is not None
+    claim = decision.evidence_bundle.supported_claims[0]
+    assert claim["candidate_count"] == 10
+    assert claim["support_count"] == 9
+    assert claim["support_ratio"] == 0.9
+    assert "supervisor_personio_id" not in repr(claim)
 
 
 def test_result_driven_decision_is_absent_without_an_actual_internal_tool_call():

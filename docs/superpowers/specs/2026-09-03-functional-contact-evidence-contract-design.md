@@ -154,9 +154,10 @@ Für den modellgeführten Pfad gilt:
 
 Prozesswissen bleibt RAG-Evidenz, auch wenn ein Dokument einen nicht freigegebenen
 Kontakt im Fließtext enthält. Die Antwort darf den Prozess beschreiben, den
-unfreigegebenen Kontaktwert aber nicht als Kontakt ausgeben. Dafür ist die
-geplante Prüfung vor sichtbarer Ausgabe aus Task 7 erforderlich; ein Prompt
-allein ist kein ausreichendes Gate. Quellenlinks und Feedbacklinks behalten
+unfreigegebenen Kontaktwert aber nicht als Kontakt ausgeben. Gemäß der aktuellen
+Freigabe wird diese Antwortregel durch Modellführung und beobachtende Tests
+geprüft, nicht durch eine neue Ausgabesperre erzwungen. Ein Prompt ist keine
+Garantie fehlerfreier Antworten. Quellenlinks und Feedbacklinks behalten
 ihre separate technische Zulassung und begründen keine Kontaktfreigabe.
 
 Die Zeilenbindung verhindert insbesondere das Vermischen strukturierter
@@ -195,7 +196,9 @@ Kontaktwerte, Namen, Dokumentpassagen oder Secrets.
 Die Implementierung liefert eine kopierbare leere Vorlage mit Anleitung.
 Reale Kontaktquellen werden nicht automatisch umgeschrieben oder veröffentlicht.
 Ihre einmalige redaktionelle Übertragung bleibt Aufgabe der Verantwortlichen.
-Bis zur Übertragung nennt Vinci daraus keine Funktionskontakte.
+Bis zur Übertragung erhält das Modell daraus keine Kontaktfreigabe und soll
+keine Funktionskontakte nennen. Die rein beobachtende Prüfung verhindert einen
+Modellverstoß nicht technisch.
 
 Nach Anpassung des Indexformats ist eine kontrollierte Neuindexierung nötig.
 Alte Payloads ohne typisierte Kontakte werden nicht heuristisch aufgewertet.
@@ -215,7 +218,8 @@ Pflichttests verwenden ausschließlich synthetische Personen und reservierte Wer
   von vermeintlichen Personennamen oder Wörtern wie Fuhrpark und Leitfaden;
 - keine Vermischung von Funktion, Zweck, Geltungsbereich und Kontaktwert;
 - Personio-not-found erzeugt weder RAG-Personenersatz noch Web-Fallback;
-- ungültige Kontaktantwort vor Sichtbarkeit abgefangen, inklusive Task-7-Retry;
+- ungültige Kontaktantwort unverändert ausgeliefert und als Auffälligkeit beobachtet,
+  ohne zusätzlichen Retry oder Ersatzantwort;
 - Quell-/Bundle-Sync, isolierte Dienstsuiten, Full Verify, Modellmatrix und UI-Abnahme.
 
 Die wiederholt fehlgeschlagenen Kontaktklassifikations-Tests werden anhand des

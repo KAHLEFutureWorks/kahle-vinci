@@ -72,7 +72,7 @@ Vor jeder Task-Grenze nur dessen exakte Pfade stagen, Diff prüfen und reviewen.
 | `stack/open-webui-tools/hybrid_retrieval.py` | ACL-geprüfte Kontakte, versionierte Zeilenherkunft und Konfliktauflösung |
 | `stack/open-webui-tools/rag_chat_hybrid_tool.py` | typisierte Claims statt Freitext-Kontaktfreigabe |
 | `stack/open-webui-overrides/open_webui/utils/kahle_knowledge_harness.py` | tatsächliche Evidenz, vollständige Kontaktzuordnungen, Finalvalidierung |
-| `stack/open-webui-overrides/open_webui/utils/middleware.py` | Ausgabe erst nach Validierung, maximal ein Korrekturlauf |
+| `stack/open-webui-overrides/open_webui/utils/middleware.py` | Antwortbeobachtung ohne neue Sperre, Korrekturlauf oder Ersatzantwort |
 
 Kein Import eines anderen Dienstes namens `app`. Der Vertrag benötigt nur die
 Standardbibliothek. Die erzeugten Dateien sind keine unabhängig gepflegten
@@ -317,6 +317,35 @@ beobachtete Qualität statt erzwungener Freigabe ergänzen.
 
 ### Task 6: Outcome-Matrix, Vorlage und Migrationsanleitung
 
+**Umsetzungsstand 3. September 2026:** v2-Outcome-Reporter, migrierte Matrix,
+synthetische Kontakt- und Kontextfälle sowie Vorlage und Migrationsanleitung
+sind lokal implementiert. Historische v1-Reporttests bleiben als Kompatibilität
+getrennt erhalten. Der alte gemischte Vor-Router-Test ist als Legacy-Verhalten
+gekennzeichnet; die aktive Regression prüft beide tatsächlich übergebenen
+Ergebnisse im result-driven Harness. Kein Live-Modellnachweis daraus ableiten.
+Der separate negative `fault_injection`-Kontrollfall gehört nicht zur Pflicht-
+Coverage echter Modellläufe und bleibt bei Einspeisung im Reporter rot.
+**Offline-Abschluss dieses Arbeitsblocks:** Der kanonische Full-Runner ist am
+3. September 2026 mit Exitcode 0 abgeschlossen: 1017 Stack-, 205 Portal-Backend-,
+36 KB-Sync-, 7 Eval-, 32 Academy- und 191 Personio-Tests (1488 Python-Tests),
+19 UI-Renderingtests, Compose/n8n/Bundle-Sync, UI-Lint und UI-Build bestanden.
+Drei bestehende UI-Lint-Warnungen bleiben unverändert.
+Der erste Sandbox-Lauf hatte keinen Testfehler, aber einen Build-Setupfehler
+(`spawn EPERM`). Sowohl derselbe einzelne Build als auch der vollständige
+identische Runner waren anschließend außerhalb der Sandbox erfolgreich.
+
+Gezielte Prüfung: 103 Tests für Reporter, Referenzmatrix, Promptvertrag und
+Kontaktparser bestanden. Der Build-Helfer wurde aus dem vorhandenen lokalen
+Quellstand übernommen; eine enge Git-Ignore-Ausnahme nimmt nur diese Quelldatei
+auf. Bestehende Build-Anbindung und Hosting-Konfiguration bleiben unverändert.
+Die abschließende Inline-Durchsicht umfasst Quellengrenzen, Berichtdatenschutz,
+Legacy-Kompatibilität und den Diff seit `ffd3138`. Keine Änderung an
+Produktionsdefault, Berechtigungen oder Antwortauslieferung.
+Kein Commit, Push, Rollout, Reindex oder echter Modelllauf in diesem Arbeitsblock.
+Task 7 bleibt bis zur kontrollierten lokalen Integration und Modell-/UI-Abnahme
+offen; insbesondere sind feste Prompt-Kontakte vor dieser Abnahme mit dem
+Quellenvertrag abzugleichen.
+
 **Files:** Modify `scripts/openwebui/kahle-harness-acceptance.py`,
 `kahle-harness-acceptance-matrix.json`, `stack/tests/test_kahle_harness_acceptance_report.py`,
 `docs/KAHLE-VINCI-UI-ABNAHME-HARNESS.md`; create
@@ -325,7 +354,7 @@ beobachtete Qualität statt erzwungener Freigabe ergänzen.
 **Consumes:** ausgeführte Toolereignisse und validierte Quellen-/Kontaktarten.
 **Produces:** ursprünglicher Task-8-Vertrag plus neue Kontakt-Abnahmefälle.
 
-- [ ] RED-Tests auf vorhandenen Report-Fixtures erweitern:
+- [x] RED-Tests auf vorhandenen Report-Fixtures erweitern:
 
 ```python
 assert set(case["required_tools"]).issubset(run["actual_tools"])
@@ -338,11 +367,11 @@ zusätzliches Webtool, fehlende Quelle und allgemeine Unterhaltung ohne Tools;
 die Fixture-Feldnamen werden mit dem existierenden Reporter abgeglichen und
 genau dort migriert, nicht durch einen zweiten Reporter ersetzt.
 
-- [ ] RED/GREEN: `& .\.venv-verify\Scripts\python.exe -m pytest stack/tests/test_kahle_harness_acceptance_report.py -q -p no:cacheprovider`.
-- [ ] Strikte aktuelle Personenfälle Personio-only; Funktionskontaktfälle RAG-only; explizit gemischte Fälle beide. Mehrdeutige Bereichskontakte RAG erforderlich, Personio zusätzlich zulässig. `actual_tools` nur aus Ausführung, niemals Legacy-Plan.
-- [ ] Neue synthetische Fälle: bestätigte Kontaktzeile für jede Art, unmigrierter Fließtext, fehlender/mehrdeutiger Geltungsbereich, kollidierende Zeilen, unzugängliche/alte Version, falsche Funktion bei richtigem Wert, Hint-Treffer und fehlerhafte Antwort ohne Ersatz. Auffälligkeiten messen, nicht durch einen Korrekturlauf verdecken. Alte Supervisor-Folgefragen und kompakte Nomenphrasen erhalten.
-- [ ] Vorlage enthält außerhalb des kopierbaren Tabellenabschnitts die Pflegeanleitung; unter `## Funktionskontakte` nur exakte Header und Separator, keine fingierten Produktivkontakte. Anleitung erklärt Verantwortlichkeit, Veröffentlichung, neue Version, Konflikte, vorübergehendes Nichtnennen und Rollback-Grenze.
-- [ ] Saved Reports nur Fallkennung, technische Status-/Tool-/Quellenarten und boolesche Resultate; keine Rohfragen, Antworten, Belege oder Kontaktwerte. Commit: `test(knowledge): add typed contact acceptance and migration guide`.
+- [x] RED/GREEN: `& .\.venv-verify\Scripts\python.exe -m pytest stack/tests/test_kahle_harness_acceptance_report.py -q -p no:cacheprovider`.
+- [x] Strikte aktuelle Personenfälle Personio-only; Funktionskontaktfälle RAG-only; explizit gemischte Fälle beide. Mehrdeutige Bereichskontakte RAG erforderlich, Personio zusätzlich zulässig. `actual_tools` nur aus Ausführung, niemals Legacy-Plan.
+- [x] Neue synthetische Fälle: bestätigte Kontaktzeile für jede Art, unmigrierter Fließtext, fehlender/mehrdeutiger Geltungsbereich, kollidierende Zeilen, unzugängliche/alte Version, falsche Funktion bei richtigem Wert, Hint-Treffer und fehlerhafte Antwort ohne Ersatz. Auffälligkeiten messen, nicht durch einen Korrekturlauf verdecken. Alte Supervisor-Folgefragen und kompakte Nomenphrasen erhalten.
+- [x] Vorlage enthält außerhalb des kopierbaren Tabellenabschnitts die Pflegeanleitung; unter `## Funktionskontakte` nur exakte Header und Separator, keine fingierten Produktivkontakte. Anleitung erklärt Verantwortlichkeit, Veröffentlichung, neue Version, Konflikte, vorübergehendes Nichtnennen und Rollback-Grenze.
+- [x] Saved Reports nur Fallkennung, technische Status-/Tool-/Quellenarten und boolesche Resultate; keine Rohfragen, Antworten, Belege oder Kontaktwerte. Ein lokaler Commit wurde in diesem Arbeitsblock nicht erstellt.
 
 ### Task 7: Lokales Release-A-Abschluss-Gate
 

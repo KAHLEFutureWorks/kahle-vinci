@@ -63,7 +63,16 @@ def _safe_value(value: Any, allowed: Iterable[str], fallback: str) -> str:
     return normalized if normalized in tuple(allowed) else fallback
 
 
-def _actual_tools(metrics: Mapping[str, Any]) -> list[str]:
+def _actual_tools(metrics: Mapping[str, Any], *, outcome: bool = False) -> list[str]:
+    if outcome:
+        raw = metrics.get("actual_tools")
+        if not isinstance(raw, list):
+            return []
+        # Preserve unexpected execution as a safe code, never an arbitrary ID.
+        return list(dict.fromkeys(
+            item if isinstance(item, str) and item in ALLOWED_TOOLS else "unknown_tool"
+            for item in raw
+        ))
     explicit = _safe_list(metrics.get("actual_tools"), ALLOWED_TOOLS)
     if explicit or isinstance(metrics.get("actual_tools"), (list, tuple)):
         return explicit
@@ -73,7 +82,15 @@ def _actual_tools(metrics: Mapping[str, Any]) -> list[str]:
     return []
 
 
-def _source_kinds(metrics: Mapping[str, Any]) -> list[str]:
+def _source_kinds(metrics: Mapping[str, Any], *, outcome: bool = False) -> list[str]:
+    if outcome:
+        raw = metrics.get("validated_source_kinds")
+        if not isinstance(raw, list):
+            return []
+        return list(dict.fromkeys(
+            item if isinstance(item, str) and item in ALLOWED_SOURCE_KINDS else "unknown_source"
+            for item in raw
+        ))
     return _safe_list(metrics.get("source_kinds"), ALLOWED_SOURCE_KINDS)
 
 
@@ -109,12 +126,25 @@ def _run_failures(
     prefix = f"case:{case_id}:" if case_id else "case:unknown:"
     failures = []
     contract = contract or {}
-    expected_tools = _safe_list(contract.get("expected_tools"), ALLOWED_TOOLS)
-    actual_tools = _actual_tools(metrics)
+    outcome = "required_tools" in contract
+    expected_tools = _safe_list(contract.get("required_tools" if outcome else "expected_tools"), ALLOWED_TOOLS)
+    actual_tools = _actual_tools(metrics, outcome=outcome)
     if contract:
-        if actual_tools != expected_tools:
+        if outcome:
+            if not isinstance(metrics.get("actual_tools"), list):
+                failures.append("actual_tools_missing")
+            if not set(expected_tools).issubset(actual_tools):
+                failures.append("required_tool_missing")
+            if not set(actual_tools).issubset(contract["allowed_tools"]):
+                failures.append("tool_not_allowed")
+            if not isinstance(metrics.get("validated_source_kinds"), list):
+                failures.append("validated_sources_missing")
+            if expected_tools and metrics.get("validation_mode") != "shadow":
+                failures.append("observation_required")
+        elif actual_tools != expected_tools:
             failures.append("expected_tools_mismatch")
-        expected_intent = str(contract.get("expected_intent") or "")
+        # The result-driven harness deliberately has no pre-routing intent gate.
+        expected_intent = "" if outcome else str(contract.get("expected_intent") or "")
         if expected_intent and str(metrics.get("intent_kind") or "") != expected_intent:
             failures.append(
                 f"{prefix}unexpected_intent:{str(metrics.get('intent_kind') or 'missing')}"
@@ -133,16 +163,22 @@ def _run_failures(
         expected_sources = _safe_list(
             contract.get("expected_source_kinds"), ALLOWED_SOURCE_KINDS
         )
-        actual_sources = _source_kinds(metrics)
-        if expected_sources and actual_sources != expected_sources:
+        actual_sources = _source_kinds(metrics, outcome=outcome)
+        if (outcome and not set(expected_sources).issubset(actual_sources)) or (
+            not outcome and expected_sources and actual_sources != expected_sources
+        ):
             failures.append("expected_source_kinds_mismatch")
         allowed_sources = _safe_list(
             contract.get("allowed_source_kinds"), ALLOWED_SOURCE_KINDS
         )
-        if allowed_sources and any(
+        if (outcome or allowed_sources) and any(
             source not in allowed_sources for source in actual_sources
         ):
             failures.append("source_kind_not_allowed")
+        if outcome and not set(actual_sources).issubset(actual_tools):
+            failures.append("source_without_tool")
+        if outcome and metrics.get("evidence_status") == "supported" and not actual_sources:
+            failures.append("supported_answer_without_validated_source")
         metric_assertions = (
             metrics.get("assertions")
             if isinstance(metrics.get("assertions"), Mapping)
@@ -153,7 +189,7 @@ def _run_failures(
             if isinstance(run.get("assertions"), Mapping)
             else {}
         )
-        assertions = {**run_assertions, **metric_assertions}
+        assertions = metric_assertions if outcome else {**run_assertions, **metric_assertions}
         for assertion in _required_assertions(contract):
             if assertion not in assertions:
                 failures.append(
@@ -184,7 +220,7 @@ def _run_failures(
         )
     if not accepted_delivery:
         failures.append("answer_not_accepted")
-    tools_requiring_feedback = expected_tools if contract else actual_tools
+    tools_requiring_feedback = actual_tools if outcome else expected_tools if contract else actual_tools
     if "rag_chat" in tools_requiring_feedback and not metrics.get("feedback_link_present"):
         failures.append("feedback_link_missing")
     if metrics.get("evidence_status") == "supported" and not (
@@ -253,7 +289,8 @@ def case_contracts_from_matrix(payload: Mapping[str, Any]) -> dict[str, dict[str
 def _matrix_contract(
     matrix: Mapping[str, Any],
 ) -> tuple[tuple[str, ...], tuple[str, ...], dict[str, dict[str, Any]]]:
-    if matrix.get("schema_version") != "kahle.harness-acceptance-matrix.v1":
+    outcome = matrix.get("schema_version") == "kahle.harness-acceptance-matrix.v2"
+    if not outcome and matrix.get("schema_version") != "kahle.harness-acceptance-matrix.v1":
         raise MatrixContractError("matrix_schema_invalid")
     raw_models = matrix.get("expected_models")
     raw_profiles = matrix.get("profiles")
@@ -278,10 +315,16 @@ def _matrix_contract(
     for case_id, contract in contracts.items():
         if not CASE_ID.fullmatch(case_id):
             raise MatrixContractError("matrix_case_id_invalid")
-        expected_tools = contract.get("expected_tools")
-        if not isinstance(expected_tools, list) or _safe_list(expected_tools, ALLOWED_TOOLS) != expected_tools:
-            raise MatrixContractError("matrix_expected_tools_invalid")
-        if contract.get("expected_intent") not in ALLOWED_INTENTS:
+        if outcome and contract.get("evaluation_group", "model_acceptance") not in ("model_acceptance", "fault_injection"):
+            raise MatrixContractError("matrix_evaluation_group_invalid")
+        tool_keys = ("required_tools", "allowed_tools") if outcome else ("expected_tools",)
+        for key in tool_keys:
+            values = contract.get(key)
+            if not isinstance(values, list) or _safe_list(values, ALLOWED_TOOLS) != values:
+                raise MatrixContractError("matrix_tools_invalid")
+        if outcome and ("expected_tools" in contract or not set(contract["required_tools"]).issubset(contract["allowed_tools"])):
+            raise MatrixContractError("matrix_tools_invalid")
+        if not outcome and contract.get("expected_intent") not in ALLOWED_INTENTS:
             raise MatrixContractError("matrix_intent_invalid")
         statuses = contract.get("allowed_evidence_status")
         if (
@@ -292,11 +335,16 @@ def _matrix_contract(
             raise MatrixContractError("matrix_evidence_status_invalid")
         for source_key in ("expected_source_kinds", "allowed_source_kinds"):
             source_kinds = contract.get(source_key)
-            if source_kinds is not None and (
+            if (outcome or source_kinds is not None) and (
                 not isinstance(source_kinds, list)
                 or _safe_list(source_kinds, ALLOWED_SOURCE_KINDS) != source_kinds
             ):
                 raise MatrixContractError("matrix_source_kinds_invalid")
+        if outcome and (
+            not set(contract["expected_source_kinds"]).issubset(contract["allowed_source_kinds"])
+            or not set(contract["allowed_source_kinds"]).issubset(contract["allowed_tools"])
+        ):
+            raise MatrixContractError("matrix_source_kinds_invalid")
         case_profiles = contract.get("profiles", profiles)
         if (
             not isinstance(case_profiles, (list, tuple))
@@ -351,20 +399,22 @@ def _safe_result(
         or ""
     )
     shadow = metrics.get("validation_mode") == "shadow"
+    outcome = "required_tools" in contract
     if shadow:
         validation_status = metrics.get("final_validation_status")
     return {
         "case_id": case_id if case_id in known_case_ids else "unknown_case",
         "model_id": model_id if model_id in known_model_ids else "unknown_model",
-        "expected_tools": _safe_list(contract.get("expected_tools"), ALLOWED_TOOLS),
-        "actual_tools": _actual_tools(metrics),
+        **({"required_tools": contract["required_tools"], "allowed_tools": contract["allowed_tools"]}
+           if outcome else {"expected_tools": _safe_list(contract.get("expected_tools"), ALLOWED_TOOLS)}),
+        "actual_tools": _actual_tools(metrics, outcome=outcome),
         "intent": _safe_value(
             metrics.get("intent_kind"), ALLOWED_INTENTS, "unknown_intent"
         ),
         "evidence_status": _safe_value(
             metrics.get("evidence_status"), ALLOWED_EVIDENCE_STATUS, "unknown"
         ),
-        "source_kinds": _source_kinds(metrics),
+        ("validated_source_kinds" if outcome else "source_kinds"): _source_kinds(metrics, outcome=outcome),
         "validation_status": _safe_value(
             validation_status, ALLOWED_VALIDATION_STATUS, "unknown"
         ),
@@ -418,6 +468,7 @@ def build_acceptance_report(
             case_id
             for case_id, contract in contracts.items()
             if profile in tuple(contract.get("profiles") or profiles)
+            and contract.get("evaluation_group") != "fault_injection"
         )
         for model_name in models:
             matching = by_model_profile.get((model_name, str(profile)), [])
@@ -505,7 +556,7 @@ def build_acceptance_report(
     for row in observations.values():
         row["flagged_rate"] = round(row["flagged"] / row["checked"], 4) if row["checked"] else None
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": "kahle.harness-acceptance-report.v2" if matrix and matrix.get("schema_version") == "kahle.harness-acceptance-matrix.v2" else SCHEMA_VERSION,
         "summary": counts,
         "coverage": coverage,
         "observations": list(observations.values()),

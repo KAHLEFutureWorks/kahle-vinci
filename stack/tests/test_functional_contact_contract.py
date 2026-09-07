@@ -26,6 +26,18 @@ def document(*rows, heading="## Funktionskontakte"):
     return "\n".join((heading, HEADER, SEPARATOR, *rows))
 
 
+def test_editorial_template_is_empty_and_accepts_a_completed_contact_row():
+    template = SOURCE.parents[2] / "docs/templates/funktionskontakte.md"
+    text = template.read_text(encoding="utf-8")
+    contract = load_contract()
+    assert contract.parse_functional_contacts(text) == ()
+    completed = text.rstrip() + "\n" + ROW + "\n"
+    records = contract.parse_functional_contacts(completed)
+    assert len(records) == 1
+    assert records[0]["value"] == "marketing@example.invalid"
+    assert records[0]["scope"] == "gruppenweit"
+
+
 def expected_record():
     return {
         "schema_version": "kahle.functional-contact.v1",

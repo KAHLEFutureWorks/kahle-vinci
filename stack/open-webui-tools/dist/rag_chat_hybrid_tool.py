@@ -388,7 +388,7 @@ def required_evidence_capabilities(query: str) -> tuple[str, ...]:
     procedural = bool(re.search(
         r"\bwie\s+(?:kann|muss|soll|darf|gehe|verfahre|funktioniert|"
         r"bedien|nutz|verwend|richt|beantrag|aender|pfleg|meld|fuehr|"
-        r"oeffn|waehl|trag|gib|erfass|speicher|bestaetig|erstell|plan|buch|sperr)\w*\b",
+        r"oeffn|waehl|trag|gib|erfass|hinterleg|speicher|bestaetig|erstell|plan|buch|sperr)\w*\b",
         folded,
     ))
     return ("procedure",) if procedural else ()
@@ -421,6 +421,8 @@ def pre_rerank_metadata_filter(
         and float((point.get("payload") or {}).get("classification_confidence") or 0) >= 0.8
     ]
     if not trusted:
+        if "approved_functional_responsibility" in required:
+            return []
         return candidates
     selected = [
         point for point in trusted
@@ -607,6 +609,84 @@ def _metadata_only(point: dict[str, Any]) -> bool:
     inner = content[3:-3]
     lines = [line.strip() for line in inner.splitlines() if line.strip()]
     return bool(lines) and all(":" in line or line.startswith(("-", "#")) for line in lines)
+def procedure_scope_companions(
+    selected_points: list[dict[str, Any]], complete_points: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return missing scope and process passages from selected process documents."""
+    selected_documents = {
+        str((point.get("payload") or {}).get("document_id") or "")
+        for point in selected_points
+    }
+    selected_identities = {
+        str((point.get("payload") or {}).get("parent_id") or point.get("id") or "")
+        for point in selected_points
+    }
+    scope_markers = re.compile(
+        r"\b(?:geltungsbereich|gilt\s+(?:nur|fur)|andere\w*\s+standort|"
+        r"ausnahme|wichtig)\w*\b",
+    )
+    process_summary_markers = re.compile(
+        r"\b(?:kurzablauf|gesamtprozess|vorgehensweise|durchfuhrung|"
+        r"arbeitsschritt|prozessschritt|schritt(?:e|en)?)\w*\b",
+    )
+
+    def folded_point_text(point: dict[str, Any]) -> str:
+        payload = point.get("payload") or {}
+        text = "\n".join((
+            " > ".join(str(item) for item in payload.get("heading_path") or ()),
+            str(payload.get("parent_content") or payload.get("content") or ""),
+        ))
+        return (
+            unicodedata.normalize("NFKD", text)
+            .encode("ascii", "ignore")
+            .decode()
+            .casefold()
+        )
+
+    selected_kinds: dict[str, set[str]] = {document_id: set() for document_id in selected_documents}
+    for point in selected_points:
+        payload = point.get("payload") or {}
+        document_id = str(payload.get("document_id") or "")
+        folded_text = folded_point_text(point)
+        if scope_markers.search(folded_text):
+            selected_kinds.setdefault(document_id, set()).add("scope")
+        if process_summary_markers.search(folded_text) and not scope_markers.search(folded_text):
+            selected_kinds.setdefault(document_id, set()).add("process")
+
+    candidates_by_document: dict[str, dict[str, list[tuple[int, dict[str, Any]]]]] = {}
+    for point in complete_points:
+        payload = point.get("payload") or {}
+        document_id = str(payload.get("document_id") or "")
+        identity = str(payload.get("parent_id") or point.get("id") or "")
+        if document_id not in selected_documents or identity in selected_identities:
+            continue
+        folded_text = folded_point_text(point)
+        buckets = candidates_by_document.setdefault(document_id, {"scope": [], "process": []})
+        if scope_markers.search(folded_text):
+            buckets["scope"].append((0, point))
+            continue
+        process_match = process_summary_markers.search(folded_text)
+        if process_match:
+            heading = " > ".join(str(item) for item in payload.get("heading_path") or ())
+            folded_heading = (
+                unicodedata.normalize("NFKD", heading)
+                .encode("ascii", "ignore")
+                .decode()
+                .casefold()
+            )
+            rank = 2 if "kurzablauf" in folded_heading or "gesamtprozess" in folded_heading else 1
+            buckets["process"].append((rank, point))
+
+    companions: list[dict[str, Any]] = []
+    for document_id in selected_documents:
+        buckets = candidates_by_document.get(document_id, {})
+        kinds = selected_kinds.get(document_id, set())
+        for kind in ("scope", "process"):
+            options = buckets.get(kind) or []
+            if kind in kinds or not options:
+                continue
+            companions.append(max(options, key=lambda item: item[0])[1])
+    return companions
 def document_overview_intent(query: str) -> bool:
     folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
     if any(term in folded for term in (
@@ -971,6 +1051,24 @@ class QdrantHybridRetriever:
             ranked_selection = diversify_reranked(
                 eligible_reranked, candidates, result_limit=result_limit,
             )
+        if "procedure" in required_evidence_capabilities(query) and ranked_selection:
+            selected_points = [candidates[index] for index, _score in ranked_selection]
+            process_document_ids = {
+                str((point.get("payload") or {}).get("document_id") or "")
+                for point in selected_points
+            }
+            process_document_ids.discard("")
+            if process_document_ids:
+                complete_process_points = self._validate_points(
+                    self._document_points(process_document_ids, acl), scope, today
+                )
+                for companion in procedure_scope_companions(
+                    selected_points, complete_process_points
+                ):
+                    if _metadata_only(companion):
+                        continue
+                    candidates.append(companion)
+                    ranked_selection.append((len(candidates) - 1, 1.0))
         selected: list[RetrievedChunk] = []
         for index, score in ranked_selection:
             point = candidates[index]
@@ -1294,6 +1392,33 @@ def _filter_evidence_chunks(query, chunks):
         )))
 
     selected = list(chunks or [])
+    responsibility = re.search(
+        r"\b(?:an\s+wen|ansprechpartner|zustandig|zustandigkeit|"
+        r"wende\s+(?:ich|mich)|kontaktier)\w*\b",
+        folded_query,
+    )
+    if responsibility:
+        generic_terms = {
+            "ansprechpartner", "bezahlt", "frage", "fragen", "hat", "intern",
+            "jeglichen", "kontakt", "kunde", "mich", "problem", "probleme",
+            "wende", "wen", "wer", "zustandig", "zustandigkeit",
+        }
+        domain_terms = {
+            term for term in re.findall(r"[a-z0-9]{4,}", folded_query)
+            if term not in generic_terms
+        }
+        if domain_terms:
+            referral = re.compile(
+                r"(?:@[a-z0-9.-]+|\b(?:wende|kontaktier|ansprechpartner|"
+                r"zustandig|zustandigkeit)\w*\b)"
+            )
+            selected = [
+                chunk for chunk in selected
+                if not referral.search(passage(chunk))
+                or domain_terms.intersection(
+                    re.findall(r"[a-z0-9]{4,}", passage(chunk))
+                )
+            ]
     if (
         re.search(r"\barbeitsanweisung\w*\b", folded_query)
         and re.search(r"\b(?:pruf|freigab|veroffentlich|ablauf|prozess)\w*\b", folded_query)
@@ -1414,7 +1539,7 @@ def _procedural_evidence_intent(query):
             r"\bwie\s+(?:"
             r"kann|muss|soll|darf|gehe|verfahre|funktioniert|laeuft|"
             r"bedien|nutz|verwend|richt|beantrag|aender|pfleg|meld|"
-            r"fuehr|oeffn|waehl|trag|gib|erfass|speicher|bestaetig|"
+            r"fuehr|oeffn|waehl|trag|gib|erfass|hinterleg|speicher|bestaetig|"
             r"erstell|plan|buch|sperr"
             r")\w*\b",
             value,

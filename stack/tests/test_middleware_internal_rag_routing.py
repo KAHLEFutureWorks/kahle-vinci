@@ -408,6 +408,28 @@ def test_consecutive_named_supervisor_question_does_not_reuse_the_previous_subje
     assert candidate_query(messages, messages[-1]["content"]) == ""
 
 
+@pytest.mark.parametrize(
+    "follow_up",
+    (
+        "Wer ist die Führungskraft im Teiledienst Hannover?",
+        "Wer ist die Führungskraft im Marketing?",
+        "Wer ist die Führungskraft der Rechnungslegung?",
+        "Wer ist die Führungskraft im Service in Nienburg?",
+    ),
+)
+def test_consecutive_explicit_area_supervisor_question_does_not_reuse_previous_area(
+    follow_up,
+):
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
+    messages = [
+        {"role": "user", "content": "Wer ist die Führungskraft der Disposition?"},
+        {"role": "assistant", "content": "Personio-Treffer."},
+        {"role": "user", "content": follow_up},
+    ]
+
+    assert candidate_query(messages, follow_up) == ""
+
+
 def test_polite_pronoun_does_not_override_an_explicit_supervisor_subject():
     candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     follow_up = "Können Sie mir die Führungskraft von Berta Beispiel nennen?"
@@ -491,12 +513,12 @@ def test_knowledge_routing_mode_defaults_to_legacy_and_accepts_only_two_values(
     assert routing_mode() == "legacy"
 
 
-def test_model_led_never_executes_the_side_effect_free_legacy_plan():
+def test_model_led_executes_the_model_independent_harness_plan():
     select_plan = load_function_from_middleware("_routing_plan_for_execution")
     legacy_plan = object()
 
     assert select_plan("legacy", legacy_plan) is legacy_plan
-    assert select_plan("model_led", legacy_plan) is None
+    assert select_plan("model_led", legacy_plan) is legacy_plan
 
 
 def test_comparison_telemetry_contains_only_technical_tool_names():
@@ -907,6 +929,41 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
     }
 
 
+def test_personio_client_accepts_approved_supervisor_consensus_metadata():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_supervisor_consensus")
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{
+            "display_name": "Erika Beispiel",
+            "source_id": "P1",
+            "supervisor_scope": "organizational_unit",
+            "candidate_count": 10,
+            "support_count": 10,
+            "support_ratio": 1.0,
+            "single_candidate_basis": False,
+        }],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": "supervisor_lookup",
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist die Führungskraft der Disposition?", "supervisor_lookup", "user-1", "admin")
+    )
+
+    assert result["status"] == "ok"
+    assert result["claims"][0]["candidate_count"] == 10
+    assert result["claims"][0]["support_ratio"] == 1.0
+    assert "supervisor_personio_id" not in repr(result)
+
+
 def test_personio_client_auto_request_uses_the_validated_resolved_intent():
     module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto")
     captured = {}
@@ -1267,6 +1324,7 @@ def test_planned_directory_retrieval_does_not_depend_on_native_function_calling(
 
 import asyncio
 import ast
+import symtable
 import copy
 import importlib.util
 import json
@@ -1418,9 +1476,12 @@ def load_native_rag_fallback():
 
 def load_function_from_middleware(name: str):
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    required_names = {name}
+    if name == "_prerouted_rag_tool_output":
+        required_names.add("_prerouted_internal_tool_output")
     nodes = [
         node for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in required_names
     ]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
@@ -1605,6 +1666,25 @@ def test_prerouted_rag_tool_output_keeps_native_function_call_visible():
     assert completed[0]["status"] == "completed"
     assert completed[1]["type"] == "function_call_output"
     assert completed[1]["call_id"] == "call-1"
+
+
+def test_prerouted_personio_tool_output_keeps_native_function_call_visible():
+    helper = load_function_from_middleware("_prerouted_internal_tool_output")
+
+    started = helper(
+        "call-2", "personio_directory", "Wer ist die Führungskraft im Marketing?",
+        completed=False,
+    )
+    completed = helper(
+        "call-2", "personio_directory", "Wer ist die Führungskraft im Marketing?",
+        completed=True,
+    )
+
+    assert started[0]["name"] == "personio_directory"
+    assert started[0]["status"] == "in_progress"
+    assert completed[0]["status"] == "completed"
+    assert completed[1]["type"] == "function_call_output"
+    assert completed[1]["call_id"] == "call-2"
 
 
 def test_prerouted_rag_status_is_hidden_for_personio_only_plan():
@@ -2533,6 +2613,19 @@ def test_model_led_contract_refresh_never_owns_direct_final_content():
     assert assignments == []
 
 
+def test_model_led_preroute_supplies_evidence_but_never_owns_final_content():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    active_block = source[
+        source.index("if harness_mode == 'active':"):
+        source.index("if harness_mode != 'active' and pre_routed_internal_rag", source.index("if harness_mode == 'active':"))
+    ]
+
+    assert "if routing_mode != 'model_led':" in active_block
+    assert active_block.index("if routing_mode != 'model_led':") < active_block.index(
+        "_knowledge_harness_direct_answer("
+    )
+
+
 def test_unrelated_file_form_and_mail_direct_final_paths_remain_present():
     source = MIDDLEWARE.read_text(encoding="utf-8")
 
@@ -2563,6 +2656,25 @@ def test_answer_contract_refresh_is_wired_before_each_next_model_generation():
     assert native_loop.index("_refresh_model_led_answer_contract(") < native_loop.index(
         "res = await generate_chat_completion("
     )
+
+
+def test_streaming_response_handler_reuses_outer_form_data_context():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    table = symtable.symtable(source, str(MIDDLEWARE), "exec")
+    streaming_handler = next(
+        child
+        for child in table.get_children()
+        if child.get_name() == "streaming_chat_response_handler"
+    )
+    response_handler = next(
+        child
+        for child in streaming_handler.get_children()
+        if child.get_name() == "response_handler"
+    )
+
+    form_data = response_handler.lookup("form_data")
+    assert form_data.is_nonlocal()
+    assert not form_data.is_local()
 
 
 if __name__ == "__main__":

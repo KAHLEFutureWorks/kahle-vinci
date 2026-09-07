@@ -40,7 +40,7 @@ def test_base_prompts_publish_one_explicit_internal_source_matrix():
         "Personio und RAG nur bei echtem Bedarf an beiden Evidenzarten",
         "Kein Web-Fallback bei fehlender Personen- oder Führungskraft-Evidenz",
         "Kompakte Nominalphrasen sind vollständige Suchanfragen",
-        "Antworte ausschließlich aus der zurückgegebenen Evidenz und lege Lücken offen",
+        "Antworte ausschließlich aus dem aktuellen EvidenceBundle und lege Lücken offen",
     )
 
     for prompt_path in PROMPTS:

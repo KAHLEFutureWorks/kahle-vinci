@@ -35,6 +35,20 @@ _DIRECTORY_CLAIM_FIELDS = frozenset(
         "source_id",
         "relationship_basis",
         "relationship_disclaimer",
+        "supervisor_scope",
+        "candidate_count",
+        "support_count",
+        "support_ratio",
+        "single_candidate_basis",
+    }
+)
+_SUPERVISOR_AGGREGATE_FIELDS = frozenset(
+    {
+        "supervisor_scope",
+        "candidate_count",
+        "support_count",
+        "support_ratio",
+        "single_candidate_basis",
     }
 )
 _ONBOARDING_CLAIM_FIELDS = frozenset(
@@ -181,11 +195,32 @@ class PersonioDirectoryClient:
         )
         for claim in claims:
             source_id = claim.get("source_id")
+            aggregate_fields = set(claim).intersection(_SUPERVISOR_AGGREGATE_FIELDS)
+            valid_aggregates = (
+                not aggregate_fields
+                or (
+                    resolved_intent == "supervisor_lookup"
+                    and aggregate_fields == _SUPERVISOR_AGGREGATE_FIELDS
+                    and claim.get("supervisor_scope") == "organizational_unit"
+                    and isinstance(claim.get("candidate_count"), int)
+                    and not isinstance(claim.get("candidate_count"), bool)
+                    and isinstance(claim.get("support_count"), int)
+                    and not isinstance(claim.get("support_count"), bool)
+                    and isinstance(claim.get("support_ratio"), (int, float))
+                    and not isinstance(claim.get("support_ratio"), bool)
+                    and isinstance(claim.get("single_candidate_basis"), bool)
+                    and 0 < claim["candidate_count"]
+                    and 0 <= claim["support_count"] <= claim["candidate_count"]
+                    and 0.0 <= float(claim["support_ratio"]) <= 1.0
+                )
+            )
+            string_fields = set(claim) - _SUPERVISOR_AGGREGATE_FIELDS
             if (
                 not isinstance(source_id, str)
                 or source_id not in source_ids
                 or not set(claim).issubset(allowed_claim_fields)
-                or not all(isinstance(value, str) for value in claim.values())
+                or not all(isinstance(claim[field], str) for field in string_fields)
+                or not valid_aggregates
             ):
                 return _unavailable()
             controlled_claims.append(dict(claim))

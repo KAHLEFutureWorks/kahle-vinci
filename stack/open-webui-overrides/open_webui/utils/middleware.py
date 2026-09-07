@@ -96,6 +96,7 @@ from open_webui.utils.kahle_knowledge_harness import (
     classify_personio_directory_intent,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
+    resolve_request,
     resolve_query_aliases,
     validate_answer as validate_knowledge_harness_answer,
 )
@@ -210,7 +211,7 @@ def _knowledge_routing_mode() -> str:
 
 
 def _routing_plan_for_execution(routing_mode: str, legacy_plan: Any) -> Any:
-    return legacy_plan if routing_mode == 'legacy' else None
+    return legacy_plan if routing_mode in {'legacy', 'model_led'} else None
 
 
 def _model_led_routing_comparison(
@@ -1282,15 +1283,15 @@ def _expanded_internal_rag_query(messages: list[dict[str, Any]], user_text: str)
     return resolve_query_aliases(current)
 
 
-def _prerouted_rag_tool_output(
-    call_id: str, query: str, *, completed: bool,
+def _prerouted_internal_tool_output(
+    call_id: str, tool_name: str, query: str, *, completed: bool,
 ) -> list[dict[str, Any]]:
     """Represent deterministic pre-routing as a native visible tool call."""
     output = [{
         'type': 'function_call',
         'id': call_id,
         'call_id': call_id,
-        'name': 'rag_chat',
+        'name': tool_name,
         'arguments': json.dumps({'query': query}, ensure_ascii=False),
         'status': 'completed' if completed else 'in_progress',
     }]
@@ -1299,10 +1300,18 @@ def _prerouted_rag_tool_output(
             'type': 'function_call_output',
             'id': output_id('fco'),
             'call_id': call_id,
-            'output': [{'type': 'input_text', 'text': 'Wissenssuche abgeschlossen.'}],
+            'output': [{'type': 'input_text', 'text': 'Interne Suche abgeschlossen.'}],
             'status': 'completed',
         })
     return output
+
+
+def _prerouted_rag_tool_output(
+    call_id: str, query: str, *, completed: bool,
+) -> list[dict[str, Any]]:
+    return _prerouted_internal_tool_output(
+        call_id, 'rag_chat', query, completed=completed,
+    )
 
 
 def _should_emit_prerouted_rag_status(retrieval_plan: Any) -> bool:
@@ -1310,6 +1319,16 @@ def _should_emit_prerouted_rag_status(retrieval_plan: Any) -> bool:
     return 'rag_chat' in tuple(
         getattr(retrieval_plan, 'required_tools', ()) or ()
     )
+
+
+def _prerouted_internal_outputs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for key in (
+        'kahle_prerouted_personio_tool_output',
+        'kahle_prerouted_rag_tool_output',
+    ):
+        output.extend(metadata.get(key) or [])
+    return output
 
 
 def _internal_rag_source_outcome(sources: list[dict[str, Any]]) -> str:
@@ -4941,9 +4960,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         original_user_tool_request = get_last_user_message(
             form_data.get('messages', []) or []
         )
-        user_tool_request = _expanded_internal_rag_query(
-            form_data.get('messages', []), original_user_tool_request or ''
+        resolved_internal_request = resolve_request(
+            original_user_tool_request or '', form_data.get('messages', []) or []
         )
+        user_tool_request = resolved_internal_request.retrieval_query
         permission_scope = _knowledge_harness_permission_scope(user)
         legacy_rag_request = (
             _looks_like_internal_rag_request(user_tool_request or '')
@@ -4995,6 +5015,29 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     emit_prerouted_rag_status = _should_emit_prerouted_rag_status(
                         retrieval_plan
                     )
+                    emit_prerouted_personio_status = (
+                        'personio_directory'
+                        in tuple(getattr(retrieval_plan, 'required_tools', ()) or ())
+                    )
+                    personio_call_id = output_id('fc')
+                    if emit_prerouted_personio_status:
+                        metadata['kahle_prerouted_personio_tool_output'] = (
+                            _prerouted_internal_tool_output(
+                                personio_call_id,
+                                'personio_directory',
+                                user_tool_request or '',
+                                completed=False,
+                            )
+                        )
+                        if event_emitter:
+                            await event_emitter({
+                                'type': 'chat:completion',
+                                'data': {
+                                    'output': metadata[
+                                        'kahle_prerouted_personio_tool_output'
+                                    ]
+                                },
+                            })
                     if emit_prerouted_rag_status:
                         metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
                             pre_route_call_id, user_tool_request or '', completed=False,
@@ -5093,6 +5136,24 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         rag_retriever=retrieve_pre_route_rag,
                         metadata=metadata,
                     )
+                    if emit_prerouted_personio_status:
+                        metadata['kahle_prerouted_personio_tool_output'] = (
+                            _prerouted_internal_tool_output(
+                                personio_call_id,
+                                'personio_directory',
+                                user_tool_request or '',
+                                completed=True,
+                            )
+                        )
+                        if event_emitter:
+                            await event_emitter({
+                                'type': 'chat:completion',
+                                'data': {
+                                    'output': metadata[
+                                        'kahle_prerouted_personio_tool_output'
+                                    ]
+                                },
+                            })
                     rag_execution = retrieval['rag_result']
                     if isinstance(rag_execution, dict):
                         if rag_execution.get('form_data') is not None:
@@ -5161,11 +5222,12 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 form_data.get('messages', []) or [],
                                 append=True,
                             )
-                            direct_answer = _knowledge_harness_direct_answer(
-                                harness_decision, harness_payload
-                            )
-                            if direct_answer:
-                                metadata['kahle_direct_final_content'] = direct_answer
+                            if routing_mode != 'model_led':
+                                direct_answer = _knowledge_harness_direct_answer(
+                                    harness_decision, harness_payload
+                                )
+                                if direct_answer:
+                                    metadata['kahle_direct_final_content'] = direct_answer
                             metadata['kahle_answer_validation_fallback'] = (
                                 harness_decision.validation_fallback()
                             )
@@ -6073,9 +6135,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 'content': [{'type': 'output_text', 'text': content}],
                             }
                         )
-                    prerouted_tool_output = list(
-                        metadata.get('kahle_prerouted_rag_tool_output') or []
-                    )
+                    prerouted_tool_output = _prerouted_internal_outputs(metadata)
                     if prerouted_tool_output:
                         response_output = prerouted_tool_output + response_output
 
@@ -6194,6 +6254,8 @@ async def streaming_chat_response_handler(response, ctx):
 
         # Handle as a background task
         async def response_handler(response, events):
+            nonlocal form_data
+
             filter_context = FilterContext()
 
             def tag_output_handler(content_type, tags, output):
@@ -6438,8 +6500,8 @@ async def streaming_chat_response_handler(response, ctx):
             existing_output = message.get('output') if message else None
             if existing_output:
                 output = existing_output
-            elif metadata.get('kahle_prerouted_rag_tool_output'):
-                output = copy.deepcopy(metadata['kahle_prerouted_rag_tool_output'])
+            elif _prerouted_internal_outputs(metadata):
+                output = copy.deepcopy(_prerouted_internal_outputs(metadata))
             else:
                 # Only create an initial message item if there is content to initialize with
                 if content:

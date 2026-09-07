@@ -175,6 +175,33 @@ def _filter_evidence_chunks(query, chunks):
         )))
 
     selected = list(chunks or [])
+    responsibility = re.search(
+        r"\b(?:an\s+wen|ansprechpartner|zustandig|zustandigkeit|"
+        r"wende\s+(?:ich|mich)|kontaktier)\w*\b",
+        folded_query,
+    )
+    if responsibility:
+        generic_terms = {
+            "ansprechpartner", "bezahlt", "frage", "fragen", "hat", "intern",
+            "jeglichen", "kontakt", "kunde", "mich", "problem", "probleme",
+            "wende", "wen", "wer", "zustandig", "zustandigkeit",
+        }
+        domain_terms = {
+            term for term in re.findall(r"[a-z0-9]{4,}", folded_query)
+            if term not in generic_terms
+        }
+        if domain_terms:
+            referral = re.compile(
+                r"(?:@[a-z0-9.-]+|\b(?:wende|kontaktier|ansprechpartner|"
+                r"zustandig|zustandigkeit)\w*\b)"
+            )
+            selected = [
+                chunk for chunk in selected
+                if not referral.search(passage(chunk))
+                or domain_terms.intersection(
+                    re.findall(r"[a-z0-9]{4,}", passage(chunk))
+                )
+            ]
     if (
         re.search(r"\barbeitsanweisung\w*\b", folded_query)
         and re.search(r"\b(?:pruf|freigab|veroffentlich|ablauf|prozess)\w*\b", folded_query)
@@ -301,7 +328,7 @@ def _procedural_evidence_intent(query):
             r"\bwie\s+(?:"
             r"kann|muss|soll|darf|gehe|verfahre|funktioniert|laeuft|"
             r"bedien|nutz|verwend|richt|beantrag|aender|pfleg|meld|"
-            r"fuehr|oeffn|waehl|trag|gib|erfass|speicher|bestaetig|"
+            r"fuehr|oeffn|waehl|trag|gib|erfass|hinterleg|speicher|bestaetig|"
             r"erstell|plan|buch|sperr"
             r")\w*\b",
             value,

@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "scripts" / "StackRuntime.psm1"
+START_SCRIPT = ROOT / "scripts" / "start-stack.ps1"
 
 
 def powershell() -> str:
@@ -48,6 +49,23 @@ def test_foreign_fixed_name_container_is_reported_before_compose_up():
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout) == "kb-admin-dashboard"
+
+
+def test_empty_container_inventory_is_valid_before_first_compose_start():
+    result = run_powershell(
+        "$containers = @(); "
+        "$foreign = @(Find-ForeignContainerNames -Containers $containers "
+        "-ComposeProject 'stack'); 'count=' + $foreign.Count"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "count=0"
+
+
+def test_start_script_skips_foreign_container_binding_for_empty_inventory():
+    source = START_SCRIPT.read_text(encoding="utf-8")
+
+    assert "if ($existingContainers.Count -gt 0)" in source
 
 
 def test_local_compose_project_name_ignores_ambient_project_name():

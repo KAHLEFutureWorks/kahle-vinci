@@ -139,7 +139,13 @@ def test_supervisor_typo_uses_fail_closed_supervisor_intent():
 
 
 def test_supervisor_follow_up_returns_only_the_explicitly_evidenced_prior_candidate():
-    leader = person("1", name="Erika Beispiel", position="Teiledienstleitung", department="Teiledienst")
+    leader = person(
+        "1",
+        name="Erika Beispiel",
+        position="Teiledienstleitung",
+        department="Management",
+        team="Management",
+    )
     report = person(
         "2",
         name="Anna Adler",
@@ -290,7 +296,7 @@ def test_department_supervisor_resolves_only_explicit_personio_relationship():
         "1",
         name="Erika Beispiel",
         position="Dispositionsleitung",
-        department="Disposition",
+        department="Management",
     )
     report = person(
         "2",
@@ -396,6 +402,159 @@ def test_department_supervisor_with_internal_and_external_hierarchy_stays_fail_c
 
     assert evidence.status == "not_found"
     assert evidence.claims == ()
+
+
+def test_department_supervisor_excludes_the_dominant_supervisor_from_its_own_consensus():
+    higher_leader = person(
+        "9",
+        name="Clara Beispiel",
+        position="Bereichsleitung",
+        department="Management",
+    )
+    department_leader = person(
+        "1",
+        name="Erika Beispiel",
+        position="Marketingleitung",
+        department="Marketing",
+        supervisor_personio_id="9",
+    )
+    reports = [
+        person(
+            str(number),
+            name=f"Person {number}",
+            position="Marketingassistenz",
+            department="Marketing",
+            supervisor_personio_id="1",
+        )
+        for number in range(2, 6)
+    ]
+
+    evidence = search([higher_leader, department_leader, *reports]).search(
+        query("Wer ist die Führungskraft im Marketing?")
+    )
+
+    assert evidence.status == "ok"
+    assert evidence.claims[0]["display_name"] == "Erika Beispiel"
+    assert evidence.claims[0]["candidate_count"] == 4
+    assert evidence.claims[0]["support_count"] == 4
+    assert evidence.claims[0]["support_ratio"] == 1.0
+
+
+def test_department_supervisor_accepts_exactly_ninety_percent_consensus():
+    leader = person("1", name="Erika Beispiel", department="Management")
+    reports = [
+        person(
+            str(number),
+            name=f"Person {number}",
+            department="Disposition",
+            supervisor_personio_id="1" if number < 11 else "",
+        )
+        for number in range(2, 12)
+    ]
+
+    evidence = search([leader, *reports]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert evidence.status == "ok"
+    assert len(evidence.claims) == 1
+    assert evidence.claims[0]["display_name"] == "Erika Beispiel"
+    assert evidence.claims[0]["supervisor_scope"] == "organizational_unit"
+    assert evidence.claims[0]["candidate_count"] == 10
+    assert evidence.claims[0]["support_count"] == 9
+    assert evidence.claims[0]["support_ratio"] == 0.9
+    assert evidence.claims[0]["single_candidate_basis"] is False
+
+
+def test_department_supervisor_rejects_eight_of_nine_consensus():
+    leaders = [
+        person("1", name="Erika Beispiel", department="Management"),
+        person("20", name="Clara Beispiel", department="Management"),
+    ]
+    reports = [
+        person(
+            str(number),
+            name=f"Person {number}",
+            department="Disposition",
+            supervisor_personio_id="1" if number < 10 else "20",
+        )
+        for number in range(2, 11)
+    ]
+
+    evidence = search([*leaders, *reports]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert evidence.status == "not_found"
+    assert evidence.claims == ()
+
+
+def test_unresolvable_supervisor_counts_against_department_consensus():
+    leader = person("1", name="Erika Beispiel", department="Management")
+    reports = [
+        person(
+            str(number),
+            name=f"Person {number}",
+            department="Disposition",
+            supervisor_personio_id="1" if number < 11 else "999",
+        )
+        for number in range(2, 12)
+    ]
+
+    evidence = search([leader, *reports]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert evidence.status == "ok"
+    assert evidence.claims[0]["candidate_count"] == 10
+    assert evidence.claims[0]["support_count"] == 9
+    assert evidence.claims[0]["support_ratio"] == 0.9
+    assert "999" not in repr(evidence.claims)
+
+
+def test_department_supervisor_ignores_non_active_candidates():
+    leader = person("1", name="Erika Beispiel", department="Management")
+    active_report = person(
+        "2",
+        name="Anna Adler",
+        department="Disposition",
+        supervisor_personio_id="1",
+    )
+    absent_report = person(
+        "3",
+        name="Berta Beispiel",
+        department="Disposition",
+        status="LEAVE",
+        supervisor_personio_id="",
+    )
+
+    evidence = search([leader, active_report, absent_report]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert evidence.status == "ok"
+    assert evidence.claims[0]["candidate_count"] == 1
+    assert evidence.claims[0]["support_count"] == 1
+
+
+def test_single_person_department_marks_its_evidence_basis():
+    leader = person("1", name="Erika Beispiel", department="Management")
+    report = person(
+        "2",
+        name="Anna Adler",
+        department="Disposition",
+        supervisor_personio_id="1",
+    )
+
+    evidence = search([leader, report]).search(
+        query("Wer ist die Führungskraft der Disposition?")
+    )
+
+    assert evidence.status == "ok"
+    assert evidence.claims[0]["candidate_count"] == 1
+    assert evidence.claims[0]["support_count"] == 1
+    assert evidence.claims[0]["support_ratio"] == 1.0
+    assert evidence.claims[0]["single_candidate_basis"] is True
 
 
 def test_named_person_query_requires_exact_full_name_or_email_before_expansion():
