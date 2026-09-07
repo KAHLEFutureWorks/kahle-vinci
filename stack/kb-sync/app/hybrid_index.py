@@ -6,6 +6,11 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Iterable
 
+try:
+    from .functional_contact_contract import CONTACT_HINT_HEADINGS, parse_functional_contacts
+except ImportError:  # pragma: no cover - standalone indexer entry point
+    from functional_contact_contract import CONTACT_HINT_HEADINGS, parse_functional_contacts
+
 
 GERMAN_STOPWORDS = {
     "aber", "alle", "als", "am", "an", "auch", "auf", "aus", "bei", "bis", "da", "das",
@@ -84,12 +89,14 @@ class ChildChunk:
     content: str
     parent_content: str
     kind: str
+    functional_contact: dict | None = None
 
 
 class ParentChildChunker:
     """Markdown-aware chunking that keeps sections and table rows auditable."""
 
-    HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+    HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$")
+    FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
     TABLE_SEPARATOR = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
 
     def __init__(self, child_max_chars: int = 900, parent_max_chars: int = 5000):
@@ -98,50 +105,84 @@ class ParentChildChunker:
         self.child_max_chars, self.parent_max_chars = child_max_chars, parent_max_chars
 
     def chunk(self, document_id: str, markdown: str) -> list[ChildChunk]:
-        sections = self._sections(self._without_frontmatter(markdown))
+        canonical = self._without_frontmatter(markdown)
+        contacts = {record["row_number"]: record for record in parse_functional_contacts(
+            canonical, max_row_chars=self.child_max_chars,
+        )}
+        sections = self._sections(canonical)
         chunks: list[ChildChunk] = []
         order = 0
-        for section_index, (heading_path, body) in enumerate(sections):
+        for section_index, (heading_path, body, start_line) in enumerate(sections):
             parent_id = f"{document_id}:p{section_index}"
-            for part, kind in self._children(body):
+            lines = list(enumerate(body.split("\n"), start_line))
+            generic_parent = "\n".join(line for number, line in lines if number not in contacts).strip()
+            hint = bool(CONTACT_HINT_HEADINGS.intersection(heading_path))
+            parts: list[tuple[str, str, dict | None]] = []
+            buffer: list[str] = []
+            for number, line in lines:
+                contact = contacts.get(number)
+                if contact is None:
+                    buffer.append(line)
+                    continue
+                parts.extend((part, kind, None) for part, kind in self._children("\n".join(buffer)))
+                buffer.clear()
+                parts.append((line, "functional_contact", contact))
+            parts.extend((part, kind, None) for part, kind in self._children("\n".join(buffer)))
+            for part, kind, contact in parts:
+                # A contact's parent is the same atomic row, not its neighbouring rows.
+                chunk_parent = f"{parent_id}:r{contact['row_number']}" if contact else parent_id
                 chunks.append(ChildChunk(
-                    child_id=f"{parent_id}:c{order}", parent_id=parent_id, order=order,
+                    child_id=f"{chunk_parent}:c{order}", parent_id=chunk_parent, order=order,
                     heading_path=heading_path, content=part,
-                    parent_content=body[: self.parent_max_chars], kind=kind,
+                    parent_content=part if contact else generic_parent[: self.parent_max_chars],
+                    kind="retrieval_hint" if hint else kind, functional_contact=contact,
                 ))
                 order += 1
         return chunks
 
     @staticmethod
     def _without_frontmatter(markdown: str) -> str:
-        clean = (markdown or "").lstrip("\ufeff")
+        clean = (markdown or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
         if not clean.startswith("---"):
             return clean
         match = re.match(r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)", clean, flags=re.S)
         return clean[match.end():] if match else clean
 
-    def _sections(self, markdown: str) -> list[tuple[tuple[str, ...], str]]:
-        headings: list[str] = []
+    def _sections(self, markdown: str) -> list[tuple[tuple[str, ...], str, int]]:
+        headings: list[tuple[int, str]] = []
         current: list[str] = []
-        result: list[tuple[tuple[str, ...], str]] = []
+        result: list[tuple[tuple[str, ...], str, int]] = []
+        start_line = 1
+        fence: tuple[str, int] | None = None
 
         def flush() -> None:
-            body = "\n".join(current).strip()
-            if body:
-                result.append((tuple(headings), body))
+            body = "\n".join(current)
+            if body.strip():
+                result.append((tuple(title for _, title in headings), body, start_line))
 
-        for line in (markdown or "").replace("\r\n", "\n").split("\n"):
+        for number, line in enumerate(markdown.split("\n"), 1):
+            marker = self.FENCE.match(line)
+            if fence is not None:
+                current.append(line)
+                if marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and not marker[2].strip():
+                    fence = None
+                continue
+            if marker:
+                fence = (marker[1][0], len(marker[1]))
+                current.append(line)
+                continue
             match = self.HEADING.match(line)
             if match:
                 flush()
                 current.clear()
                 level, title = len(match.group(1)), match.group(2).strip()
-                headings[:] = headings[: level - 1]
-                headings.append(title)
+                headings[:] = [(depth, name) for depth, name in headings if depth < level]
+                headings.append((level, title))
+                start_line = number + 1
             else:
                 current.append(line)
         flush()
-        return result or [((), (markdown or "").strip())]
+        return result or [((), markdown, 1)]
 
     def _children(self, body: str) -> list[tuple[str, str]]:
         blocks = [block.strip() for block in re.split(r"\n\s*\n", body) if block.strip()]

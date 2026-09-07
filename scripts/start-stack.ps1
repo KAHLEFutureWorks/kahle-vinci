@@ -66,6 +66,7 @@ foreach ($name in $requiredSecrets) {
 
 $defaults = @{
   KAHLE_ROOT = (Resolve-Path $ProjectRoot).Path.Replace("\", "/")
+  KAHLE_LOCAL_CODE_ROOT = (Resolve-Path $ProjectRoot).Path.Replace("\", "/")
   IONOS_OPENAI_BASE_URL = "https://openai.inference.de-txl.ionos.com/v1"
   IONOS_CHAT_MODEL_DEFAULT = "mistralai/Mistral-Small-24B-Instruct"
   IONOS_CHAT_MODEL_REASONING = "openai/gpt-oss-120b"
@@ -135,11 +136,14 @@ try {
       }
     }
   )
-  $foreignContainers = @(
-    Find-ForeignContainerNames `
-      -Containers $existingContainers `
-      -ComposeProject $composeProject
-  )
+  $foreignContainers = @()
+  if ($existingContainers.Count -gt 0) {
+    $foreignContainers = @(
+      Find-ForeignContainerNames `
+        -Containers $existingContainers `
+        -ComposeProject $composeProject
+    )
+  }
   if ($foreignContainers.Count -gt 0) {
     throw (
       "Container name conflict before Compose start: " +

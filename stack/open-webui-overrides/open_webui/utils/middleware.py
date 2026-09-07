@@ -96,8 +96,14 @@ from open_webui.utils.kahle_knowledge_harness import (
     classify_personio_directory_intent,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
+    resolve_request,
     resolve_query_aliases,
     validate_answer as validate_knowledge_harness_answer,
+)
+from open_webui.utils.kahle_internal_knowledge import (
+    _supervisor_candidate_query,
+    bind_internal_knowledge_tools,
+    upsert_answer_contract_message,
 )
 from open_webui.utils.personio_directory_client import PersonioDirectoryClient
 
@@ -197,6 +203,44 @@ def _env_flag(name: str, default: bool = False) -> bool:
 def _knowledge_harness_mode() -> str:
     mode = str(os.getenv('KAHLE_KNOWLEDGE_HARNESS_MODE') or 'shadow').strip().lower()
     return mode if mode in {'off', 'shadow', 'active'} else 'shadow'
+
+
+def _knowledge_routing_mode() -> str:
+    mode = str(os.getenv('KAHLE_KNOWLEDGE_ROUTING_MODE') or 'legacy').strip().lower()
+    return mode if mode in {'legacy', 'model_led'} else 'legacy'
+
+
+def _routing_plan_for_execution(routing_mode: str, legacy_plan: Any) -> Any:
+    return legacy_plan if routing_mode in {'legacy', 'model_led'} else None
+
+
+def _model_led_routing_comparison(
+    legacy_tools: Any, actual_tools: Any
+) -> dict[str, Any]:
+    allowed_tools = {'personio_directory', 'rag_chat'}
+    canonical = lambda tools: sorted(
+        {
+            str(tool)
+            for tool in tools or ()
+            if str(tool) in allowed_tools
+        }
+    )
+    legacy_required_tools = canonical(legacy_tools)
+    selected_tools = canonical(actual_tools)
+    return {
+        'legacy_required_tools': legacy_required_tools,
+        'actual_tools': selected_tools,
+        'matches_legacy': legacy_required_tools == selected_tools,
+    }
+
+
+def _knowledge_routing_comparison_payload(
+    legacy_plan: Any, *, actual_tools: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    return _model_led_routing_comparison(
+        getattr(legacy_plan, 'required_tools', ()) if legacy_plan else (),
+        actual_tools,
+    )
 
 
 def _knowledge_harness_answer_timeout_seconds() -> float:
@@ -322,42 +366,6 @@ def _personio_directory_intent(query: str) -> str:
     return classify_personio_directory_intent(query)
 
 
-def _supervisor_candidate_query(messages: list[dict[str, Any]], query: str) -> str:
-    """Return only the immediately preceding user request for a supervisor follow-up."""
-    if _personio_directory_intent(query) != 'supervisor_lookup':
-        return ''
-    current = str(query or '').strip()
-    if re.search(
-        r'\b(?:von|für)\s+(?:[A-ZÄÖÜ][\w.\'-]*\s+)'
-        r'{1,3}[A-ZÄÖÜ][\w.\'-]*\b',
-        current,
-    ):
-        return ''
-    folded_current = (
-        current.casefold()
-        .replace('ä', 'a')
-        .replace('ö', 'o')
-        .replace('ü', 'u')
-        .replace('ß', 'ss')
-    )
-    if not re.search(
-        r'\b(?:davon|deren|dessen|diese(?:r|n|m|s)?\s+person|'
-        r'sein(?:e|er|em|en|es)?|ihr(?:e|er|em|en|es)?|'
-        r'die\s+fuhrungskraft|er|sie|ihn|ihm)\b',
-        folded_current,
-    ):
-        return ''
-    prior_user_messages = [
-        str(message.get('content') or '').strip()
-        for message in messages
-        if isinstance(message, dict) and message.get('role') == 'user'
-    ]
-    for candidate in reversed(prior_user_messages):
-        if candidate and candidate != current:
-            return candidate
-    return ''
-
-
 def _knowledge_harness_metadata_payload(decision: Any) -> dict[str, Any]:
     """Return a PII-free technical summary; full evidence stays request-local."""
     payload = decision.to_dict()
@@ -411,6 +419,44 @@ def _store_ephemeral_kahle_harness_payload(
 def _ephemeral_kahle_harness_payload(request: Any) -> dict[str, Any] | None:
     payload = getattr(request.state, '_kahle_knowledge_harness_payload', None)
     return payload if isinstance(payload, dict) else None
+
+
+def _refresh_model_led_answer_contract(
+    *, body: dict[str, Any], metadata: dict[str, Any], request: Any, user: Any
+) -> dict[str, Any]:
+    """Refresh one model-led contract from evidence recorded in this request."""
+    if _knowledge_routing_mode() != 'model_led':
+        return body
+    session = metadata.get('kahle_knowledge_evidence_session')
+    if session is None or not callable(getattr(session, 'build_decision', None)):
+        return body
+
+    decision = session.build_decision(
+        query=get_last_user_message(body.get('messages', []) or []) or '',
+        permission_scope=_knowledge_harness_permission_scope(user),
+    )
+    if decision is None:
+        return body
+
+    body['messages'] = upsert_answer_contract_message(
+        body.get('messages', []) or [], decision
+    )
+    payload = decision.to_dict()
+    _store_ephemeral_kahle_harness_payload(request, payload)
+    metadata['kahle_knowledge_harness_shadow'] = (
+        _knowledge_harness_metadata_payload(decision)
+    )
+    metadata['kahle_knowledge_harness_active'] = True
+    metadata['kahle_answer_contract'] = payload['answer_contract']
+    metadata['kahle_answer_validation_fallback'] = decision.validation_fallback()
+
+    comparison = metadata.get('kahle_knowledge_routing_comparison') or {}
+    comparison = _model_led_routing_comparison(
+        comparison.get('legacy_required_tools') or (), session.called_tools()
+    )
+    metadata['kahle_knowledge_routing_comparison'] = comparison
+    metadata['kahle_retrieval_tools'] = comparison['actual_tools']
+    return body
 
 
 def _knowledge_harness_direct_answer(
@@ -504,6 +550,17 @@ def _knowledge_harness_tool_called(metadata: dict[str, Any]) -> str:
     if len(tools) > 1:
         return 'multi_source'
     return str(tools[0]) if tools else ''
+
+
+def _knowledge_harness_routing_metric_fields(metadata: dict[str, Any]) -> dict[str, Any]:
+    fields = {'tool_called': _knowledge_harness_tool_called(metadata)}
+    comparison = metadata.get('kahle_knowledge_routing_comparison')
+    if isinstance(comparison, dict):
+        fields['routing_comparison'] = _model_led_routing_comparison(
+            comparison.get('legacy_required_tools') or (),
+            comparison.get('actual_tools') or (),
+        )
+    return fields
 
 
 def _should_prepare_knowledge_route(
@@ -1226,15 +1283,15 @@ def _expanded_internal_rag_query(messages: list[dict[str, Any]], user_text: str)
     return resolve_query_aliases(current)
 
 
-def _prerouted_rag_tool_output(
-    call_id: str, query: str, *, completed: bool,
+def _prerouted_internal_tool_output(
+    call_id: str, tool_name: str, query: str, *, completed: bool,
 ) -> list[dict[str, Any]]:
     """Represent deterministic pre-routing as a native visible tool call."""
     output = [{
         'type': 'function_call',
         'id': call_id,
         'call_id': call_id,
-        'name': 'rag_chat',
+        'name': tool_name,
         'arguments': json.dumps({'query': query}, ensure_ascii=False),
         'status': 'completed' if completed else 'in_progress',
     }]
@@ -1243,10 +1300,18 @@ def _prerouted_rag_tool_output(
             'type': 'function_call_output',
             'id': output_id('fco'),
             'call_id': call_id,
-            'output': [{'type': 'input_text', 'text': 'Wissenssuche abgeschlossen.'}],
+            'output': [{'type': 'input_text', 'text': 'Interne Suche abgeschlossen.'}],
             'status': 'completed',
         })
     return output
+
+
+def _prerouted_rag_tool_output(
+    call_id: str, query: str, *, completed: bool,
+) -> list[dict[str, Any]]:
+    return _prerouted_internal_tool_output(
+        call_id, 'rag_chat', query, completed=completed,
+    )
 
 
 def _should_emit_prerouted_rag_status(retrieval_plan: Any) -> bool:
@@ -1254,6 +1319,16 @@ def _should_emit_prerouted_rag_status(retrieval_plan: Any) -> bool:
     return 'rag_chat' in tuple(
         getattr(retrieval_plan, 'required_tools', ()) or ()
     )
+
+
+def _prerouted_internal_outputs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for key in (
+        'kahle_prerouted_personio_tool_output',
+        'kahle_prerouted_rag_tool_output',
+    ):
+        output.extend(metadata.get(key) or [])
+    return output
 
 
 def _internal_rag_source_outcome(sources: list[dict[str, Any]]) -> str:
@@ -1644,7 +1719,10 @@ def _stream_safe_output(output: list, *, suppress_message_text: bool = False) ->
 
 def _should_suppress_initial_rag_response(
     *, rag_tool_available: bool, internal_rag_required: bool, prerouted: bool,
+    routing_mode: str = 'legacy',
 ) -> bool:
+    if routing_mode == 'model_led':
+        return False
     return rag_tool_available and internal_rag_required and not prerouted
 
 
@@ -2628,7 +2706,11 @@ async def chat_completion_tools_handler(
         if not text:
             return []
 
-        planned_rag_calls = _planned_rag_tool_calls(metadata, tools, user_text or '')
+        planned_rag_calls = (
+            _planned_rag_tool_calls(metadata, tools, user_text or '')
+            if _knowledge_routing_mode() == 'legacy'
+            else []
+        )
         if planned_rag_calls:
             return planned_rag_calls
 
@@ -2652,7 +2734,11 @@ async def chat_completion_tools_handler(
                 }
             ]
 
-        if 'rag_chat' in tools and _looks_like_internal_rag_request(user_text or ''):
+        if (
+            _knowledge_routing_mode() == 'legacy'
+            and 'rag_chat' in tools
+            and _looks_like_internal_rag_request(user_text or '')
+        ):
             return [
                 {
                     'name': 'rag_chat',
@@ -3230,7 +3316,12 @@ async def chat_completion_tools_handler(
     if sources:
         metadata['kahle_tool_sources'] = copy.deepcopy(sources)
 
-
+    body = _refresh_model_led_answer_contract(
+        body=body,
+        metadata=metadata,
+        request=request,
+        user=user,
+    )
     if skip_files and 'files' in body.get('metadata', {}):
         del body['metadata']['files']
 
@@ -4053,6 +4144,46 @@ def _last_kahle_answer_text(output: list[dict[str, Any]]) -> str:
     return ''
 
 
+def _observe_model_led_answer(
+    output: list[dict[str, Any]], harness_payload: dict[str, Any],
+    *, sources: list[dict[str, Any]] | tuple = (), feedback_link: str = '',
+) -> dict[str, Any]:
+    """Observe delivered model text; never mutate it or request a correction."""
+    try:
+        reference_urls = tuple(
+            source['source_url'] for source in sources
+            if isinstance(source, dict) and isinstance(source.get('source_url'), str)
+            and re.fullmatch(r'/wissen/api/portal/sources/[A-Za-z0-9_-]{1,100}', source['source_url'])
+        )
+        if re.fullmatch(
+            r'/wissen/\?feedback=1&chat_id=[A-Za-z0-9_-]{1,100}'
+            r'&message_id=[A-Za-z0-9_-]{1,100}'
+            r'(?:&(?:document_ids|knowledgebase_ids)=[A-Za-z0-9_%,-]{0,3000})*',
+            feedback_link,
+        ):
+            reference_urls += (feedback_link,)
+        text = '\n'.join(
+            str(part.get('text') or '')
+            for item in output if item.get('type') == 'message'
+            for part in item.get('content') or [] if part.get('type') == 'output_text'
+        )
+        observation = validate_knowledge_harness_answer(
+            text, harness_payload, reference_urls=reference_urls,
+        ).to_dict()
+    except Exception:
+        # Diagnostics must not become a new delivery dependency or leak evidence.
+        observation = {
+            'schema_version': 'kahle.answer-validation.v1',
+            'status': 'observation_error',
+            'violations': [{'code': 'observation_error'}],
+        }
+    return {
+        'schema_version': 'kahle.answer-validation-run.v1',
+        'mode': 'shadow',
+        'attempts': [observation],
+    }
+
+
 def process_messages_with_output(
     messages: list[dict],
     reasoning_format: str | None = None,
@@ -4817,12 +4948,22 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 if name not in tools_dict:
                     tools_dict[name] = tool_dict
 
+        tools_dict, knowledge_evidence_session = bind_internal_knowledge_tools(
+            tools=tools_dict,
+            request=request,
+            user=user,
+            model=model,
+            messages=form_data.get('messages', []) or [],
+        )
+        metadata['kahle_knowledge_evidence_session'] = knowledge_evidence_session
+
         original_user_tool_request = get_last_user_message(
             form_data.get('messages', []) or []
         )
-        user_tool_request = _expanded_internal_rag_query(
-            form_data.get('messages', []), original_user_tool_request or ''
+        resolved_internal_request = resolve_request(
+            original_user_tool_request or '', form_data.get('messages', []) or []
         )
+        user_tool_request = resolved_internal_request.retrieval_query
         permission_scope = _knowledge_harness_permission_scope(user)
         legacy_rag_request = (
             _looks_like_internal_rag_request(user_tool_request or '')
@@ -4830,7 +4971,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 form_data.get('messages', []) or [], user_tool_request or ''
             )
         )
-        retrieval_plan = _plan_kahle_retrieval_gate(
+        routing_mode = _knowledge_routing_mode()
+        legacy_retrieval_plan = _plan_kahle_retrieval_gate(
             query=original_user_tool_request or '',
             resolved_query=user_tool_request or original_user_tool_request or '',
             messages=form_data.get('messages', []) or [],
@@ -4839,6 +4981,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             tools_dict=tools_dict,
             legacy_rag_request=legacy_rag_request,
             harness_mode=_knowledge_harness_mode(),
+        )
+        if routing_mode == 'model_led':
+            metadata['kahle_knowledge_routing_comparison'] = (
+                _knowledge_routing_comparison_payload(legacy_retrieval_plan)
+            )
+        retrieval_plan = _routing_plan_for_execution(
+            routing_mode, legacy_retrieval_plan
         )
         if _should_prepare_knowledge_route(
             tools_dict, retrieval_plan is not None
@@ -4866,6 +5015,29 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     emit_prerouted_rag_status = _should_emit_prerouted_rag_status(
                         retrieval_plan
                     )
+                    emit_prerouted_personio_status = (
+                        'personio_directory'
+                        in tuple(getattr(retrieval_plan, 'required_tools', ()) or ())
+                    )
+                    personio_call_id = output_id('fc')
+                    if emit_prerouted_personio_status:
+                        metadata['kahle_prerouted_personio_tool_output'] = (
+                            _prerouted_internal_tool_output(
+                                personio_call_id,
+                                'personio_directory',
+                                user_tool_request or '',
+                                completed=False,
+                            )
+                        )
+                        if event_emitter:
+                            await event_emitter({
+                                'type': 'chat:completion',
+                                'data': {
+                                    'output': metadata[
+                                        'kahle_prerouted_personio_tool_output'
+                                    ]
+                                },
+                            })
                     if emit_prerouted_rag_status:
                         metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
                             pre_route_call_id, user_tool_request or '', completed=False,
@@ -4964,6 +5136,24 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         rag_retriever=retrieve_pre_route_rag,
                         metadata=metadata,
                     )
+                    if emit_prerouted_personio_status:
+                        metadata['kahle_prerouted_personio_tool_output'] = (
+                            _prerouted_internal_tool_output(
+                                personio_call_id,
+                                'personio_directory',
+                                user_tool_request or '',
+                                completed=True,
+                            )
+                        )
+                        if event_emitter:
+                            await event_emitter({
+                                'type': 'chat:completion',
+                                'data': {
+                                    'output': metadata[
+                                        'kahle_prerouted_personio_tool_output'
+                                    ]
+                                },
+                            })
                     rag_execution = retrieval['rag_result']
                     if isinstance(rag_execution, dict):
                         if rag_execution.get('form_data') is not None:
@@ -5032,11 +5222,12 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 form_data.get('messages', []) or [],
                                 append=True,
                             )
-                            direct_answer = _knowledge_harness_direct_answer(
-                                harness_decision, harness_payload
-                            )
-                            if direct_answer:
-                                metadata['kahle_direct_final_content'] = direct_answer
+                            if routing_mode != 'model_led':
+                                direct_answer = _knowledge_harness_direct_answer(
+                                    harness_decision, harness_payload
+                                )
+                                if direct_answer:
+                                    metadata['kahle_direct_final_content'] = direct_answer
                             metadata['kahle_answer_validation_fallback'] = (
                                 harness_decision.validation_fallback()
                             )
@@ -5067,9 +5258,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         )
                     )
                 }
-                native_tools_dict = _filter_native_tools_for_kahle_retrieval(
-                    native_tools_dict, retrieval_plan
-                )
+                if routing_mode == 'legacy':
+                    native_tools_dict = _filter_native_tools_for_kahle_retrieval(
+                        native_tools_dict, retrieval_plan
+                    )
                 if native_tools_dict:
                     form_data['tools'] = [
                         {'type': 'function', 'function': tool.get('spec', {})}
@@ -5095,9 +5287,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             )
                         )
                     }
-                    legacy_tools_dict = _filter_native_tools_for_kahle_retrieval(
-                        legacy_tools_dict, retrieval_plan
-                    )
+                    if routing_mode == 'legacy':
+                        legacy_tools_dict = _filter_native_tools_for_kahle_retrieval(
+                            legacy_tools_dict, retrieval_plan
+                        )
                     if legacy_tools_dict:
                         form_data, flags = await chat_completion_tools_handler(
                             request,
@@ -5942,9 +6135,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 'content': [{'type': 'output_text', 'text': content}],
                             }
                         )
-                    prerouted_tool_output = list(
-                        metadata.get('kahle_prerouted_rag_tool_output') or []
-                    )
+                    prerouted_tool_output = _prerouted_internal_outputs(metadata)
                     if prerouted_tool_output:
                         response_output = prerouted_tool_output + response_output
 
@@ -6063,6 +6254,8 @@ async def streaming_chat_response_handler(response, ctx):
 
         # Handle as a background task
         async def response_handler(response, events):
+            nonlocal form_data
+
             filter_context = FilterContext()
 
             def tag_output_handler(content_type, tags, output):
@@ -6307,8 +6500,8 @@ async def streaming_chat_response_handler(response, ctx):
             existing_output = message.get('output') if message else None
             if existing_output:
                 output = existing_output
-            elif metadata.get('kahle_prerouted_rag_tool_output'):
-                output = copy.deepcopy(metadata['kahle_prerouted_rag_tool_output'])
+            elif _prerouted_internal_outputs(metadata):
+                output = copy.deepcopy(_prerouted_internal_outputs(metadata))
             else:
                 # Only create an initial message item if there is content to initialize with
                 if content:
@@ -6331,6 +6524,7 @@ async def streaming_chat_response_handler(response, ctx):
             initial_user_message = get_last_user_message(form_data.get('messages', []) or [])
             initial_tools = metadata.get('tools', {}) or {}
             suppress_initial_rag_response = _should_suppress_initial_rag_response(
+                routing_mode=_knowledge_routing_mode(),
                 rag_tool_available='rag_chat' in initial_tools,
                 internal_rag_required=(
                     not metadata.get('kahle_mailer_drafting_followup')
@@ -7131,6 +7325,8 @@ async def streaming_chat_response_handler(response, ctx):
                 native_rag_fallback = (
                     []
                     if (
+                        _knowledge_routing_mode() == 'model_led'
+                        or
                         metadata.get('kahle_internal_rag_prerouted')
                         or metadata.get('kahle_mailer_drafting_followup')
                     )
@@ -7496,6 +7692,12 @@ async def streaming_chat_response_handler(response, ctx):
                         }
                     )
 
+                    form_data = _refresh_model_led_answer_contract(
+                        body=form_data,
+                        metadata=metadata,
+                        request=request,
+                        user=user,
+                    )
                     try:
                         new_form_data = {
                             **form_data,
@@ -7505,10 +7707,14 @@ async def streaming_chat_response_handler(response, ctx):
                         }
 
                         if ENABLE_RESPONSES_API_STATEFUL and last_response_id:
-                            system_message = get_system_message(form_data['messages'])
-                            new_form_data['messages'] = (
-                                [system_message] if system_message else []
-                            ) + convert_output_to_messages(output, raw=True)
+                            system_messages = [
+                                message
+                                for message in form_data['messages']
+                                if message.get('role') == 'system'
+                            ]
+                            new_form_data['messages'] = system_messages + (
+                                convert_output_to_messages(output, raw=True)
+                            )
                             new_form_data['previous_response_id'] = last_response_id
                         else:
                             tool_messages = convert_output_to_messages(output, raw=True)
@@ -7747,6 +7953,13 @@ async def streaming_chat_response_handler(response, ctx):
                 validation_attempts = []
                 validation_fallback_used = False
                 harness_payload = _ephemeral_kahle_harness_payload(request)
+                shadow_validation = bool(
+                    harness_payload
+                    and (harness_payload.get('retrieval_plan') or {}).get('mode') == 'model_led'
+                )
+                if shadow_validation:
+                    _append_canonical_rag_source_links(output, canonical_rag_sources)
+                    _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
                 if (
                     metadata.get('kahle_knowledge_harness_active')
                     and harness_payload
@@ -7765,6 +7978,12 @@ async def streaming_chat_response_handler(response, ctx):
                         'schema_version': 'kahle.answer-validation-run.v1',
                         'attempts': validation_attempts,
                     }
+                elif metadata.get('kahle_knowledge_harness_active') and shadow_validation:
+                    metadata['kahle_answer_validation'] = _observe_model_led_answer(
+                        output, harness_payload, sources=canonical_rag_sources,
+                        feedback_link=canonical_rag_feedback_link,
+                    )
+                    validation_attempts = metadata['kahle_answer_validation']['attempts']
                 elif metadata.get('kahle_knowledge_harness_active') and harness_payload:
                     validation = validate_knowledge_harness_answer(
                         _last_kahle_answer_text(output), harness_payload
@@ -7796,11 +8015,12 @@ async def streaming_chat_response_handler(response, ctx):
                         ),
                         'intent_kind': str(intent_payload.get('kind') or ''),
                         'required_tool': str(retrieval_payload.get('required_tool') or ''),
-                        'tool_called': _knowledge_harness_tool_called(metadata),
+                        **_knowledge_harness_routing_metric_fields(metadata),
                         'evidence_status': str(evidence_payload.get('status') or ''),
                         'source_count': len(evidence_payload.get('sources') or []),
                         'permission_scope_present': bool(permission_payload.get('user_id')),
                         'validation_attempts': len(validation_attempts),
+                        **({'validation_mode': 'shadow'} if shadow_validation else {}),
                         'retry_count': max(0, len(validation_attempts) - 1),
                         'fallback_used': validation_fallback_used,
                         'final_validation_status': (
@@ -7815,6 +8035,7 @@ async def streaming_chat_response_handler(response, ctx):
                             'safe_fallback'
                             if validation_fallback_used
                             else (
+                                'observed' if shadow_validation else
                                 validation_attempts[-1].get('status')
                                 if validation_attempts
                                 else 'not_run'
@@ -7825,8 +8046,9 @@ async def streaming_chat_response_handler(response, ctx):
                         'latency_ms': elapsed_ms,
                     }
 
-                _append_canonical_rag_source_links(output, canonical_rag_sources)
-                _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
+                if not shadow_validation:
+                    _append_canonical_rag_source_links(output, canonical_rag_sources)
+                    _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
 
                 # Mark all in-progress items as completed
                 for item in output:

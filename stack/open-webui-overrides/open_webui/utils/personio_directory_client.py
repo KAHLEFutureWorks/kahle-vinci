@@ -8,9 +8,10 @@ import re
 from typing import Any, Callable
 
 
-_ALLOWED_INTENTS = frozenset(
+_RESOLVED_INTENTS = frozenset(
     {"person_lookup", "directory_search", "coworker_lookup", "onboarding_search", "supervisor_lookup"}
 )
+_ALLOWED_INTENTS = _RESOLVED_INTENTS | {"auto"}
 _ALLOWED_STATUSES = frozenset({"ok", "not_found", "not_ready"})
 _SOURCE_ID = re.compile(r"^P[1-9][0-9]*$")
 _SYNC_TIMESTAMP = re.compile(
@@ -34,6 +35,20 @@ _DIRECTORY_CLAIM_FIELDS = frozenset(
         "source_id",
         "relationship_basis",
         "relationship_disclaimer",
+        "supervisor_scope",
+        "candidate_count",
+        "support_count",
+        "support_ratio",
+        "single_candidate_basis",
+    }
+)
+_SUPERVISOR_AGGREGATE_FIELDS = frozenset(
+    {
+        "supervisor_scope",
+        "candidate_count",
+        "support_count",
+        "support_ratio",
+        "single_candidate_basis",
     }
 )
 _ONBOARDING_CLAIM_FIELDS = frozenset(
@@ -95,7 +110,7 @@ class PersonioDirectoryClient:
             "user_id": str(user_id).strip(),
             "user_role": user_role,
         }
-        if intent == "supervisor_lookup" and str(candidate_query or "").strip():
+        if intent in {"auto", "supervisor_lookup"} and str(candidate_query or "").strip():
             payload["candidate_query"] = str(candidate_query).strip()
         try:
             session_factory = self._session_factory
@@ -129,6 +144,7 @@ class PersonioDirectoryClient:
         if not isinstance(data, dict):
             return _unavailable()
         status = data.get("status")
+        resolved_intent = data.get("resolved_intent")
         claims = data.get("claims")
         sources = data.get("sources")
         sync_completed_at = data.get("sync_completed_at")
@@ -148,6 +164,10 @@ class PersonioDirectoryClient:
             )
             or not isinstance(stale, bool)
         ):
+            return _unavailable()
+        if resolved_intent not in _RESOLVED_INTENTS:
+            return _unavailable()
+        if intent != "auto" and resolved_intent != intent:
             return _unavailable()
         if status in {"ok", "not_found"} and sync_completed_at is None:
             return _unavailable()
@@ -170,16 +190,37 @@ class PersonioDirectoryClient:
         controlled_claims = []
         allowed_claim_fields = (
             _ONBOARDING_CLAIM_FIELDS
-            if intent == "onboarding_search"
+            if resolved_intent == "onboarding_search"
             else _DIRECTORY_CLAIM_FIELDS
         )
         for claim in claims:
             source_id = claim.get("source_id")
+            aggregate_fields = set(claim).intersection(_SUPERVISOR_AGGREGATE_FIELDS)
+            valid_aggregates = (
+                not aggregate_fields
+                or (
+                    resolved_intent == "supervisor_lookup"
+                    and aggregate_fields == _SUPERVISOR_AGGREGATE_FIELDS
+                    and claim.get("supervisor_scope") == "organizational_unit"
+                    and isinstance(claim.get("candidate_count"), int)
+                    and not isinstance(claim.get("candidate_count"), bool)
+                    and isinstance(claim.get("support_count"), int)
+                    and not isinstance(claim.get("support_count"), bool)
+                    and isinstance(claim.get("support_ratio"), (int, float))
+                    and not isinstance(claim.get("support_ratio"), bool)
+                    and isinstance(claim.get("single_candidate_basis"), bool)
+                    and 0 < claim["candidate_count"]
+                    and 0 <= claim["support_count"] <= claim["candidate_count"]
+                    and 0.0 <= float(claim["support_ratio"]) <= 1.0
+                )
+            )
+            string_fields = set(claim) - _SUPERVISOR_AGGREGATE_FIELDS
             if (
                 not isinstance(source_id, str)
                 or source_id not in source_ids
                 or not set(claim).issubset(allowed_claim_fields)
-                or not all(isinstance(value, str) for value in claim.values())
+                or not all(isinstance(claim[field], str) for field in string_fields)
+                or not valid_aggregates
             ):
                 return _unavailable()
             controlled_claims.append(dict(claim))

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -132,6 +133,112 @@ def test_retrieval_alias_resolution_expands_only_documented_whole_tokens():
         "Hannover, Verkauf und Stadthagen"
     )
     assert module.resolve_query_aliases("Studie und Hinweis") == "Studie und Hinweis"
+
+
+def test_request_resolution_turns_a_process_followup_into_a_standalone_query():
+    harness = load_harness()
+    original = "Und wie geht es dann, wenn ich in Hannover bin?"
+    messages = [
+        {
+            "role": "user",
+            "content": "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das in Vaudis?",
+        },
+        {
+            "role": "assistant",
+            "content": "Für andere Standorte ist ein abweichender Kontaktweg dokumentiert.",
+        },
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.original_query == original
+    assert "Werbewiderspruch" in resolved.retrieval_query
+    assert "Vaudis" in resolved.retrieval_query
+    assert "Hannover" in resolved.retrieval_query
+    assert resolved.entities["locations"] == ("Hannover",)
+    assert resolved.entities["systems"] == ("Vaudis",)
+    assert resolved.conversation_reference is True
+    assert resolved.required_clarification is False
+
+
+def test_request_resolution_keeps_the_process_anchor_across_two_location_followups():
+    harness = load_harness()
+    original = "Und was ist, wenn ich in Nienburg bin?"
+    messages = [
+        {
+            "role": "user",
+            "content": "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das in Vaudis?",
+        },
+        {
+            "role": "assistant",
+            "content": "Der dokumentierte Ablauf hängt vom Standort ab.",
+        },
+        {
+            "role": "user",
+            "content": "Und wie geht es dann, wenn ich in Hannover bin?",
+        },
+        {
+            "role": "assistant",
+            "content": "Für Hannover gilt der dokumentierte interne Ablauf.",
+        },
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.retrieval_query == (
+        "Wie wird ein Werbewiderspruch in Vaudis am Standort Nienburg durchgeführt?"
+    )
+    assert resolved.entities["locations"] == ("Nienburg",)
+    assert resolved.entities["systems"] == ("Vaudis",)
+    assert resolved.context_references == ("prior_user", "topic_anchor")
+
+
+def test_request_resolution_keeps_a_standalone_query_semantically_unchanged():
+    harness = load_harness()
+    original = "Wer arbeitet im Teiledienst in Hannover?"
+
+    resolved = harness.resolve_request(original, [{"role": "user", "content": original}])
+
+    assert resolved.original_query == original
+    assert resolved.retrieval_query == original
+    assert resolved.conversation_reference is False
+
+
+def test_request_resolution_does_not_carry_an_old_name_over_a_new_name():
+    harness = load_harness()
+    original = "Und wer ist die Führungskraft von Berta Beispiel?"
+    messages = [
+        {"role": "user", "content": "Wo arbeitet Anna Adler?"},
+        {"role": "assistant", "content": "Anna Adler arbeitet im Service."},
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.retrieval_query == original
+    assert resolved.entities["persons"] == ("Berta Beispiel",)
+    assert "Anna Adler" not in resolved.retrieval_query
+
+
+def test_request_resolution_marks_an_unresolved_either_or_followup_for_clarification():
+    harness = load_harness()
+    original = "Wie geht das?"
+    messages = [
+        {"role": "user", "content": "Wie sperre ich einen Kunden?"},
+        {
+            "role": "assistant",
+            "content": "Geht es um einen Werbewiderspruch oder eine allgemeine Kundensperre?",
+        },
+        {"role": "user", "content": original},
+    ]
+
+    resolved = harness.resolve_request(original, messages)
+
+    assert resolved.required_clarification is True
+    assert "Werbewiderspruch" in resolved.clarification_question
+    assert "allgemeine Kundensperre" in resolved.clarification_question
 
 
 def test_process_overview_with_explicitly_excluded_steps_is_not_procedural():
@@ -311,6 +418,55 @@ def test_retrieval_plan_uses_required_evidence_sources(query, tools):
 
     assert plan.required_tools == tools
     assert plan.required_tool == (tools[0] if len(tools) == 1 else "multi_source")
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Formuliere das freundlicher: Bitte stellt die Kundenfahrzeuge nach der Fertigmeldung auf die vorgesehenen Plätze.",
+        "Formuliere diese Notiz freundlicher: Bitte lege den Schlüssel zurück.",
+        "Erinnere mich morgen um 9 Uhr an die Reifenbestellung.",
+        "Zeige mir meine offenen Aufgaben.",
+    ),
+)
+def test_retrieval_plan_keeps_transformations_and_task_commands_out_of_knowledge_tools(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci", {"user_id": "user-1"}
+    )
+
+    assert plan.required_tools == ()
+    assert plan.information_needs == ()
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie lautet das Funktionspostfach des Marketings?",
+        "Welche gemeinsame Telefonnummer hat der Datenschutz?",
+        "Wo melde ich eine Störung, wenn Vaudis an meinem Arbeitsplatz nicht startet?",
+    ),
+)
+def test_retrieval_plan_routes_documented_contact_and_support_paths_to_rag(query):
+    harness = load_harness()
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci", {"user_id": "user-1"}
+    )
+
+    assert plan.required_tools == ("rag_chat",)
+
+
+def test_retrieval_plan_routes_explicit_mailbox_and_current_staff_to_both_sources():
+    harness = load_harness()
+    query = "Wie lautet das Funktionspostfach und wer arbeitet aktuell im Marketing?"
+
+    plan = harness.plan_retrieval(
+        query, query, [], "kahle-vinci", {"user_id": "user-1"}
+    )
+
+    assert plan.required_tools == ("personio_directory", "rag_chat")
 
 
 @pytest.mark.parametrize(
@@ -744,7 +900,7 @@ def test_organization_area_contact_wordings_route_to_personio_and_rag(query):
     assert plan.information_needs[0].kind == "organization_contact"
 
 
-def test_central_organization_contact_combines_personio_and_rag_evidence():
+def test_central_organization_contact_uses_documented_rag_evidence():
     harness = load_harness()
     query = "Wie lautet die zentrale E-Mail-Adresse der Personalabteilung?"
 
@@ -756,8 +912,8 @@ def test_central_organization_contact_combines_personio_and_rag_evidence():
         {"user_id": "user-1"},
     )
 
-    assert plan.required_tools == ("personio_directory", "rag_chat")
-    assert plan.information_needs[0].kind == "organization_contact"
+    assert plan.required_tools == ("rag_chat",)
+    assert plan.information_needs[0].kind == "functional_contact"
 
 
 @pytest.mark.parametrize(
@@ -1075,14 +1231,11 @@ def test_rag_organization_contact_uses_only_an_exact_cited_contact_literal():
         rag_result=rag,
     )
 
-    assert decision.evidence_bundle.status == "partially_supported"
+    assert decision.evidence_bundle.status == "supported"
     assert decision.answer_contract.allowed_contact_values == (
         "team@example.invalid",
     )
-    assert decision.direct_answer() == (
-        "Dokumentierter Kontaktweg:\n\n"
-        "Der freigegebene Kontakt ist team@example.invalid. [#1]"
-    )
+    assert decision.direct_answer() == ""
 
 
 def test_previous_assistant_contact_value_is_never_treated_as_evidence():
@@ -1730,3 +1883,1158 @@ def test_validator_rejects_unsubstantiated_technical_and_privacy_approval():
     codes = {item["code"] for item in result.violations}
     assert "unsupported_technical_approval" in codes
     assert "unsupported_privacy_approval" in codes
+
+
+def _result_driven_personio_payload(*, status="ok", extra_claim_fields=None):
+    return {
+        "status": status,
+        "claims": (
+            [
+                {
+                    "display_name": "Erika Beispiel",
+                    "position": "Serviceassistenz",
+                    "business_email": "person@example.invalid",
+                    "source_id": "P1",
+                    **(extra_claim_fields or {}),
+                }
+            ]
+            if status == "ok"
+            else []
+        ),
+        "sources": (
+            [{"id": "P1", "kind": "personio_directory"}]
+            if status == "ok"
+            else []
+        ),
+        "sync_completed_at": "2026-08-31T10:15:00Z",
+        "stale": False,
+    }
+
+
+def _result_driven_rag_payload(
+    *,
+    supported=True,
+    evidence_status=None,
+    include_current_people=False,
+    include_personio_owned_contact_field=False,
+    include_personio_owned_assertion=False,
+    include_personio_owned_contact_assertion=False,
+    claim_text=None,
+    evidence_span=None,
+    extra_claim_fields=None,
+    field_carrier=None,
+):
+    claims = []
+    if supported:
+        claim = {
+            "claim_id": "R1C1",
+            "source_id": "R1",
+            "text": (
+                "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+                "das Funktionspostfach ist team@example.invalid."
+            ),
+            "evidence_span": (
+                "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+                "das Funktionspostfach ist team@example.invalid."
+            ),
+            "document_id": "doc-1",
+            "version_id": "version-1",
+            "claim_type": "contact_details",
+        }
+        if include_current_people:
+            claim.update(
+                {
+                    "display_name": "Veralteter Name",
+                    "position": "Veraltete Rolle",
+                }
+            )
+        if include_personio_owned_contact_field:
+            claim["business_email"] = "erika@example.invalid"
+        if include_personio_owned_assertion:
+            claim.update(
+                {
+                    "text": (
+                        "Erika Beispiel ist Serviceassistenz; ihre Führungskraft "
+                        "ist Max Leitung."
+                    ),
+                    "evidence_span": (
+                        "Erika Beispiel ist Serviceassistenz; ihre Führungskraft "
+                        "ist Max Leitung."
+                    ),
+                }
+            )
+        if include_personio_owned_contact_assertion:
+            claim.update(
+                {
+                    "text": "Erika Beispiel: erika@example.invalid.",
+                    "evidence_span": "Erika Beispiel: erika@example.invalid.",
+                }
+            )
+        if claim_text is not None:
+            claim["text"] = claim_text
+            claim["evidence_span"] = claim_text
+        if evidence_span is not None:
+            claim["evidence_span"] = evidence_span
+        if extra_claim_fields is not None:
+            claim.update(extra_claim_fields)
+        if field_carrier is not None:
+            claim["field"] = field_carrier
+        claims.append(claim)
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: "
+        + ("true" if supported else "false")
+        + "\nEVIDENCE_BUNDLE_JSON: "
+        + __import__("json").dumps(
+            {
+                "schema_version": "kahle.evidence-bundle.v1",
+                "status": evidence_status or ("supported" if supported else "unsupported"),
+                "supported_claims": claims,
+                "missing_information": (
+                    [] if supported else ["Kein dokumentierter Kontaktweg gefunden."]
+                ),
+                "conflicts": [],
+                "sources": [{"id": "R1", "title": "Kontaktwege"}] if supported else [],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("called_tools", "expected_tools", "expected_sources"),
+    (
+        (("personio_directory",), ("personio_directory",), {"P1"}),
+        (("rag_chat",), ("rag_chat",), {"R1"}),
+        (
+            ("personio_directory", "rag_chat"),
+            ("personio_directory", "rag_chat"),
+            {"P1", "R1"},
+        ),
+    ),
+)
+def test_result_driven_decision_uses_only_actually_called_sources(
+    called_tools, expected_tools, expected_sources
+):
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=called_tools,
+        query="Kompakte freie Formulierung ohne Harness-Routing",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    assert decision is not None
+    assert decision.retrieval_plan.required_tools == expected_tools
+    assert {source["id"] for source in decision.evidence_bundle.sources} == expected_sources
+
+
+def test_personio_supervisor_consensus_metadata_reaches_the_evidence_bundle():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory",),
+        query="Wer ist die Führungskraft der Disposition?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=_result_driven_personio_payload(
+            extra_claim_fields={
+                "supervisor_scope": "organizational_unit",
+                "candidate_count": 10,
+                "support_count": 9,
+                "support_ratio": 0.9,
+                "single_candidate_basis": False,
+            }
+        ),
+    )
+
+    assert decision is not None
+    claim = decision.evidence_bundle.supported_claims[0]
+    assert claim["candidate_count"] == 10
+    assert claim["support_count"] == 9
+    assert claim["support_ratio"] == 0.9
+    assert "supervisor_personio_id" not in repr(claim)
+
+
+def test_result_driven_decision_is_absent_without_an_actual_internal_tool_call():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=(),
+        query="Allgemeine Unterhaltung",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    assert decision is None
+
+
+def test_personio_not_found_does_not_consume_unexecuted_rag_as_fallback():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory",),
+        query="Serviceassistenzen Neustadt",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(),
+        personio_result=_result_driven_personio_payload(status="not_found"),
+    )
+
+    assert decision is not None
+    assert decision.retrieval_plan.required_tools == ("personio_directory",)
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.sources == ()
+
+
+def test_rag_unsupported_does_not_consume_unexecuted_personio_as_fallback():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie lautet das Funktionspostfach?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(supported=False),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    assert decision is not None
+    assert decision.retrieval_plan.required_tools == ("rag_chat",)
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.sources == ()
+
+
+def test_result_driven_rag_rejects_person_master_and_supervisor_assertions():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            include_personio_owned_assertion=True
+        ),
+    )
+
+    assert decision is not None
+    assert decision.answer_contract.allowed_contact_bindings == ()
+    # Prose is not a source of contact authority; only typed bindings can grant it.
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_rag_rejects_named_person_contact_assertions():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            include_personio_owned_contact_assertion=True
+        ),
+    )
+
+    assert decision is not None
+    assert decision.answer_contract.allowed_contact_bindings == ()
+    # Prose is not a source of contact authority; only typed bindings can grant it.
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_rag_rejects_named_person_contact_in_evidence_span():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            evidence_span="Erika Beispiel hat die Telefonnummer +49 1234 567890."
+        ),
+    )
+
+    assert decision is not None
+    assert decision.answer_contract.allowed_contact_bindings == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_personio_not_found_drops_rag_person_assertions():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory", "rag_chat"),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=_result_driven_personio_payload(status="not_found"),
+        rag_result=_result_driven_rag_payload(
+            include_personio_owned_assertion=True
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+
+
+def test_result_driven_personio_not_found_keeps_rag_contact_path_as_partial():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("personio_directory", "rag_chat"),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=_result_driven_personio_payload(status="not_found"),
+        rag_result=_result_driven_rag_payload(),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "partially_supported"
+    assert any(
+        isinstance(claim, dict) and "Ticketsystem" in str(claim.get("text") or "")
+        for claim in decision.evidence_bundle.supported_claims
+    )
+
+
+@pytest.mark.parametrize(
+    ("called_tools", "personio_result"),
+    (
+        (("rag_chat",), None),
+        (("personio_directory", "rag_chat"), _result_driven_personio_payload(status="not_found")),
+    ),
+)
+def test_result_driven_rag_sanitizes_structured_personio_fields_without_dropping_documented_path(
+    called_tools, personio_result
+):
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=called_tools,
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=personio_result,
+        rag_result=_result_driven_rag_payload(
+            include_current_people=True,
+            include_personio_owned_contact_field=True,
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "partially_supported"
+    claim = decision.evidence_bundle.supported_claims[0]
+    assert claim["text"].startswith("Der dokumentierte Kontaktweg")
+    assert all(
+        field not in claim
+        for field in ("display_name", "position", "business_email")
+    )
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value", "called_tools", "personio_result"),
+    (
+        ("personio_id", "personio-synthetic-1", ("rag_chat",), None),
+        ("employment_status", "active", ("rag_chat",), None),
+        ("source_updated_at", "2026-09-02T10:00:00Z", ("rag_chat",), None),
+        ("supervisor_personio_id", "personio-synthetic-2", ("rag_chat",), None),
+        (
+            "personio_id",
+            "personio-synthetic-1",
+            ("personio_directory", "rag_chat"),
+            _result_driven_personio_payload(status="not_found"),
+        ),
+        (
+            "employment_status",
+            "active",
+            ("personio_directory", "rag_chat"),
+            _result_driven_personio_payload(status="not_found"),
+        ),
+        (
+            "source_updated_at",
+            "2026-09-02T10:00:00Z",
+            ("personio_directory", "rag_chat"),
+            _result_driven_personio_payload(status="not_found"),
+        ),
+        (
+            "supervisor_personio_id",
+            "personio-synthetic-2",
+            ("personio_directory", "rag_chat"),
+            _result_driven_personio_payload(status="not_found"),
+        ),
+    ),
+)
+def test_result_driven_rag_removes_all_canonical_personio_fields_from_safe_paths(
+    field_name, field_value, called_tools, personio_result
+):
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=called_tools,
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=personio_result,
+        rag_result=_result_driven_rag_payload(
+            extra_claim_fields={field_name: field_value}
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "partially_supported"
+    claim = decision.evidence_bundle.supported_claims[0]
+    assert claim["text"].startswith("Der dokumentierte Kontaktweg")
+    assert field_name not in claim
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize(
+    ("extra_claim_fields", "field_carrier", "expected_status"),
+    (
+        ({"Source Updated At": "2026-09-02T10:00:00Z"}, None, "unsupported"),
+        (None, "Supervisor-Personio-ID", "partially_supported"),
+    ),
+)
+def test_result_driven_rag_claim_contract_normalizes_only_personio_carrier_values(
+    extra_claim_fields, field_carrier, expected_status
+):
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            extra_claim_fields=extra_claim_fields,
+            field_carrier=field_carrier,
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == expected_status
+    if expected_status == "unsupported":
+        assert decision.evidence_bundle.supported_claims == ()
+        assert decision.answer_contract.allowed_contact_values == ()
+    else:
+        claim = decision.evidence_bundle.supported_claims[0]
+        assert "field" not in claim
+        assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize(
+    ("extra_claim_fields", "field_carrier"),
+    (
+        ({"employee_profile": "synthetic-profile"}, None),
+        (None, "employee_profile"),
+    ),
+)
+def test_result_driven_rag_drops_unknown_structured_claim_carriers(
+    extra_claim_fields, field_carrier
+):
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            extra_claim_fields=extra_claim_fields,
+            field_carrier=field_carrier,
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_rag_preserves_declared_unsupported_status_after_sanitization():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            evidence_status="unsupported",
+            extra_claim_fields={"personio_id": "personio-synthetic-1"},
+        ),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize(
+    "claim_text",
+    (
+        "Max Leitung ist Chef von Erika Beispiel.",
+        "Max Leitung hat die Teamleitung für Erika Beispiel.",
+        "Max Leitung leitet Erika Beispiel.",
+        "Max Leitung führt Erika Beispiel.",
+    ),
+)
+def test_result_driven_rag_rejects_named_person_manager_terms_in_any_word_order(claim_text):
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(claim_text=claim_text),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+
+
+def test_result_driven_rag_keeps_functional_mailbox_separate_from_generic_process_clause():
+    harness = load_harness()
+    claim_text = (
+        "Dokumentierte Kontaktwege stehen im Intranet; "
+        "Funktionspostfach team@example.invalid."
+    )
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(claim_text=claim_text),
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "supported"
+    assert decision.evidence_bundle.supported_claims[0]["text"] == claim_text
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_rag_rejects_named_person_contact_within_the_same_clause():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(
+            claim_text=(
+                "Dokumentierte Kontaktwege stehen im Intranet; "
+                "Erika Beispiel ist unter erika@example.invalid erreichbar."
+            )
+        ),
+    )
+
+    assert decision is not None
+    assert decision.answer_contract.allowed_contact_bindings == ()
+    # Prose is not a source of contact authority; only typed bindings can grant it.
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize(
+    ("claim_text", "called_tools", "personio_result"),
+    (
+        (
+            "Erika Beispiel hat Max Leitung als Führungskraft.",
+            ("rag_chat",),
+            None,
+        ),
+        (
+            "Max Leitung ist Vorgesetzter von Erika Beispiel.",
+            ("personio_directory", "rag_chat"),
+            _result_driven_personio_payload(status="not_found"),
+        ),
+        (
+            "Erika Beispiel hat die Telefonnummer +49 1234 567890.",
+            ("rag_chat",),
+            None,
+        ),
+    ),
+)
+def test_result_driven_rag_rejects_named_person_relationship_and_contact_formulations(
+    claim_text, called_tools, personio_result
+):
+    harness = load_harness()
+    rag_result = _result_driven_rag_payload().replace(
+        "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+        "das Funktionspostfach ist team@example.invalid.",
+        claim_text,
+    )
+
+    decision = harness.build_result_driven_decision(
+        called_tools=called_tools,
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=personio_result,
+        rag_result=rag_result,
+    )
+
+    assert decision is not None
+    if "Telefonnummer" not in claim_text:
+        assert decision.evidence_bundle.status == "unsupported"
+    if "Telefonnummer" not in claim_text:
+        assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize(
+    "claim_text",
+    (
+        "Kahle Gruppe ist über team@example.invalid erreichbar.",
+        "Das Team Buchhaltung ist unter team@example.invalid erreichbar.",
+    ),
+)
+def test_result_driven_rag_keeps_functional_contacts_without_person_subject(claim_text):
+    harness = load_harness()
+    rag_result = _result_driven_rag_payload().replace(
+        "Der dokumentierte Kontaktweg ist das Ticketsystem; "
+        "das Funktionspostfach ist team@example.invalid.",
+        claim_text,
+    )
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=rag_result,
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "supported"
+    assert decision.evidence_bundle.supported_claims[0]["text"] == claim_text
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_mixed_evidence_keeps_personio_authority_and_rag_path():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat", "personio_directory"),
+        query="Wer arbeitet aktuell dort und wie ist der dokumentierte Kontaktweg?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        rag_result=_result_driven_rag_payload(include_current_people=True),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    assert decision is not None
+    claims = decision.evidence_bundle.supported_claims
+    assert claims[0]["display_name"] == "Erika Beispiel"
+    assert claims[0]["position"] == "Serviceassistenz"
+    assert all(
+        not isinstance(claim, dict)
+        or (
+            claim.get("display_name") != "Veralteter Name"
+            and claim.get("position") != "Veraltete Rolle"
+        )
+        for claim in claims
+    )
+    assert any(
+        isinstance(claim, dict) and "Ticketsystem" in str(claim.get("text") or "")
+        for claim in claims
+    )
+    assert decision.answer_contract.allowed_contact_values == (
+        "person@example.invalid",
+
+    )
+
+
+def _decision_for_rag_authority(harness, rag_result, personio_not_found):
+    return harness.build_result_driven_decision(
+        called_tools=("personio_directory", "rag_chat") if personio_not_found else ("rag_chat",),
+        query="Freie Formulierung ohne Quellenrouting",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user", "groups": []},
+        personio_result=_result_driven_personio_payload(status="not_found") if personio_not_found else None,
+        rag_result=rag_result,
+    )
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize("keep_canonical", (False, True), ids=("alias-only", "collision"))
+@pytest.mark.parametrize(
+    ("canonical_key", "alias_key", "alias_value"),
+    (
+        ("text", "Text", "Erika Beispiel: erika@example.invalid."),
+        ("evidence_span", "Evidence Span", "Erika Beispiel: erika@example.invalid."),
+        ("source_id", "Source ID", "R999"),
+        ("claim_id", "Claim ID", "R1C999"),
+        ("document_id", "Document ID", "doc-synthetic"),
+    ),
+)
+def test_result_driven_rag_claim_contract_rejects_aliases_and_collisions(
+    personio_not_found, keep_canonical, canonical_key, alias_key, alias_value
+):
+    harness = load_harness()
+    bundle = json.loads(_result_driven_rag_payload().split("EVIDENCE_BUNDLE_JSON: ", 1)[1])
+    claim = bundle["supported_claims"][0]
+    if not keep_canonical:
+        del claim[canonical_key]
+    claim[alias_key] = alias_value
+
+    decision = _decision_for_rag_authority(
+        harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle), personio_not_found
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize("direct_bundle", (False, True), ids=("serialized", "bundle"))
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("claim_id", ""), ("claim_id", None), ("source_id", ""), ("source_id", None), ("source_id", "R999")),
+)
+def test_result_driven_rag_claim_contract_requires_valid_identifiers(
+    personio_not_found, direct_bundle, field, value
+):
+    harness = load_harness()
+    bundle = json.loads(_result_driven_rag_payload().split("EVIDENCE_BUNDLE_JSON: ", 1)[1])
+    bundle["supported_claims"][0][field] = value
+    rag_result = (
+        harness.EvidenceBundle(
+            status="supported",
+            supported_claims=tuple(bundle["supported_claims"]),
+            sources=tuple(bundle["sources"]),
+        )
+        if direct_bundle
+        else "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle)
+    )
+
+    decision = _decision_for_rag_authority(harness, rag_result, personio_not_found)
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize("duplicate", ("claim", "source"))
+def test_result_driven_rag_claim_contract_rejects_duplicate_identifiers(
+    personio_not_found, duplicate
+):
+    harness = load_harness()
+    bundle = json.loads(_result_driven_rag_payload().split("EVIDENCE_BUNDLE_JSON: ", 1)[1])
+    if duplicate == "claim":
+        bundle["supported_claims"].append(dict(bundle["supported_claims"][0]))
+    else:
+        bundle["sources"].append({"id": "R1", "title": "Andere synthetische Quelle"})
+    rag_result = harness.EvidenceBundle(
+        status="supported",
+        supported_claims=tuple(bundle["supported_claims"]),
+        sources=tuple(bundle["sources"]),
+    )
+
+    decision = _decision_for_rag_authority(harness, rag_result, personio_not_found)
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize("source_id", ("R1", "#1"))
+def test_result_driven_rag_exact_claim_metadata_is_preserved(personio_not_found, source_id):
+    harness = load_harness()
+    claim = {
+        "claim_id": "R1C1",
+        "source_id": source_id,
+        "text": "Der dokumentierte Kontaktweg ist das Ticketsystem.",
+        "evidence_span": "Funktionspostfach: team@example.invalid.",
+        "document_id": "doc-synthetic",
+        "version_id": "version-synthetic",
+        "claim_type": "contact_details",
+    }
+    rag_result = harness.EvidenceBundle(
+        status="supported",
+        supported_claims=(dict(claim),),
+        sources=({"id": source_id, "title": "Kontaktwege"},),
+    )
+
+    decision = _decision_for_rag_authority(harness, rag_result, personio_not_found)
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == ("partially_supported" if personio_not_found else "supported")
+    assert decision.evidence_bundle.supported_claims == (claim,)
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize("status", ("unsupported", "partially_supported"))
+@pytest.mark.parametrize("sanitize", (False, True))
+def test_result_driven_rag_support_status_is_monotonic(personio_not_found, status, sanitize):
+    harness = load_harness()
+
+    decision = _decision_for_rag_authority(
+        harness,
+        _result_driven_rag_payload(
+            evidence_status=status,
+            extra_claim_fields={"personio_id": "personio-synthetic-1"} if sanitize else None,
+        ),
+        personio_not_found,
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == status
+    if status == "unsupported":
+        assert decision.evidence_bundle.supported_claims == ()
+        assert decision.answer_contract.allowed_contact_values == ()
+    else:
+        assert len(decision.evidence_bundle.supported_claims) == 1
+        assert "personio_id" not in decision.evidence_bundle.supported_claims[0]
+        assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize("field", ("text", "evidence_span"))
+@pytest.mark.parametrize(
+    "claim_text",
+    (
+        "Erika Beispiel ist Ansprechpartnerin. E-Mail: erika@example.invalid.",
+        "Max Muster ist Kontaktperson. E-Mail: mm@example.invalid.",
+        "Erika Beispiel. erika@example.invalid.",
+        "Erika Beispiel ist Ansprechpartnerin. Telefon: +49 1234 567890.",
+        "Erika Beispiel. Telefonnummer: +49 1234 567890.",
+    ),
+)
+def test_result_driven_rag_rejects_adjacent_contact_association(
+    personio_not_found, field, claim_text
+):
+    harness = load_harness()
+
+    decision = _decision_for_rag_authority(
+        harness,
+        _result_driven_rag_payload(extra_claim_fields={field: claim_text}),
+        personio_not_found,
+    )
+
+    assert decision is not None
+    assert decision.answer_contract.allowed_contact_bindings == ()
+    # Prose is not a source of contact authority; only typed bindings can grant it.
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize(
+    ("claim_text", "contacts"),
+    (
+        ("Erika Beispiel dokumentiert den Fuhrpark-Prozess.", ()),
+        ("Erika Beispiel prüft den Leitfaden.", ()),
+        ("Marketing Zentrale: team@example.invalid.", ()),
+        (
+            "Dokumentierte Kontaktwege stehen im Intranet. Funktionspostfach: team@example.invalid.",
+            (),
+        ),
+        (
+            "Dokumentierte Kontaktwege stehen im Intranet. E-Mail: team@example.invalid.",
+            (),
+        ),
+        (
+            "Erika Beispiel beschreibt den Leitfaden. Funktionspostfach: team@example.invalid.",
+            (),
+        ),
+    ),
+)
+def test_result_driven_rag_keeps_process_and_functional_contact_boundaries(
+    personio_not_found, claim_text, contacts
+):
+    harness = load_harness()
+
+    decision = _decision_for_rag_authority(
+        harness, _result_driven_rag_payload(claim_text=claim_text), personio_not_found
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == ("partially_supported" if personio_not_found else "supported")
+    assert decision.evidence_bundle.supported_claims[0]["text"] == claim_text
+    assert decision.evidence_bundle.supported_claims[0]["evidence_span"] == claim_text
+    assert decision.answer_contract.allowed_contact_values == contacts
+
+
+@pytest.mark.parametrize("personio_not_found", (False, True))
+@pytest.mark.parametrize(
+    "claim_text",
+    (
+        "Erika Beispiel ist die Chefin von Max Muster.",
+        "Max Muster hat Erika Beispiel als Teamleiterin.",
+        "Der Teamleiter von Erika Beispiel ist Max Muster.",
+        "Erika Beispiel ist die Führungskraft von Max Muster.",
+        "Die Vorgesetzte von Max Muster ist Erika Beispiel.",
+        "Erika Beispiel ist Managerin von Max Muster.",
+        "Der Supervisor von Erika Beispiel ist Max Muster.",
+        "Max Muster hat die Teamleitung für Erika Beispiel.",
+        "Erika Beispiel leitet Max Muster.",
+        "Max Muster führt Erika Beispiel.",
+    ),
+)
+def test_result_driven_rag_rejects_exact_relation_word_forms(personio_not_found, claim_text):
+    harness = load_harness()
+
+    decision = _decision_for_rag_authority(
+        harness, _result_driven_rag_payload(claim_text=claim_text), personio_not_found
+    )
+
+    assert decision is not None
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+
+
+@pytest.mark.parametrize("claim_text", (
+    "Erika Beispiel prüft die Leitstelle.",
+    "Erika Beispiel dokumentiert den Fuhrpark.",
+    "Erika Beispiel prüft den Leitfaden.",
+))
+def test_result_driven_process_nouns_do_not_assert_supervision(claim_text):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, _result_driven_rag_payload(claim_text=claim_text), False)
+    assert decision.evidence_bundle.status == "supported"
+    assert decision.evidence_bundle.supported_claims[0]["text"] == claim_text
+
+
+@pytest.mark.parametrize("claim_text", (
+    "Erika Beispiel führte Max Muster.",
+    "Erika Beispiel leitete Max Muster.",
+    "Erika Beispiel ist Leiterin von Max Muster.",
+    "Erika Beispiel und Max Muster sind Führungskräfte.",
+))
+def test_result_driven_inflected_supervision_still_requires_personio(claim_text):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, _result_driven_rag_payload(claim_text=claim_text), False)
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+
+
+def _typed_rag_contact_bundle():
+    row = "| IT | E-Mail | it@example.invalid | Störungen | gruppenweit |"
+    contact = {"schema_version": "kahle.functional-contact.v1", "function": "IT", "channel": "email",
+        "value": "it@example.invalid", "purpose": "Störungen", "scope": "gruppenweit", "row_number": 4,
+        "evidence_span": row}
+    return {"schema_version": "kahle.evidence-bundle.v1", "status": "supported", "missing_information": [], "conflicts": [],
+        "sources": [{"number": 1, "document_id": "d1", "version_id": "v1", "chunk_kind": "functional_contact", "functional_contact": dict(contact)}],
+        "supported_claims": [{"claim_id": "R1C1", "source_id": "#1", "document_id": "d1", "version_id": "v1",
+            "text": row, "evidence_span": row, "claim_type": "functional_contact", "functional_contact": dict(contact)}]}
+
+
+@pytest.mark.parametrize("not_found", [False, True])
+@pytest.mark.parametrize("direct", [False, True])
+def test_result_driven_typed_contact_has_full_source_binding(not_found, direct):
+    harness = load_harness()
+    bundle = _typed_rag_contact_bundle()
+    raw = harness.EvidenceBundle(status=bundle["status"], supported_claims=tuple(bundle["supported_claims"]), sources=tuple(bundle["sources"])) if direct else "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle)
+    decision = _decision_for_rag_authority(harness, raw, not_found)
+    assert decision.answer_contract.allowed_contact_values == ("it@example.invalid",)
+    assert decision.answer_contract.allowed_contact_bindings == ({
+        "source_kind": "rag_chat", "source_id": "#1", "claim_id": "R1C1", "channel": "email", "value": "it@example.invalid",
+        "function": "IT", "purpose": "Störungen", "scope": "gruppenweit", "document_id": "d1", "version_id": "v1", "row_number": 4,
+    },)
+    assert decision.evidence_bundle.status == ("partially_supported" if not_found else "supported")
+
+
+@pytest.mark.parametrize("tamper", ["source_row", "document", "version", "span", "type", "unknown_field", "row_bool", "claim_id", "source_id", "source_alias"])
+def test_result_driven_typed_contact_tampering_grants_nothing(tamper):
+    harness = load_harness()
+    bundle = _typed_rag_contact_bundle()
+    claim, source = bundle["supported_claims"][0], bundle["sources"][0]
+    if tamper == "source_row": source["functional_contact"]["row_number"] = 5
+    if tamper == "document": claim["document_id"] = "other"
+    if tamper == "version": source["version_id"] = "other"
+    if tamper == "span": claim["evidence_span"] = "different"
+    if tamper == "type": claim["claim_type"] = "factual_support"
+    if tamper == "unknown_field": claim["functional_contact"]["Value"] = "other@example.invalid"
+    if tamper == "row_bool": claim["functional_contact"]["row_number"] = True
+    if tamper == "claim_id": claim["claim_id"] = " R1C1 "
+    if tamper == "source_id": claim["source_id"] = " #1 "
+    if tamper == "source_alias": source["id"] = "R2"
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle), False)
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.answer_contract.allowed_contact_bindings == ()
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("not_found", [False, True])
+def test_result_driven_generic_process_preserved_without_contact_permission(not_found):
+    harness = load_harness()
+    text = "Öffne das Portal und erfasse die Anfrage; Rückfragen an team@example.invalid."
+    decision = _decision_for_rag_authority(harness, _result_driven_rag_payload(claim_text=text), not_found)
+    assert decision.evidence_bundle.supported_claims[0]["text"] == text
+    assert decision.answer_contract.allowed_contact_values == ()
+    assert decision.answer_contract.allowed_contact_bindings == ()
+
+
+def test_result_driven_personio_binding_comes_from_field_not_prose():
+    harness = load_harness()
+    payload = _result_driven_personio_payload()
+    payload["claims"][0]["text"] = "another@example.invalid"
+    decision = harness.build_result_driven_decision(called_tools=("personio_directory",), query="Kontakt", messages=[],
+        model_id="kahle-vinci", permission_scope={"user_id": "u"}, personio_result=payload)
+    assert decision.answer_contract.allowed_contact_values == ("person@example.invalid",)
+    assert decision.answer_contract.allowed_contact_bindings == ({"source_kind": "personio_directory", "source_id": "P1",
+        "claim_id": "P1C1", "channel": "email", "value": "person@example.invalid"},)
+
+
+@pytest.mark.parametrize("status", ["unsupported", "partially_supported"])
+def test_result_driven_typed_contact_does_not_upgrade_declared_status(status):
+    harness = load_harness()
+    bundle = _typed_rag_contact_bundle()
+    bundle["status"] = status
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle), False)
+    assert decision.evidence_bundle.status == status
+    assert decision.answer_contract.allowed_contact_values == (() if status == "unsupported" else ("it@example.invalid",))
+
+
+def test_result_driven_typed_claim_id_must_match_its_source_number():
+    harness = load_harness()
+    bundle = _typed_rag_contact_bundle()
+    bundle["supported_claims"][0]["claim_id"] = "R2C1"
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle), False)
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+def test_result_driven_conflicting_typed_bindings_withhold_both_values():
+    harness = load_harness()
+    bundle = _typed_rag_contact_bundle()
+    other = json.loads(json.dumps(bundle).replace("it@example.invalid", "other@example.invalid"))
+    other["sources"][0]["number"] = 2
+    other["supported_claims"][0].update(claim_id="R2C1", source_id="#2")
+    bundle["sources"].extend(other["sources"])
+    bundle["supported_claims"].extend(other["supported_claims"])
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle), False)
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("bad", ["person@example.invalid extra", ["person@example.invalid"], True])
+def test_result_driven_personio_invalid_contact_field_cannot_grant(bad):
+    harness = load_harness()
+    payload = _result_driven_personio_payload()
+    payload["claims"][0]["business_email"] = bad
+    decision = harness.build_result_driven_decision(called_tools=("personio_directory",), query="Kontakt", messages=[],
+        model_id="kahle-vinci", permission_scope={"user_id": "u"}, personio_result=payload)
+    assert decision.answer_contract.allowed_contact_values == ()
+
+
+@pytest.mark.parametrize("answer", [
+    "other@example.invalid [1]",
+    "+49 1234 567890 [1]",
+    "https://other.example.invalid/contact [1]",
+    "[it@example.invalid](mailto:other@example.invalid) [1]",
+    "[Kontakt](mailto:other%40example.invalid) [1]",
+    "<a href='mailto:other&#64;example.invalid'>Kontakt</a> [1]",
+])
+def test_contact_validation_rejects_unbound_output_without_logging_values(answer):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    result = harness.validate_answer(answer, decision)
+    assert result.status == "retry_required"
+    assert "unbound_contact_literal" in {item["code"] for item in result.violations}
+    assert "example.invalid" not in json.dumps(result.to_dict())
+
+
+@pytest.mark.parametrize("answer", [
+    "IT: it@example.invalid [1]",
+    "[it@example.invalid](mailto:it@example.invalid) [1]",
+])
+def test_contact_validation_accepts_current_typed_binding(answer):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    assert harness.validate_answer(answer, decision).status == "accepted"
+
+
+@pytest.mark.parametrize(("answer", "accepted"), [
+    ("[Quelle](https://docs.example.invalid/d1?owner=other@example.invalid) [1]", True),
+    ("[other@example.invalid](https://docs.example.invalid/d1?owner=other@example.invalid) [1]", False),
+    ("https://docs.example.invalid/d1?owner=other@example.invalid/extra [1]", False),
+    ("[it@example.invalid](https://docs.example.invalid/d1?owner=other@example.invalid) [1]", False),
+])
+def test_contact_validation_reference_url_is_exact_and_does_not_authorize_label(answer, accepted):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    result = harness.validate_answer(answer, decision, reference_urls=("https://docs.example.invalid/d1?owner=other@example.invalid",))
+    assert (result.status == "accepted") is accepted
+
+
+def test_contact_validation_does_not_trust_detached_allowed_values():
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False).to_dict()
+    decision["answer_contract"]["allowed_contact_values"] = ["other@example.invalid"]
+    decision["answer_contract"]["allowed_contact_bindings"] = [{"channel": "email", "value": "other@example.invalid"}]
+    assert harness.validate_answer("other@example.invalid [1]", decision).status == "retry_required"
+
+
+@pytest.mark.parametrize(("kind", "channel", "value"), [
+    ("Telefon", "phone", "+49 1234 567890"),
+    ("Kontaktseite", "url", "https://support.example.invalid/tickets"),
+])
+def test_contact_validation_accepts_typed_phone_and_url(kind, channel, value):
+    harness = load_harness()
+    bundle = _typed_rag_contact_bundle()
+    row = f"| IT | {kind} | {value} | Störungen | gruppenweit |"
+    for record in (bundle["supported_claims"][0], bundle["sources"][0]):
+        record["functional_contact"].update(channel=channel, value=value, evidence_span=row)
+    bundle["supported_claims"][0].update(text=row, evidence_span=row)
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle), False)
+    assert harness.validate_answer(f"IT: {value} [1]", decision).status == "accepted"
+
+
+@pytest.mark.parametrize(("answer", "accepted"), [
+    ("**it@example.invalid** [1]", True),
+    ("`it@example.invalid` [1]", True),
+    ("[Quelle](/wissen/api/portal/sources/v1) [1]", True),
+    ("[Quelle](/wissen/api/portal/sources/v1/other) [1]", False),
+    ("[Kontakt](/contact) [1]", False),
+    ("[Kontakt](//other.example.invalid/contact) [1]", False),
+    ("[it@example.invalid](/wissen/api/portal/sources/v1) [1]", False),
+    ("<a href='/wissen/api/portal/sources/v1'>it@example.invalid</a> [1]", False),
+    ("[Quelle][doc] [1]\n\n[doc]: /wissen/api/portal/sources/v1", True),
+    ("[Kontakt][doc] [1]\n\n[doc]: /contact", False),
+    ("[it@example.invalid][doc] [1]\n\n[doc]: /wissen/api/portal/sources/v1", False),
+])
+def test_contact_validation_checks_rendered_labels_and_relative_targets(answer, accepted):
+    harness = load_harness()
+    decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
+    result = harness.validate_answer(answer, decision, reference_urls=("/wissen/api/portal/sources/v1",))
+    assert (result.status == "accepted") is accepted

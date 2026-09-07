@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,201 @@ def load_reporter():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def shadow_run(status="accepted", delivery="observed"):
+    return {
+        "case_id": "trusted_case", "profile": "employee",
+        "metrics": {
+            "model_id": "KAHLE-Vinci", "intent_kind": "employee_directory",
+            "actual_tools": ["personio_directory"], "source_kinds": ["personio_directory"],
+            "evidence_status": "supported", "source_count": 1,
+            "permission_scope_present": True, "validation_mode": "shadow",
+            "delivery_status": delivery, "final_validation_status": status,
+            "assertions": {"forbidden_fields_absent": True},
+        },
+    }
+
+
+def outcome_matrix(required=("rag_chat",), allowed=("rag_chat", "personio_directory"), sources=("rag_chat",)):
+    matrix = trusted_matrix()
+    matrix["schema_version"] = "kahle.harness-acceptance-matrix.v2"
+    matrix["cases"] = [{
+        "id": "trusted_case", "required_tools": list(required),
+        "allowed_tools": list(allowed), "expected_source_kinds": list(sources),
+        "allowed_source_kinds": list(allowed),
+        "allowed_evidence_status": ["supported", "unsupported"],
+        "forbidden_fields": ["private_email"],
+        "required_assertions": ["forbidden_fields_absent"],
+    }]
+    return matrix
+
+
+def outcome_run(tools=("rag_chat",), sources=("rag_chat",)):
+    run = shadow_run()
+    run["metrics"].update(actual_tools=list(tools), validated_source_kinds=list(sources),
+                          feedback_link_present=True)
+    return run
+
+
+def outcome_report(run, matrix=None):
+    return load_reporter().build_acceptance_report(
+        [run], matrix=matrix or outcome_matrix(), profile_authorization={"employee": True},
+    )
+
+
+@pytest.mark.parametrize("tools", [("rag_chat",), ("rag_chat", "personio_directory"),
+                                  ("personio_directory", "rag_chat", "rag_chat")])
+def test_outcome_report_accepts_required_tools_with_optional_tools_in_any_order(tools):
+    report = outcome_report(outcome_run(tools, tools))
+    assert report["summary"]["passed"] == 1
+    assert report["results"][0]["required_tools"] == ["rag_chat"]
+
+
+@pytest.mark.parametrize("tools,reason", [
+    (("personio_directory",), "required_tool_missing"),
+    (("rag_chat", "web_search"), "tool_not_allowed"),
+    (("rag_chat", "private-tool@example.invalid"), "tool_not_allowed"),
+])
+def test_outcome_report_keeps_missing_and_unexpected_execution_visible(tools, reason):
+    report = outcome_report(outcome_run(tools))
+    assert report["summary"]["failed"] == 1
+    assert reason in report["coverage"][0]["reasons"]
+    assert "private-tool@example.invalid" not in json.dumps(report)
+
+
+def test_outcome_report_never_uses_legacy_plans_or_unvalidated_sources():
+    run = outcome_run()
+    del run["metrics"]["actual_tools"]
+    del run["metrics"]["validated_source_kinds"]
+    run["metrics"].update(tool_called="rag_chat", required_tools=["rag_chat"], source_kinds=["rag_chat"])
+    reasons = outcome_report(run)["coverage"][0]["reasons"]
+    assert "actual_tools_missing" in reasons
+    assert "validated_sources_missing" in reasons
+
+
+def test_outcome_report_requires_validated_source_even_when_tool_ran():
+    report = outcome_report(outcome_run(sources=()))
+    assert "expected_source_kinds_mismatch" in report["coverage"][0]["reasons"]
+
+
+def test_outcome_report_rejects_source_without_executed_tool():
+    report = outcome_report(outcome_run(sources=("rag_chat", "personio_directory")))
+    assert "source_without_tool" in report["coverage"][0]["reasons"]
+
+
+def test_outcome_report_general_text_needs_neither_tools_nor_observation():
+    run = outcome_run((), ())
+    run["metrics"].update(evidence_status="unsupported", source_count=0,
+                          validation_mode="", delivery_status="accepted",
+                          final_validation_status="not_run", feedback_link_present=False)
+    report = outcome_report(run, outcome_matrix((), (), ()))
+    assert report["summary"]["passed"] == 1
+
+
+def test_outcome_report_internal_answer_cannot_downgrade_to_legacy_validation():
+    run = outcome_run()
+    run["metrics"].update(validation_mode="", delivery_status="safe_fallback")
+    assert "observation_required" in outcome_report(run)["coverage"][0]["reasons"]
+
+
+def test_outcome_fault_injection_is_separate_but_never_hidden_if_reported():
+    matrix = outcome_matrix()
+    fault = {**matrix["cases"][0], "id": "fault_case", "evaluation_group": "fault_injection"}
+    matrix["cases"].append(fault)
+    assert outcome_report(outcome_run(), matrix)["summary"]["passed"] == 1
+    fault_run = outcome_run()
+    fault_run["case_id"] = "fault_case"
+    fault_run["metrics"]["final_validation_status"] = "retry_required"
+    report = load_reporter().build_acceptance_report(
+        [outcome_run(), fault_run], matrix=matrix, profile_authorization={"employee": True})
+    assert report["summary"]["failed"] == 1
+    assert report["observations"][0]["flagged"] == 1
+
+
+def test_outcome_supported_cannot_use_a_raw_source_count_as_validated_evidence():
+    report = outcome_report(outcome_run(sources=()), outcome_matrix(sources=()))
+    assert "supported_answer_without_validated_source" in report["coverage"][0]["reasons"]
+
+
+@pytest.mark.parametrize("tools", [("rag_chat",), ("personio_directory",)])
+def test_outcome_explicit_mixed_question_requires_each_tool(tools):
+    report = outcome_report(outcome_run(tools, tools),
+        outcome_matrix(("personio_directory", "rag_chat"),
+                       ("personio_directory", "rag_chat"),
+                       ("personio_directory", "rag_chat")))
+    assert "required_tool_missing" in report["coverage"][0]["reasons"]
+
+
+def test_outcome_pure_person_case_rejects_extra_rag():
+    report = outcome_report(outcome_run(("personio_directory", "rag_chat")),
+        outcome_matrix(("personio_directory",), ("personio_directory",), ("personio_directory",)))
+    assert "tool_not_allowed" in report["coverage"][0]["reasons"]
+
+
+def test_outcome_unknown_sources_are_reported_without_disclosing_raw_labels():
+    report = outcome_report(outcome_run(sources=("rag_chat", "private-source@example.invalid")))
+    assert "source_kind_not_allowed" in report["coverage"][0]["reasons"]
+    assert report["results"][0]["validated_source_kinds"] == ["rag_chat", "unknown_source"]
+    assert "private-source@example.invalid" not in json.dumps(report)
+
+
+def test_outcome_assertions_cannot_be_passed_outside_the_normalized_metrics():
+    run = outcome_run()
+    run["assertions"] = run["metrics"].pop("assertions")
+    report = outcome_report(run)
+    assert "assertion_failed:forbidden_fields_absent" in report["coverage"][0]["reasons"]
+    assert report["results"][0]["assertions"] == {"forbidden_fields_absent": False}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("required_tools", ["web_search"]), ("allowed_tools", []),
+    ("expected_source_kinds", ["personio_directory"]),
+])
+def test_outcome_matrix_rejects_impossible_source_and_tool_contracts(field, value):
+    matrix = outcome_matrix(allowed=("rag_chat",))
+    matrix["cases"][0][field] = value
+    reporter = load_reporter()
+    with pytest.raises(reporter.MatrixContractError):
+        reporter.build_acceptance_report([], matrix=matrix)
+
+
+@pytest.mark.parametrize("status, passed", [
+    ("accepted", True), ("retry_required", False),
+    ("observation_error", False), ("not_run", False),
+])
+def test_shadow_report_separates_delivery_from_observed_quality(status, passed):
+    reporter = load_reporter()
+    report = reporter.build_acceptance_report(
+        [shadow_run(status)], matrix=trusted_matrix(), profile_authorization={"employee": True},
+    )
+    assert (report["summary"]["passed"] == 1) is passed
+    result = report["results"][0]
+    assert result["validation_mode"] == "shadow"
+    assert result["delivery_status"] == "observed"
+    assert result["validation_status"] == status
+
+
+def test_shadow_report_does_not_treat_a_replaced_answer_as_unmodified_delivery():
+    reporter = load_reporter()
+    report = reporter.build_acceptance_report(
+        [shadow_run("accepted", "safe_fallback")], matrix=trusted_matrix(),
+        profile_authorization={"employee": True},
+    )
+    assert report["summary"]["failed"] == 1
+
+
+def test_shadow_report_counts_findings_and_missing_observations_separately():
+    reporter = load_reporter()
+    runs = [shadow_run(status) for status in ("accepted", "retry_required", "observation_error", "not_run")]
+    runs[1]["answer"] = "private@example.invalid"
+    report = reporter.build_acceptance_report(runs, matrix=trusted_matrix(), profile_authorization={"employee": True})
+    assert report["observations"] == [{
+        "model_id": "KAHLE-Vinci", "profile": "employee", "sample_size": 4,
+        "checked": 2, "flagged": 1, "observation_errors": 1, "not_observed": 1,
+        "flagged_rate": 0.5,
+    }]
+    assert "private@example.invalid" not in json.dumps(report)
 
 
 def trusted_matrix(*, models=("KAHLE-Vinci",), profiles=("employee",), cases=None):
@@ -178,7 +374,7 @@ def test_acceptance_report_fails_available_model_when_required_cases_are_missing
 def test_acceptance_matrix_contains_the_original_model_independent_reference_cases():
     matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
 
-    assert matrix["schema_version"] == "kahle.harness-acceptance-matrix.v1"
+    assert matrix["schema_version"] == "kahle.harness-acceptance-matrix.v2"
     assert matrix["expected_models"] == [
         "KAHLE-Vinci",
         "KAHLE-Vinci-Thinking",
@@ -217,15 +413,38 @@ def test_acceptance_matrix_contains_the_original_model_independent_reference_cas
         "process_responsibility_complaint",
     }.issubset(case_ids)
     for case in matrix["cases"]:
-        assert case["expected_tools"] in (
+        assert case["required_tools"] in (
             ["personio_directory"],
             ["rag_chat"],
             ["personio_directory", "rag_chat"],
             [],
         )
-        assert case["expected_intent"]
+        assert set(case["required_tools"]).issubset(case["allowed_tools"])
         assert case["allowed_evidence_status"]
         assert case["forbidden_fields"]
+
+
+def test_contact_matrix_covers_positive_negative_context_and_unmodified_delivery():
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in matrix["cases"]}
+    assert {
+        "functional_contact_email", "functional_contact_phone", "functional_contact_page",
+        "functional_contact_prose", "functional_contact_missing_scope",
+        "functional_contact_ambiguous_scope", "functional_contact_conflict",
+        "functional_contact_denied", "functional_contact_old_version",
+        "functional_contact_wrong_assignment", "functional_contact_hint",
+        "functional_contact_shadow_fault", "explicit_mailbox_and_current_staff",
+        "ambiguous_area_contact", "general_text_no_tools", "compact_noun_query",
+        "supervisor_explicit_name_change", "supervisor_referential_followup",
+    }.issubset(cases)
+    assert cases["explicit_mailbox_and_current_staff"]["required_tools"] == ["personio_directory", "rag_chat"]
+    assert cases["ambiguous_area_contact"]["required_tools"] == ["rag_chat"]
+    assert set(cases["ambiguous_area_contact"]["allowed_tools"]) == {"rag_chat", "personio_directory"}
+    assert cases["functional_contact_shadow_fault"]["evaluation_group"] == "fault_injection"
+    assert cases["general_text_no_tools"]["allowed_tools"] == []
+    # The real reporter validates the complete versioned contract, not just IDs.
+    report = load_reporter().build_acceptance_report([], matrix=matrix)
+    assert report["summary"]["passed"] == 0
 
 
 def test_acceptance_report_rejects_rag_for_a_pure_directory_case():

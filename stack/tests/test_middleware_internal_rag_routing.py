@@ -398,7 +398,7 @@ def test_supervisor_follow_up_passes_the_previous_directory_question_as_private_
 
 
 def test_consecutive_named_supervisor_question_does_not_reuse_the_previous_subject():
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     messages = [
         {"role": "user", "content": "Wer ist die Führungskraft von Anna Beispiel?"},
         {"role": "assistant", "content": "Personio-Treffer."},
@@ -408,8 +408,30 @@ def test_consecutive_named_supervisor_question_does_not_reuse_the_previous_subje
     assert candidate_query(messages, messages[-1]["content"]) == ""
 
 
+@pytest.mark.parametrize(
+    "follow_up",
+    (
+        "Wer ist die Führungskraft im Teiledienst Hannover?",
+        "Wer ist die Führungskraft im Marketing?",
+        "Wer ist die Führungskraft der Rechnungslegung?",
+        "Wer ist die Führungskraft im Service in Nienburg?",
+    ),
+)
+def test_consecutive_explicit_area_supervisor_question_does_not_reuse_previous_area(
+    follow_up,
+):
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
+    messages = [
+        {"role": "user", "content": "Wer ist die Führungskraft der Disposition?"},
+        {"role": "assistant", "content": "Personio-Treffer."},
+        {"role": "user", "content": follow_up},
+    ]
+
+    assert candidate_query(messages, follow_up) == ""
+
+
 def test_polite_pronoun_does_not_override_an_explicit_supervisor_subject():
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     follow_up = "Können Sie mir die Führungskraft von Berta Beispiel nennen?"
     messages = [
         {"role": "user", "content": "Wer ist die Führungskraft von Anna Beispiel?"},
@@ -431,7 +453,7 @@ def test_polite_pronoun_does_not_override_an_explicit_supervisor_subject():
     ),
 )
 def test_referential_supervisor_follow_up_keeps_the_previous_user_context(follow_up):
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     prior_query = "Wer ist Anna Beispiel?"
     messages = [
         {"role": "user", "content": prior_query},
@@ -443,7 +465,7 @@ def test_referential_supervisor_follow_up_keeps_the_previous_user_context(follow
 
 
 def test_possessive_wording_does_not_reuse_context_for_other_intents():
-    candidate_query = load_function_from_middleware("_supervisor_candidate_query")
+    candidate_query = load_internal_knowledge_function("_supervisor_candidate_query")
     prior_query = "Wie funktioniert die Urlaubsfreigabe?"
     messages = [
         {"role": "user", "content": prior_query},
@@ -474,6 +496,95 @@ def test_planned_rag_tool_call_is_not_forced_outside_the_preroute_contract():
         {},
         "Wie ist die E-Mail der Personalabteilung?",
     ) == []
+
+
+def test_knowledge_routing_mode_defaults_to_legacy_and_accepts_only_two_values(
+    monkeypatch,
+):
+    routing_mode = load_function_from_middleware("_knowledge_routing_mode")
+
+    monkeypatch.delenv("KAHLE_KNOWLEDGE_ROUTING_MODE", raising=False)
+    assert routing_mode() == "legacy"
+    monkeypatch.setenv("KAHLE_KNOWLEDGE_ROUTING_MODE", "model_led")
+    assert routing_mode() == "model_led"
+    monkeypatch.setenv("KAHLE_KNOWLEDGE_ROUTING_MODE", "legacy")
+    assert routing_mode() == "legacy"
+    monkeypatch.setenv("KAHLE_KNOWLEDGE_ROUTING_MODE", "unexpected")
+    assert routing_mode() == "legacy"
+
+
+def test_model_led_executes_the_model_independent_harness_plan():
+    select_plan = load_function_from_middleware("_routing_plan_for_execution")
+    legacy_plan = object()
+
+    assert select_plan("legacy", legacy_plan) is legacy_plan
+    assert select_plan("model_led", legacy_plan) is legacy_plan
+
+
+def test_comparison_telemetry_contains_only_technical_tool_names():
+    comparison_payload = load_function_from_middleware(
+        "_knowledge_routing_comparison_payload"
+    )
+    comparison_payload.__globals__["_model_led_routing_comparison"] = (
+        load_function_from_middleware("_model_led_routing_comparison")
+    )
+    plan = SimpleNamespace(required_tools=("personio_directory", "rag_chat"))
+
+    payload = comparison_payload(plan, actual_tools=("rag_chat",))
+
+    assert payload == {
+        "legacy_required_tools": ["personio_directory", "rag_chat"],
+        "actual_tools": ["rag_chat"],
+        "matches_legacy": False,
+    }
+    assert all(
+        marker not in str(payload).casefold()
+        for marker in ("query", "evidence", "erika", "example.invalid")
+    )
+
+
+def test_model_led_comparison_treats_selected_tools_as_an_order_independent_set():
+    comparison = load_function_from_middleware("_model_led_routing_comparison")
+
+    payload = comparison(
+        ("personio_directory", "rag_chat"),
+        ("rag_chat", "personio_directory"),
+    )
+
+    assert payload == {
+        "legacy_required_tools": ["personio_directory", "rag_chat"],
+        "actual_tools": ["personio_directory", "rag_chat"],
+        "matches_legacy": True,
+    }
+    assert all(
+        marker not in str(payload).casefold()
+        for marker in ("query", "evidence", "erika", "example.invalid")
+    )
+
+
+def test_model_led_metrics_include_actual_tools_and_pii_free_comparison():
+    metric_fields = load_function_from_middleware(
+        "_knowledge_harness_routing_metric_fields"
+    )
+    metric_fields.__globals__["_knowledge_harness_tool_called"] = (
+        load_function_from_middleware("_knowledge_harness_tool_called")
+    )
+    metric_fields.__globals__["_model_led_routing_comparison"] = (
+        load_function_from_middleware("_model_led_routing_comparison")
+    )
+    metadata = {
+        "kahle_retrieval_tools": ["personio_directory", "rag_chat"],
+        "kahle_knowledge_routing_comparison": {
+            "legacy_required_tools": ["personio_directory", "rag_chat"],
+            "actual_tools": ["personio_directory", "rag_chat"],
+            "matches_legacy": True,
+        },
+    }
+
+    assert metric_fields(metadata) == {
+        "tool_called": "multi_source",
+        "routing_comparison": metadata["kahle_knowledge_routing_comparison"],
+    }
 
 
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
@@ -789,6 +900,7 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
         "sources": [{"id": "P1", "kind": "personio_directory"}],
         "sync_completed_at": "2026-08-24T10:15:00Z",
         "stale": False,
+        "resolved_intent": "person_lookup",
     }
     client = module.PersonioDirectoryClient(
         base_url="http://personio-directory:8094",
@@ -800,7 +912,13 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
         client.search("Wo arbeitet Max Mustermann?", "person_lookup", "user-1", "admin")
     )
 
-    assert result == payload
+    assert result == {
+        "status": "ok",
+        "claims": [{"display_name": "Max Mustermann", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
     assert captured["url"] == "http://personio-directory:8094/internal/search"
     assert captured["headers"] == {"X-API-Key": "internal-key"}
     assert captured["json"] == {
@@ -809,6 +927,243 @@ def test_personio_client_posts_bound_user_context_and_validates_response():
         "user_id": "user-1",
         "user_role": "admin",
     }
+
+
+def test_personio_client_accepts_approved_supervisor_consensus_metadata():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_supervisor_consensus")
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{
+            "display_name": "Erika Beispiel",
+            "source_id": "P1",
+            "supervisor_scope": "organizational_unit",
+            "candidate_count": 10,
+            "support_count": 10,
+            "support_ratio": 1.0,
+            "single_candidate_basis": False,
+        }],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": "supervisor_lookup",
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist die Führungskraft der Disposition?", "supervisor_lookup", "user-1", "admin")
+    )
+
+    assert result["status"] == "ok"
+    assert result["claims"][0]["candidate_count"] == 10
+    assert result["claims"][0]["support_ratio"] == 1.0
+    assert "supervisor_personio_id" not in repr(result)
+
+
+def test_personio_client_auto_request_uses_the_validated_resolved_intent():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto")
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": "onboarding_search",
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist im Onboarding?", "auto", "user-1", "admin")
+    )
+
+    assert result == {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    assert captured["json"]["intent"] == "auto"
+
+
+def test_personio_client_auto_request_forwards_a_supervisor_candidate_to_the_private_api():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto_supervisor_context")
+    captured = {}
+    payload = {
+        "status": "not_found",
+        "claims": [],
+        "sources": [],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": "supervisor_lookup",
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search(
+            "Wer ist ihre Führungskraft?",
+            "auto",
+            "user-1",
+            "admin",
+            candidate_query="Wer arbeitet im Teiledienst in Hannover?",
+        )
+    )
+
+    assert result["status"] == "not_found"
+    assert captured["json"] == {
+        "query": "Wer ist ihre Führungskraft?",
+        "intent": "auto",
+        "user_id": "user-1",
+        "user_role": "admin",
+        "candidate_query": "Wer arbeitet im Teiledienst in Hannover?",
+    }
+
+
+@pytest.mark.parametrize(
+    "intent",
+    ("person_lookup", "directory_search", "coworker_lookup", "onboarding_search"),
+)
+def test_personio_client_does_not_forward_candidate_for_other_explicit_intents(intent):
+    module = load_python_module(PERSONIO_CLIENT, f"personio_directory_client_{intent}_no_candidate")
+    captured = {}
+    payload = {
+        "status": "not_found",
+        "claims": [],
+        "sources": [],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+        "resolved_intent": intent,
+    }
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search(
+            "Synthetische Verzeichnisfrage",
+            intent,
+            "user-1",
+            "admin",
+            candidate_query="Synthetischer Vorgänger",
+        )
+    )
+
+    assert result["status"] == "not_found"
+    assert "candidate_query" not in captured["json"]
+
+
+@pytest.mark.parametrize("resolved_intent", [None, "uncontrolled_intent"])
+def test_personio_client_auto_request_rejects_missing_or_unknown_resolved_intent(resolved_intent):
+    module = load_python_module(PERSONIO_CLIENT, f"personio_directory_client_invalid_auto_{resolved_intent}")
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    if resolved_intent is not None:
+        payload["resolved_intent"] = resolved_intent
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist im Onboarding?", "auto", "user-1", "user")
+    )
+
+    assert result["status"] == "directory_unavailable"
+
+
+@pytest.mark.parametrize("resolved_intent", [None, "uncontrolled_intent"])
+def test_personio_client_explicit_request_rejects_missing_or_unknown_resolved_intent(resolved_intent):
+    module = load_python_module(
+        PERSONIO_CLIENT, f"personio_directory_client_invalid_explicit_{resolved_intent}"
+    )
+    captured = {}
+    payload = {
+        "status": "ok",
+        "claims": [{"display_name": "Nora Neu", "source_id": "P1"}],
+        "sources": [{"id": "P1", "kind": "personio_directory"}],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
+    if resolved_intent is not None:
+        payload["resolved_intent"] = resolved_intent
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(FakeResponse(status=200, payload=payload), captured),
+    )
+
+    result = asyncio.run(
+        client.search("Wo arbeitet Nora Neu?", "person_lookup", "user-1", "user")
+    )
+
+    assert result["status"] == "directory_unavailable"
+
+
+def test_personio_client_auto_onboarding_rejects_contact_and_personio_id_claim_fields():
+    module = load_python_module(PERSONIO_CLIENT, "personio_directory_client_auto_onboarding_private")
+    captured = {}
+    client = module.PersonioDirectoryClient(
+        base_url="http://personio-directory:8094",
+        api_key="internal-key",
+        session_factory=lambda **_: FakeSession(
+            FakeResponse(
+                status=200,
+                payload={
+                    "status": "ok",
+                    "claims": [
+                        {
+                            "display_name": "Nora Neu",
+                            "business_email": "nora.neu@example.invalid",
+                            "business_phone": "+49 511 000000",
+                            "employment_status": "ONBOARDING",
+                            "personio_id": "private-personio-id",
+                            "source_id": "P1",
+                        }
+                    ],
+                    "sources": [{"id": "P1", "kind": "personio_directory"}],
+                    "sync_completed_at": "2026-08-24T10:15:00Z",
+                    "stale": False,
+                    "resolved_intent": "onboarding_search",
+                },
+            ),
+            captured,
+        ),
+    )
+
+    result = asyncio.run(
+        client.search("Wer ist im Onboarding?", "auto", "user-1", "user")
+    )
+
+    assert result["status"] == "directory_unavailable"
+    rendered = json.dumps(result)
+    for private_value in (
+        "nora.neu@example.invalid",
+        "+49 511 000000",
+        "private-personio-id",
+    ):
+        assert private_value not in rendered
 
 
 def test_personio_client_passes_only_a_supervisor_candidate_query_to_the_private_api():
@@ -820,6 +1175,7 @@ def test_personio_client_passes_only_a_supervisor_candidate_query_to_the_private
         "sources": [],
         "sync_completed_at": "2026-08-24T10:15:00Z",
         "stale": False,
+        "resolved_intent": "supervisor_lookup",
     }
     client = module.PersonioDirectoryClient(
         base_url="http://personio-directory:8094",
@@ -837,7 +1193,13 @@ def test_personio_client_passes_only_a_supervisor_candidate_query_to_the_private
         )
     )
 
-    assert result == payload
+    assert result == {
+        "status": "not_found",
+        "claims": [],
+        "sources": [],
+        "sync_completed_at": "2026-08-24T10:15:00Z",
+        "stale": False,
+    }
     assert captured["json"] == {
         "query": "Wer davon ist die Führungskraft?",
         "intent": "supervisor_lookup",
@@ -962,6 +1324,7 @@ def test_planned_directory_retrieval_does_not_depend_on_native_function_calling(
 
 import asyncio
 import ast
+import symtable
 import copy
 import importlib.util
 import json
@@ -991,6 +1354,26 @@ HARNESS = (
     / "utils"
     / "kahle_knowledge_harness.py"
 )
+INTERNAL_KNOWLEDGE = (
+    ROOT
+    / "open-webui-overrides"
+    / "open_webui"
+    / "utils"
+    / "kahle_internal_knowledge.py"
+)
+
+
+def load_internal_knowledge_function(name: str):
+    import sys
+    override_root = str(ROOT / "open-webui-overrides")
+    sys.path.insert(0, override_root)
+    try:
+        module = load_python_module(
+            INTERNAL_KNOWLEDGE, f"kahle_internal_knowledge_{name}_{id(object())}"
+        )
+        return getattr(module, name)
+    finally:
+        sys.path.remove(override_root)
 
 
 def load_rag_routing_helpers():
@@ -1093,9 +1476,12 @@ def load_native_rag_fallback():
 
 def load_function_from_middleware(name: str):
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    required_names = {name}
+    if name == "_prerouted_rag_tool_output":
+        required_names.add("_prerouted_internal_tool_output")
     nodes = [
         node for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in required_names
     ]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
@@ -1110,6 +1496,7 @@ def load_function_from_middleware(name: str):
         "Any": Any,
         "asyncio": asyncio,
         "json": __import__("json"),
+        "os": __import__("os"),
         "output_id": lambda prefix: f"{prefix}-fixed",
         "re": re,
         "unicodedata": unicodedata,
@@ -1279,6 +1666,25 @@ def test_prerouted_rag_tool_output_keeps_native_function_call_visible():
     assert completed[0]["status"] == "completed"
     assert completed[1]["type"] == "function_call_output"
     assert completed[1]["call_id"] == "call-1"
+
+
+def test_prerouted_personio_tool_output_keeps_native_function_call_visible():
+    helper = load_function_from_middleware("_prerouted_internal_tool_output")
+
+    started = helper(
+        "call-2", "personio_directory", "Wer ist die Führungskraft im Marketing?",
+        completed=False,
+    )
+    completed = helper(
+        "call-2", "personio_directory", "Wer ist die Führungskraft im Marketing?",
+        completed=True,
+    )
+
+    assert started[0]["name"] == "personio_directory"
+    assert started[0]["status"] == "in_progress"
+    assert completed[0]["status"] == "completed"
+    assert completed[1]["type"] == "function_call_output"
+    assert completed[1]["call_id"] == "call-2"
 
 
 def test_prerouted_rag_status_is_hidden_for_personio_only_plan():
@@ -1835,6 +2241,89 @@ def test_active_harness_records_validation_without_generating_replacement_answer
     assert "'kahle_answer_validation': metadata['kahle_answer_validation']" in source
 
 
+@pytest.mark.parametrize("internal_request", [False, True])
+def test_model_led_shadow_keeps_initial_stream_visible(internal_request):
+    gate = load_function_from_middleware("_should_suppress_initial_rag_response")
+    assert gate(rag_tool_available=True, internal_rag_required=internal_request,
+                prerouted=False, routing_mode="model_led") is False
+
+
+def shadow_observation_fixture():
+    observer = load_function_from_middleware("_observe_model_led_answer")
+    harness = load_python_module(HARNESS, "kahle_shadow_observation_harness")
+    observer.__globals__["validate_knowledge_harness_answer"] = harness.validate_answer
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",), query="Wie erfasse ich eine Anfrage?", messages=[],
+        model_id="kahle-vinci", permission_scope={"user_id": "synthetic-user"},
+        rag_result='EVIDENCE_BUNDLE_JSON: ' + json.dumps({
+            "schema_version": "kahle.evidence-bundle.v1", "status": "supported",
+            "sources": [{"number": 1, "document_id": "d1", "version_id": "v1"}],
+            "supported_claims": [{"claim_id": "R1C1", "source_id": "#1", "text": "Anfrage erfassen."}],
+            "missing_information": [], "conflicts": [],
+        }),
+    )
+    return observer, decision.to_dict()
+
+
+@pytest.mark.parametrize("text, status", [
+    ("Anfrage erfassen. [1]", "accepted"),
+    ("unapproved@example.invalid [1]", "retry_required"),
+])
+def test_shadow_observation_reports_quality_without_replacing_answer(text, status):
+    observer, payload = shadow_observation_fixture()
+    output = [{"type": "message", "content": [{"type": "output_text", "text": text}]}]
+    before = json.dumps(output)
+    report = observer(output, payload)
+    assert json.dumps(output) == before
+    assert report["mode"] == "shadow"
+    assert report["attempts"][0]["status"] == status
+    assert len(report["attempts"]) == 1
+    assert "example.invalid" not in json.dumps(report)
+
+
+def test_shadow_observation_checks_all_displayed_text_parts():
+    observer, payload = shadow_observation_fixture()
+    output = [{"type": "message", "content": [
+        {"type": "output_text", "text": "unapproved@example.invalid"},
+        {"type": "output_text", "text": "Anfrage erfassen. [1]"},
+    ]}]
+    report = observer(output, payload)
+    assert report["attempts"][0]["status"] == "retry_required"
+
+
+def test_shadow_observation_failure_is_non_mutating_and_privacy_safe():
+    observer, payload = shadow_observation_fixture()
+    def broken_validator(*args, **kwargs):
+        raise ValueError("private@example.invalid")
+    observer.__globals__["validate_knowledge_harness_answer"] = broken_validator
+    output = [{"type": "message", "content": [{"type": "output_text", "text": "Antwort"}]}]
+    before = json.dumps(output)
+    report = observer(output, payload)
+    assert json.dumps(output) == before
+    assert report["attempts"][0]["status"] == "observation_error"
+    assert "example.invalid" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("target, accepted", [
+    ("/wissen/api/portal/sources/v1", True),
+    ("/wissen/api/portal/sources/v1/../other", False),
+    ("/wissen/api/portal/sources/v1?next=https://other.example.invalid", False),
+])
+def test_shadow_observation_uses_only_valid_current_source_urls(target, accepted):
+    observer, payload = shadow_observation_fixture()
+    output = [{"type": "message", "content": [{"type": "output_text", "text": f"[Quelle]({target}) [1]"}]}]
+    report = observer(output, payload, sources=[{"source_url": target}])
+    assert (report["attempts"][0]["status"] == "accepted") is accepted
+
+
+def test_shadow_observation_does_not_mistake_feedback_ids_for_phone_contacts():
+    observer, payload = shadow_observation_fixture()
+    link = "/wissen/?feedback=1&chat_id=12345678&message_id=98765432"
+    output = [{"type": "message", "content": [{"type": "output_text", "text": f"Anfrage erfassen. [1]\n[Wissensfehler melden]({link})"}]}]
+    report = observer(output, payload, feedback_link=link)
+    assert report["attempts"][0]["status"] == "accepted"
+
+
 def test_realtime_chat_save_persists_harness_validation_and_metrics_server_side():
     source = MIDDLEWARE.read_text(encoding="utf-8")
     realtime_block = source[source.index("realtime_metadata = {") :]
@@ -1863,7 +2352,13 @@ def test_active_harness_timeout_is_wired_to_a_safe_visible_delivery_state():
     assert "'safe_timeout_fallback'" in source
 
 
-def load_fallback_tool_helpers():
+def load_fallback_tool_helpers(
+    *,
+    routing_mode="legacy",
+    tools_override=None,
+    internal_rag_request=False,
+    metadata_override=None,
+):
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
     wanted = {
         "_ascii_fold",
@@ -1880,14 +2375,26 @@ def load_fallback_tool_helpers():
         "Optional": Optional,
         "re": re,
         "unicodedata": unicodedata,
-        "tools": {"kahle_workflow_execute": object()},
-        "metadata": {},
+        "tools": tools_override or {"kahle_workflow_execute": object()},
+        "metadata": metadata_override or {},
         "attached_file_names": [],
         "attached_exact_paths": [],
-        "_looks_like_internal_rag_request": lambda text: False,
+        "_looks_like_internal_rag_request": lambda text: internal_rag_request,
+        "_knowledge_routing_mode": lambda: routing_mode,
     }
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_infer_fallback_tool_calls"]
+
+
+def test_model_led_legacy_function_calling_does_not_force_rag_from_wording():
+    infer_fallback = load_fallback_tool_helpers(
+        routing_mode="model_led",
+        tools_override={"rag_chat": object()},
+        internal_rag_request=True,
+        metadata_override={"_kahle_force_rag_tool_call": True},
+    )
+
+    assert infer_fallback({}, "Wie funktioniert die interne Richtlinie?") == []
 
 
 def test_previous_result_word_request_routes_to_workflow_before_streaming():
@@ -2078,6 +2585,96 @@ def test_prerouted_rag_replaces_generic_tool_source_even_without_documents():
     assert "sources[:] = [" in block
     assert "if 'rag_chat' not in str(" in block
     assert block.index("sources[:] = [") < block.index("if canonical_pre_route_events:")
+
+
+def test_model_led_contract_refresh_never_owns_direct_final_content():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    refresh = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_refresh_model_led_answer_contract"
+    )
+
+    assignments = [
+        node
+        for node in ast.walk(refresh)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "metadata"
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "kahle_direct_final_content"
+            for target in node.targets
+        )
+    ]
+
+    assert assignments == []
+
+
+def test_model_led_preroute_supplies_evidence_but_never_owns_final_content():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    active_block = source[
+        source.index("if harness_mode == 'active':"):
+        source.index("if harness_mode != 'active' and pre_routed_internal_rag", source.index("if harness_mode == 'active':"))
+    ]
+
+    assert "if routing_mode != 'model_led':" in active_block
+    assert active_block.index("if routing_mode != 'model_led':") < active_block.index(
+        "_knowledge_harness_direct_answer("
+    )
+
+
+def test_unrelated_file_form_and_mail_direct_final_paths_remain_present():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert source.count("metadata['kahle_direct_final_content'] = (") >= 2
+    assert "metadata['kahle_direct_final_content'] = final_notice" in source
+    assert "metadata['kahle_direct_final_content'] = mailer_questions" in source
+    assert "metadata['kahle_direct_final_content'] = mail_redirect" in source
+    assert "file_saved_payload = _extract_file_saved_payload(tool_result)" in source
+    assert "tool_final_notice = _extract_final_notice(tool_result)" in source
+
+
+def test_answer_contract_refresh_is_wired_before_each_next_model_generation():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    legacy_handler = source[
+        source.index("async def chat_completion_tools_handler(") : source.index(
+            "async def process_chat_payload("
+        )
+    ]
+    native_loop_start = source.index("while len(tool_calls) > 0")
+    native_loop = source[
+        native_loop_start : source.index(
+            "if DETECT_CODE_INTERPRETER:", native_loop_start
+        )
+    ]
+
+    assert "_refresh_model_led_answer_contract(" in legacy_handler
+    assert "_refresh_model_led_answer_contract(" in native_loop
+    assert native_loop.index("_refresh_model_led_answer_contract(") < native_loop.index(
+        "res = await generate_chat_completion("
+    )
+
+
+def test_streaming_response_handler_reuses_outer_form_data_context():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    table = symtable.symtable(source, str(MIDDLEWARE), "exec")
+    streaming_handler = next(
+        child
+        for child in table.get_children()
+        if child.get_name() == "streaming_chat_response_handler"
+    )
+    response_handler = next(
+        child
+        for child in streaming_handler.get_children()
+        if child.get_name() == "response_handler"
+    )
+
+    form_data = response_handler.lookup("form_data")
+    assert form_data.is_nonlocal()
+    assert not form_data.is_local()
 
 
 if __name__ == "__main__":

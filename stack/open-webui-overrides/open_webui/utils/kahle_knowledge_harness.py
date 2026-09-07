@@ -4,11 +4,18 @@ This first migration step observes the existing OpenWebUI path.  It does not
 rewrite prompts, execute tools, emit UI events or modify an assistant answer.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from html import unescape
 import json
 import re
 import unicodedata
 from typing import Any
+from urllib.parse import unquote
+
+try:
+    from open_webui.utils.functional_contact_contract import extract_contact_literals, functional_contact_key, validate_functional_contact
+except ModuleNotFoundError:  # Isolated offline contract tests use the generated module.
+    from functional_contact_contract import extract_contact_literals, functional_contact_key, validate_functional_contact
 
 
 SCHEMA_VERSION = "kahle.knowledge-harness.v1"
@@ -53,6 +60,13 @@ class ResolvedContext:
     retrieval_query: str
     aliases: dict[str, str] = field(default_factory=dict)
     conversation_reference: bool = False
+    intent: str = ""
+    information_needs: tuple[str, ...] = ()
+    entities: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    context_references: tuple[str, ...] = ()
+    ambiguities: tuple[str, ...] = ()
+    required_clarification: bool = False
+    clarification_question: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,6 +123,7 @@ class AnswerContract:
     preserve_document_sources: bool = True
     preserve_feedback_link: bool = True
     allowed_contact_values: tuple[str, ...] = ()
+    allowed_contact_bindings: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +200,10 @@ class HarnessDecision:
             "true ist, kennzeichne diesen Stand ausdrücklich als möglicherweise veraltet. "
             "E-Mail-Adressen und Telefonnummern darfst du ausschließlich wortgleich aus "
             "answer_contract.allowed_contact_values übernehmen. "
+            "Im model_led-Vertrag sind ausschließlich allowed_contact_bindings maßgeblich: "
+            "Übernimm Kontaktwert, Funktion, Verwendungszweck, Geltungsbereich und Quellen-ID "
+            "aus derselben Bindung. Eine Bindung erlaubt keine zusätzliche Personen- oder "
+            "Führungskräfteaussage. Kontaktseiten benötigen ebenfalls eine Bindung. "
             "Erzeuge genau eine endgültige Antwort."
         )
 
@@ -274,6 +293,44 @@ def _organizational_contact_question(query: str) -> bool:
     return bool(
         _organization_unit_reference(folded)
         or re.search(rf"\b{_FUNCTIONAL_CONTACT_TOPIC_PATTERN}\b", folded)
+    )
+
+
+def _explicit_functional_contact_question(query: str) -> bool:
+    """Recognize a documented shared channel rather than a person's contact."""
+    folded = _fold(query)
+    return bool(
+        re.search(r"\bfunktionspostfach\w*\b", folded)
+        or re.search(r"\bkontaktseite\w*\b", folded)
+        or re.search(
+            r"\b(?:gemeinsam\w*|zentral\w*)\b.{0,50}"
+            r"\b(?:e-?mail|telefon(?:nummer)?|durchwahl|kontakt)\b",
+            folded,
+        )
+    )
+
+
+def _explicit_current_staff_request(query: str) -> bool:
+    folded = _fold(query)
+    return bool(
+        re.search(r"\bwer\s+arbeitet\b", folded)
+        or re.search(r"\bwelche\s+(?:mitarbeiter|mitarbeitenden|kollegen)\b", folded)
+    )
+
+
+def _non_knowledge_tool_request(query: str) -> bool:
+    """Keep transformations and personal task commands on their native tools."""
+    folded = _fold(query).strip()
+    return bool(
+        re.match(
+            r"^(?:bitte\s+)?(?:formulier|schreib|uberarbeit|korrigier|ubersetz)\w*\b",
+            folded,
+        )
+        or re.match(r"^(?:bitte\s+)?erinner\w*\s+mich\b", folded)
+        or re.search(
+            r"\b(?:meine|mir)\b.{0,35}\b(?:aufgaben|to-?dos?|erinnerungen)\b",
+            folded,
+        )
     )
 
 
@@ -471,12 +528,16 @@ def _mapping(value: Any) -> dict[str, Any]:
 def validate_answer(
     answer: str,
     decision: HarnessDecision | dict[str, Any],
+    *,
+    reference_urls: tuple[str, ...] = (),
 ) -> AnswerValidation:
     """Validate a completed answer without changing its content.
 
     The checks intentionally use only deterministic structure and explicit
     language patterns. Semantic repair belongs to the answer model, which
     receives ``retry_prompt`` when this result requires another attempt.
+    ``reference_urls`` must come from separately validated current tool metadata,
+    never from model-authored text or a prefix-based allowlist.
     """
     text = str(answer or "").strip()
     evidence = _mapping(_decision_value(decision, "evidence_bundle"))
@@ -492,6 +553,63 @@ def validate_answer(
 
     if not text:
         add("answer_missing", "Die Antwort ist leer.")
+
+    if retrieval_plan.get("mode") == "model_led":
+        # The serialized contract is not an independent source of authority.
+        current = EvidenceBundle(
+            status=evidence.get("status", "unsupported"),
+            supported_claims=tuple(evidence.get("supported_claims") or ()),
+            sources=tuple(evidence.get("sources") or ()),
+        )
+        bindings = _model_led_contact_bindings(current)
+        allowed = {(item["channel"], item["value"]) for item in bindings
+                   if item in (contract.get("allowed_contact_bindings") or ())}
+        contact_text = unescape(text)
+        # Common Markdown formatting is presentation, not part of a mailbox.
+        contact_text = re.sub(r"(`+|\*\*|__)(.+?)\1", r"\2", contact_text)
+        reference_set = set(reference_urls)
+        links = re.findall(r"\[([^\]]*)\]\(([^\s]+?)\)", contact_text)
+        definitions = {}
+        for name, target in re.findall(r"(?m)^ {0,3}\[([^\]]+)\]:[ \t]*<?([^\s>]+)>?", contact_text):
+            definitions.setdefault(" ".join(name.split()).casefold(), target)
+            links.append(("", target))
+        for label, name in re.findall(r"\[([^\]]+)\](?:\[([^\]]*)\])?", contact_text):
+            target = definitions.get(" ".join((name or label).split()).casefold())
+            if target:
+                links.append((label, target))
+        links.extend((label, target) for _, target, label in re.findall(
+            r"<a\b[^>]*\bhref\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</a\s*>",
+            contact_text, flags=re.I | re.S,
+        ))
+        for label, target in links:
+            # Decode URI escapes for comparison, not as an authorization source.
+            decoded_target = unquote(target)
+            displayed = set(extract_contact_literals(label))
+            targeted = set(extract_contact_literals(decoded_target))
+            if displayed and displayed != targeted:
+                add("contact_link_mismatch", "Angezeigter Kontakt und Linkziel stimmen nicht überein.")
+            permitted_target = target in reference_set or ("url", target) in allowed
+            for scheme, channel in (("mailto:", "email"), ("tel:", "phone")):
+                if decoded_target.lower().startswith(scheme):
+                    permitted_target |= (channel, decoded_target[len(scheme):]) in allowed
+            if not permitted_target:
+                add("unbound_link_target", "Das Linkziel ist nicht durch aktuelle Kontakt- oder Quellenmetadaten freigegeben.")
+
+        def check_url(match: re.Match) -> str:
+            token = match[0]
+            if token.rstrip(".,;:!?)}") in reference_set:
+                return " "
+            urls = [value for channel, value in extract_contact_literals(token) if channel == "url"]
+            if len(urls) == 1 and (urls[0] in reference_set or ("url", urls[0]) in allowed):
+                return " "
+            return token
+
+        # Mask only complete approved URL tokens, never prefixes or link labels.
+        contact_text = re.sub(r"(?:https?://|/wissen/)[^\s<>\[\]\"']+", check_url, contact_text, flags=re.I)
+        contact_text = unquote(contact_text)
+        for channel, value in extract_contact_literals(contact_text):
+            if (channel, value) not in allowed:
+                add("unbound_contact_literal", "Die Antwort enthält einen Kontakt ohne aktuelle Quellenbindung.")
 
     folded_text = _fold(text)
     resolved_context = _mapping(_decision_value(decision, "resolved_context"))
@@ -781,6 +899,8 @@ def _directory_information_need(query: str) -> bool:
     folded = _fold(query)
     if _functional_responsibility_question(folded):
         return False
+    if _explicit_functional_contact_question(folded) and not _explicit_current_staff_request(folded):
+        return False
     if _organizational_contact_question(folded):
         return True
     if _organization_unit_directory_question(folded):
@@ -864,6 +984,8 @@ def _explicit_onboarding_people_request(folded_query: str) -> bool:
 
 def _rag_information_need(query: str) -> bool:
     folded = _fold(query)
+    if _explicit_functional_contact_question(folded):
+        return True
     if _organizational_contact_question(folded):
         return True
     if _directory_information_need(query) and re.search(
@@ -937,6 +1059,25 @@ def _information_needs(query: str) -> tuple[InformationNeed, ...]:
                 evidence_capabilities=("approved_functional_responsibility",),
             ),
         )
+    if _explicit_functional_contact_question(folded):
+        needs = [
+            InformationNeed(
+                kind="functional_contact",
+                domain="internal_organization",
+                document_types=("contact_directory", "responsibility_matrix"),
+                evidence_capabilities=("functional_contact", "contact_details"),
+            )
+        ]
+        if _explicit_current_staff_request(folded):
+            needs.insert(
+                0,
+                InformationNeed(
+                    kind="directory_record",
+                    domain="employee_directory",
+                    evidence_capabilities=("current_person_record",),
+                ),
+            )
+        return tuple(needs)
     if _organizational_contact_question(folded):
         return (
             InformationNeed(
@@ -1069,6 +1210,13 @@ def plan_retrieval(
     """Select required evidence sources from information needs, not model choice."""
     del query, messages, model_id
     retrieval_query = str(resolved_query or "").strip()
+    if _non_knowledge_tool_request(retrieval_query):
+        return RetrievalPlan(
+            required_tools=(),
+            queries=(retrieval_query,),
+            permission_scope=dict(permission_scope or {}),
+            information_needs=(),
+        )
     directory_needed = _directory_information_need(retrieval_query)
     rag_needed = _rag_information_need(retrieval_query)
     required_tools = (
@@ -1110,6 +1258,165 @@ def resolve_query_aliases(query: str) -> str:
             flags=re.IGNORECASE,
         )
     return resolved
+
+
+_REQUEST_LOCATIONS = (
+    "Hannover",
+    "Wunstorf",
+    "Wedemark",
+    "Walsrode",
+    "Neustadt",
+    "Nienburg",
+    "Stadthagen",
+)
+_REQUEST_SYSTEMS = ("Vaudis", "Personio", "SharePoint")
+_CONVERSATION_REFERENCE = re.compile(
+    r"(?iu)(?:^\s*und\b|\b(?:dann|dort|davon|dazu|das|dies|diese[rmns]?)\b)"
+)
+_EXPLICIT_PERSON_AFTER_VON = re.compile(
+    r"(?iu)\bvon\s+([A-ZÄÖÜ][\wÄÖÜäöüß.-]+\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]+)"
+)
+
+
+def _request_entities(text: str) -> dict[str, tuple[str, ...]]:
+    raw = str(text or "")
+    folded = _fold(raw)
+    locations = tuple(
+        location for location in _REQUEST_LOCATIONS if _fold(location) in folded
+    )
+    systems = tuple(system for system in _REQUEST_SYSTEMS if _fold(system) in folded)
+    person_match = _EXPLICIT_PERSON_AFTER_VON.search(raw)
+    persons = (person_match.group(1).rstrip("?.!"),) if person_match else ()
+    return {
+        "persons": persons,
+        "organizational_units": (),
+        "locations": locations,
+        "systems": systems,
+    }
+
+
+def _prior_conversation_turns(
+    messages: list[dict[str, Any]], current_query: str
+) -> tuple[str, str]:
+    prior_user = ""
+    prior_assistant = ""
+    skipped_current = False
+    for message in reversed(messages or []):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        content = str(message.get("content") or "").strip()
+        if role == "user" and not skipped_current and content == current_query:
+            skipped_current = True
+            continue
+        if role == "assistant" and not prior_assistant:
+            prior_assistant = content
+            continue
+        if role == "user":
+            prior_user = content
+            break
+    return prior_user, prior_assistant
+
+
+def _prior_topic_anchor(
+    messages: list[dict[str, Any]], current_query: str, prior_user: str
+) -> str:
+    """Return the nearest standalone user turn in one referential chain."""
+    if not prior_user or not _CONVERSATION_REFERENCE.search(prior_user):
+        return ""
+    prior_users: list[str] = []
+    skipped_current = False
+    for message in reversed(messages or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        if not skipped_current and content == current_query:
+            skipped_current = True
+            continue
+        if not content:
+            continue
+        prior_users.append(content)
+        if len(prior_users) >= 4:
+            break
+    for candidate in prior_users[1:]:
+        candidate_entities = _request_entities(resolve_query_aliases(candidate))
+        if (
+            not _CONVERSATION_REFERENCE.search(candidate)
+            or candidate_entities["systems"]
+            or candidate_entities["persons"]
+        ):
+            return candidate
+    return ""
+
+
+def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedContext:
+    """Resolve bounded conversational references without inventing evidence."""
+    original = str(query or "").strip()
+    retrieval_query = resolve_query_aliases(original)
+    entities = _request_entities(retrieval_query)
+    prior_user, prior_assistant = _prior_conversation_turns(messages, original)
+    topic_anchor = _prior_topic_anchor(messages, original, prior_user)
+    conversation_reference = bool(
+        prior_user
+        and (
+            _CONVERSATION_REFERENCE.search(original)
+            or (
+                prior_assistant.rstrip().endswith("?")
+                and len(_fold(original).split()) <= 5
+            )
+        )
+    )
+    ambiguities: tuple[str, ...] = ()
+    clarification_question = ""
+
+    if (
+        conversation_reference
+        and " oder " in _fold(prior_assistant)
+        and len(_fold(original).split()) <= 4
+    ):
+        ambiguities = ("Der unmittelbar vorherige Turn enthält mehrere Alternativen.",)
+        clarification_question = prior_assistant.strip()
+    elif conversation_reference and not entities["persons"]:
+        context_query = topic_anchor or prior_user
+        combined = f"{context_query} {original}"
+        prior_folded = _fold(context_query)
+        current_locations = entities["locations"]
+        if "werbung" in prior_folded and "vaudis" in prior_folded:
+            location_suffix = (
+                f" am Standort {current_locations[0]}" if current_locations else ""
+            )
+            retrieval_query = (
+                "Wie wird ein Werbewiderspruch in Vaudis"
+                f"{location_suffix} durchgeführt?"
+            )
+        else:
+            retrieval_query = combined
+        resolved_entities = _request_entities(retrieval_query)
+        entities = {
+            key: entities[key] or resolved_entities[key]
+            for key in entities
+        }
+
+    needs = tuple(need.kind for need in _information_needs(retrieval_query))
+    return ResolvedContext(
+        original_query=original,
+        retrieval_query=retrieval_query,
+        aliases=_aliases_in_query(original),
+        conversation_reference=conversation_reference,
+        intent=_intent_kind(retrieval_query),
+        information_needs=needs,
+        entities=entities,
+        context_references=(
+            ("prior_user", "topic_anchor")
+            if conversation_reference and topic_anchor
+            else ("prior_user",)
+            if conversation_reference
+            else ()
+        ),
+        ambiguities=ambiguities,
+        required_clarification=bool(ambiguities),
+        clarification_question=clarification_question,
+    )
 
 
 def _extract_marker(text: str, name: str) -> str:
@@ -1163,7 +1470,9 @@ def rag_result_from_sources(sources: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _declared_evidence_bundle(text: str) -> EvidenceBundle | None:
+def _declared_evidence_bundle(
+    text: str, *, result_driven: bool = False
+) -> EvidenceBundle | None:
     raw = _extract_marker(text, "EVIDENCE_BUNDLE_JSON")
     if not raw:
         return None
@@ -1185,6 +1494,15 @@ def _declared_evidence_bundle(text: str) -> EvidenceBundle | None:
         _source_identifier(item) for item in sources if _source_identifier(item)
     }
     claims = tuple(value.get("supported_claims") or ())
+    evidence = EvidenceBundle(
+        status=status,
+        supported_claims=claims,
+        missing_information=tuple(str(item) for item in value.get("missing_information") or ()),
+        conflicts=tuple(str(item) for item in value.get("conflicts") or ()),
+        sources=sources,
+    )
+    if result_driven:
+        return _validate_result_driven_rag_contract(evidence)
     claim_ids: list[str] = []
     for claim in claims:
         if not isinstance(claim, dict):
@@ -1209,13 +1527,7 @@ def _declared_evidence_bundle(text: str) -> EvidenceBundle | None:
             conflicts=("evidence_bundle_claim_id_duplicate",),
             sources=sources,
         )
-    return EvidenceBundle(
-        status=status,
-        supported_claims=claims,
-        missing_information=tuple(str(item) for item in value.get("missing_information") or ()),
-        conflicts=tuple(str(item) for item in value.get("conflicts") or ()),
-        sources=sources,
-    )
+    return evidence
 
 
 def _supported_claims(context: str) -> tuple[str, ...]:
@@ -1243,9 +1555,11 @@ def _procedure_is_supported(context: str) -> bool:
     return sum(bool(re.search(pattern, folded)) for pattern in action_patterns) >= 3
 
 
-def _evidence_bundle(rag_result: str, procedural: bool) -> EvidenceBundle:
+def _evidence_bundle(
+    rag_result: str, procedural: bool, *, result_driven: bool = False
+) -> EvidenceBundle:
     text = str(rag_result or "")
-    declared = _declared_evidence_bundle(text)
+    declared = _declared_evidence_bundle(text, result_driven=result_driven)
     if declared is not None:
         return declared
     found = bool(re.search(r"(?im)^FOUND:\s*true\s*$", text))
@@ -1308,6 +1622,222 @@ _PERSONIO_CURRENT_FIELDS = frozenset(
         "phone",
     }
 )
+_PERSONIO_OWNED_RAG_FIELDS = frozenset(
+    {
+        "personio_id",
+        "display_name",
+        "first_name",
+        "last_name",
+        "position",
+        "department",
+        "team",
+        "office",
+        "business_email",
+        "business_phone",
+        "email",
+        "phone",
+        "employment_status",
+        "source_updated_at",
+        "supervisor_personio_id",
+        "supervisor",
+        "supervisor_id",
+        "supervisor_name",
+        "manager",
+        "manager_id",
+        "manager_name",
+    }
+)
+_RAG_CLAIM_ALLOWED_FIELDS = frozenset(
+    {
+        "claim_id",
+        "source_id",
+        "text",
+        "evidence_span",
+        "document_id",
+        "version_id",
+        "claim_type",
+        "functional_contact",
+    }
+)
+_PERSON_ENTITY_EXCLUSION_TOKENS = frozenset(
+    {
+        "abteilung",
+        "bereich",
+        "das",
+        "dem",
+        "den",
+        "der",
+        "die",
+        "ein",
+        "eine",
+        "einem",
+        "einen",
+        "gruppe",
+        "kg",
+        "gmbh",
+        "organisation",
+        "team",
+        "unternehmen",
+    }
+)
+_PERSONIO_RELATION_MARKER = re.compile(
+    # Match inflections, not arbitrary word stems such as Fuhrpark or Leitfaden.
+    r"\b(?:chef\w*|fuhr(?:e|st|t|en|te|test|ten|tet)|fuhrungskraft|fuhrungskrafte|"
+    r"leit(?:e|est|et|en|ete|etest|eten|etet|er(?:in(?:nen)?|[ns]?)|ung(?:en)?)|manager\w*|"
+    r"supervisor|teamleit\w*|vorgesetzt\w*)\b"
+)
+
+
+def _has_named_person_entity(text: str) -> bool:
+    """Recognize a likely two-token personal name, excluding organization labels."""
+    for match in re.finditer(
+        r"\b(?:[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]*\s+){1,2}[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]*\b",
+        text,
+    ):
+        tokens = _fold(match.group(0)).split()
+        if not any(token in _PERSON_ENTITY_EXCLUSION_TOKENS for token in tokens):
+            return True
+    return False
+
+
+def _contains_contact_literal(text: str) -> bool:
+    return bool(
+        _EMAIL_LITERAL.search(text)
+        or any(
+            _is_phone_literal(match.group(0).strip())
+            for match in _PHONE_LITERAL.finditer(text)
+        )
+    )
+
+
+def _claim_clauses(text: str) -> tuple[str, ...]:
+    return tuple(
+        clause.strip()
+        for clause in re.split(r";|[.!?](?=\s|$)|\n+", text)
+        if clause.strip()
+    )
+
+
+def _normalized_claim_field_name(value: Any) -> str:
+    raw = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value or ""))
+    return re.sub(r"[^a-z0-9]+", "_", _fold(raw)).strip("_")
+
+
+def _rag_claim_contract_error(evidence: EvidenceBundle) -> str:
+    """Check producer keys and identifiers before inspecting or stripping content."""
+    source_ids = [_source_identifier(source) for source in evidence.sources]
+    for source, source_id in zip(evidence.sources, source_ids):
+        carriers = [key for key in ("id", "number", "source_id") if key in source]
+        if len(carriers) != 1 or not re.fullmatch(r"(?:R)?[1-9]\d*", source_id):
+            return "evidence_bundle_source_id_invalid"
+        raw = source[carriers[0]]
+        if carriers[0] == "number":
+            if type(raw) is not int or raw < 1:
+                return "evidence_bundle_source_id_invalid"
+        elif not isinstance(raw, str) or not re.fullmatch(r"(?:R|#)[1-9]\d*", raw):
+            return "evidence_bundle_source_id_invalid"
+    if len(source_ids) != len(set(source_ids)):
+        return "evidence_bundle_source_id_duplicate"
+    claim_ids: set[str] = set()
+    for claim in evidence.supported_claims:
+        if not isinstance(claim, dict):
+            # Legacy context passages have no structured fields to canonicalize.
+            continue
+        if set(claim) - (_RAG_CLAIM_ALLOWED_FIELDS | _PERSONIO_OWNED_RAG_FIELDS | {"field"}):
+            return "evidence_bundle_claim_fields_invalid"
+        if "field" in claim and _normalized_claim_field_name(claim["field"]) not in _PERSONIO_OWNED_RAG_FIELDS:
+            return "evidence_bundle_claim_fields_invalid"
+        source_id = claim.get("source_id")
+        if (
+            not isinstance(source_id, str)
+            or not re.fullmatch(r"(?:R|#)[1-9]\d*", source_id)
+            or _citation_identifier(source_id) not in source_ids
+        ):
+            return "evidence_bundle_claim_source_invalid"
+        claim_id = claim.get("claim_id")
+        if not isinstance(claim_id, str) or not re.fullmatch(r"R[1-9]\d*C[1-9]\d*", claim_id):
+            return "evidence_bundle_claim_id_invalid"
+        if claim_id.strip() in claim_ids:
+            return "evidence_bundle_claim_id_duplicate"
+        claim_ids.add(claim_id.strip())
+        if claim.get("claim_type") == "functional_contact" or "functional_contact" in claim:
+            source = evidence.sources[source_ids.index(_citation_identifier(source_id))]
+            contact = validate_functional_contact(claim.get("functional_contact"))
+            if (set(claim) != _RAG_CLAIM_ALLOWED_FIELDS or claim.get("claim_type") != "functional_contact"
+                    or not claim_id.startswith("R" + source_id.lstrip("#R") + "C")
+                    or contact is None or source.get("chunk_kind") != "functional_contact"
+                    or validate_functional_contact(source.get("functional_contact")) != contact
+                    or claim.get("text") != contact["evidence_span"] or claim.get("evidence_span") != contact["evidence_span"]
+                    or any(type(claim.get(key)) is not str or not claim[key] or claim[key] != source.get(key)
+                           for key in ("document_id", "version_id"))):
+                return "evidence_bundle_functional_contact_invalid"
+    return ""
+
+
+def _model_led_contact_bindings(evidence: EvidenceBundle) -> tuple[dict[str, Any], ...]:
+    """Only typed source-bound rows or actual Personio fields authorize values."""
+    if evidence.status == "unsupported":
+        return ()
+    sources = {_source_identifier(source): source for source in evidence.sources}
+    bindings = []
+    for position, claim in enumerate(evidence.supported_claims, 1):
+        if not isinstance(claim, dict):
+            continue
+        source_id = claim.get("source_id")
+        if not isinstance(source_id, str):
+            continue
+        source = sources.get(_citation_identifier(source_id), {})
+        if source.get("kind") == "personio_directory" and re.fullmatch(r"P[1-9]\d*", source_id):
+            for name, channel in (("business_email", "email"), ("business_phone", "phone")):
+                value = claim.get(name)
+                if not isinstance(value, str) or value != value.strip():
+                    continue
+                valid = (_EMAIL_LITERAL.fullmatch(value) if channel == "email" else
+                         re.fullmatch(r"\+?\d[\d ()/.-]*\d", value) and _is_phone_literal(value))
+                if valid:
+                    bindings.append({"source_kind": "personio_directory", "source_id": source_id,
+                        "claim_id": f"{source_id}C{position}", "channel": channel, "value": value})
+        elif claim.get("claim_type") == "functional_contact":
+            # Recheck here too: direct EvidenceBundle inputs use the same gate.
+            isolated = EvidenceBundle(status="supported", supported_claims=(claim,), sources=(source,))
+            if _rag_claim_contract_error(isolated):
+                continue
+            contact = claim["functional_contact"]
+            bindings.append({"source_kind": "rag_chat", "source_id": source_id, "claim_id": claim["claim_id"],
+                **{key: contact[key] for key in ("channel", "value", "function", "purpose", "scope", "row_number")},
+                "document_id": claim["document_id"], "version_id": claim["version_id"]})
+    return tuple(bindings)
+
+
+def _validate_result_driven_rag_contract(evidence: EvidenceBundle) -> EvidenceBundle:
+    error = _rag_claim_contract_error(evidence)
+    if not error:
+        by_key: dict[tuple, set[str]] = {}
+        for claim in evidence.supported_claims:
+            if isinstance(claim, dict) and claim.get("claim_type") == "functional_contact":
+                contact = claim["functional_contact"]
+                by_key.setdefault(functional_contact_key(contact), set()).add(contact["value"])
+        conflicting = {key for key, values in by_key.items() if len(values) > 1}
+        if conflicting:
+            rejected = {_citation_identifier(claim["source_id"]) for claim in evidence.supported_claims
+                        if isinstance(claim, dict) and claim.get("claim_type") == "functional_contact"
+                        and functional_contact_key(claim["functional_contact"]) in conflicting}
+            retained = tuple(claim for claim in evidence.supported_claims
+                             if not isinstance(claim, dict) or _citation_identifier(claim.get("source_id", "")) not in rejected)
+            return EvidenceBundle(status="partially_supported" if retained and evidence.status != "unsupported" else "unsupported",
+                supported_claims=retained if evidence.status != "unsupported" else (),
+                missing_information=(*evidence.missing_information, "functional_contact_conflict"),
+                conflicts=(*evidence.conflicts, "functional_contact_conflict"),
+                sources=tuple(source for source in evidence.sources if _source_identifier(source) not in rejected))
+        return evidence
+    return EvidenceBundle(
+        status="unsupported",
+        missing_information=evidence.missing_information + (
+            "Das EvidenceBundle enthält einen ungültigen RAG-Claim-Vertrag.",
+        ),
+        conflicts=tuple(dict.fromkeys((*evidence.conflicts, error))),
+        sources=evidence.sources,
+    )
 
 
 def _personio_evidence(personio_result: Any) -> EvidenceBundle:
@@ -1371,6 +1901,82 @@ def _personio_authoritative_fields(claims: tuple[Any, ...]) -> set[str]:
         for field in _PERSONIO_CURRENT_FIELDS
         if str(claim.get(field) or "").strip()
     }
+
+
+def _rag_claim_asserts_personio_owned_data(claim: Any) -> bool:
+    """Reject RAG claims that assert current person or supervisor data."""
+    if isinstance(claim, dict):
+        texts = (
+            str(claim.get("text") or ""),
+            str(claim.get("evidence_span") or ""),
+        )
+    else:
+        texts = (str(claim or ""),)
+
+    return any(
+        _has_named_person_entity(clause)
+        and bool(
+            _PERSONIO_RELATION_MARKER.search(_fold(clause))
+        )
+        for text in texts
+        for clause in _claim_clauses(text)
+    )
+
+
+def _sanitize_result_driven_rag_claim(claim: Any) -> Any | None:
+    if _rag_claim_asserts_personio_owned_data(claim):
+        return None
+    if not isinstance(claim, dict):
+        return claim
+    # The contract has already been checked. Never rename or overwrite a key.
+    filtered = {
+        key: value for key, value in claim.items() if key in _RAG_CLAIM_ALLOWED_FIELDS
+    }
+    return filtered if set(filtered) - {"claim_id", "source_id"} else None
+
+
+def _result_driven_rag_evidence(rag_result: Any, procedural: bool) -> EvidenceBundle:
+    """Keep model-led RAG evidence within the documented-source authority."""
+    evidence = (
+        _validate_result_driven_rag_contract(rag_result)
+        if isinstance(rag_result, EvidenceBundle)
+        else _evidence_bundle(str(rag_result or ""), procedural, result_driven=True)
+    )
+    if evidence.status == "unsupported":
+        return EvidenceBundle(
+            status="unsupported",
+            missing_information=evidence.missing_information,
+            conflicts=evidence.conflicts,
+            sources=evidence.sources,
+        )
+    retained: list[Any] = []
+    evidence_changed = False
+    for claim in evidence.supported_claims:
+        sanitized = _sanitize_result_driven_rag_claim(claim)
+        if sanitized is None:
+            evidence_changed = True
+            continue
+        if sanitized != claim:
+            evidence_changed = True
+        retained.append(sanitized)
+    if not evidence_changed:
+        return evidence
+    missing = tuple(
+        dict.fromkeys(
+            (*evidence.missing_information, "Aktuelle Personen- und Supervisor-Daten erfordern Personio-Evidenz.")
+        )
+    )
+    return EvidenceBundle(
+        status="partially_supported" if retained else "unsupported",
+        supported_claims=tuple(retained),
+        missing_information=missing,
+        conflicts=tuple(
+            dict.fromkeys(
+                (*evidence.conflicts, "Personio ist führend für aktuelle Stammdaten und Führungskräfte.")
+            )
+        ),
+        sources=evidence.sources,
+    )
 
 
 def _personio_display_names(claims: tuple[Any, ...]) -> tuple[str, ...]:
@@ -1563,9 +2169,19 @@ def _without_superseded_rag_claims(
     return tuple(retained), tuple(dict.fromkeys(conflicts))
 
 
-def merge_evidence(rag_result: Any, personio_result: Any) -> EvidenceBundle:
+def merge_evidence(
+    rag_result: Any, personio_result: Any, *, result_driven: bool = False
+) -> EvidenceBundle:
     """Merge distinct evidence sources while preserving their respective authority."""
-    rag = rag_result if isinstance(rag_result, EvidenceBundle) else _evidence_bundle(str(rag_result or ""), False)
+    rag = (
+        _result_driven_rag_evidence(rag_result, False)
+        if result_driven
+        else (
+            rag_result
+            if isinstance(rag_result, EvidenceBundle)
+            else _evidence_bundle(str(rag_result or ""), False)
+        )
+    )
     personio = _personio_evidence(personio_result)
     personio_fields = _personio_authoritative_fields(personio.supported_claims)
     rag_claims, authority_conflicts = _without_superseded_rag_claims(
@@ -1625,7 +2241,14 @@ def build_decision(
 ) -> HarnessDecision:
     """Build an observable decision without changing the live answer path."""
     original = str(query or "").strip()
-    retrieval_query = str(resolved_query or original).strip()
+    resolved_context = resolve_request(original, messages)
+    supplied_retrieval_query = str(resolved_query or "").strip()
+    retrieval_query = (
+        supplied_retrieval_query
+        if supplied_retrieval_query and supplied_retrieval_query != original
+        else resolved_context.retrieval_query
+    )
+    resolved_context = replace(resolved_context, retrieval_query=retrieval_query)
     procedural = _is_procedural(retrieval_query)
     retrieval_plan = plan_retrieval(
         original,
@@ -1681,12 +2304,7 @@ def build_decision(
             clarification_required=clarification,
             clarification_question=clarification_question,
         ),
-        resolved_context=ResolvedContext(
-            original_query=original,
-            retrieval_query=retrieval_query,
-            aliases=_aliases_in_query(original),
-            conversation_reference=_has_conversation_reference(messages, original),
-        ),
+        resolved_context=resolved_context,
         retrieval_plan=retrieval_plan,
         evidence_bundle=evidence,
         answer_contract=AnswerContract(
@@ -1695,6 +2313,95 @@ def build_decision(
         events=(
             {"type": "intent/started"},
             {"type": "intent/completed"},
+            *retrieval_events,
+            {"type": "evidence/completed", "status": evidence.status},
+        ),
+    )
+
+
+def build_result_driven_decision(
+    *,
+    called_tools: tuple[str, ...],
+    query: str,
+    messages: list[dict[str, Any]],
+    model_id: str,
+    permission_scope: dict[str, Any],
+    rag_result: Any = "",
+    personio_result: Any = None,
+) -> HarnessDecision | None:
+    """Validate evidence from internal tools that actually ran in this request."""
+    actual_tools = tuple(
+        dict.fromkeys(
+            str(tool or "")
+            for tool in called_tools
+            if str(tool or "") in {"personio_directory", "rag_chat"}
+        )
+    )
+    if not actual_tools:
+        return None
+
+    original = str(query or "").strip()
+    resolved_context = resolve_request(original, messages)
+    procedural = _is_procedural(resolved_context.retrieval_query)
+    if actual_tools == ("personio_directory",):
+        evidence = _personio_evidence(personio_result)
+    elif actual_tools == ("rag_chat",):
+        evidence = _result_driven_rag_evidence(rag_result, procedural)
+    else:
+        evidence = merge_evidence(rag_result, personio_result, result_driven=True)
+
+    retrieval_plan = RetrievalPlan(
+        required_tools=actual_tools,
+        queries=(resolved_context.retrieval_query,),
+        permission_scope=dict(permission_scope or {}),
+        information_needs=(),
+        mode="model_led",
+    )
+    clarification = bool(
+        "rag_chat" in actual_tools
+        and re.search(r"(?im)^CLARIFICATION_REQUIRED:\s*true\s*$", str(rag_result or ""))
+    )
+    retrieval_events = []
+    for tool in actual_tools:
+        retrieval_events.append({"type": "retrieval/started", "tool": tool})
+        source_count = sum(
+            1
+            for source in evidence.sources
+            if (
+                tool == "personio_directory"
+                and _source_identifier(source).startswith("P")
+            )
+            or (
+                tool == "rag_chat"
+                and not _source_identifier(source).startswith("P")
+            )
+        )
+        retrieval_events.append(
+            {"type": "retrieval/completed", "tool": tool, "source_count": source_count}
+        )
+
+    return HarnessDecision(
+        schema_version=SCHEMA_VERSION,
+        model_profile={
+            "id": str(model_id or ""),
+            "harness_policy": "shared",
+        },
+        user_intent=UserIntent(
+            kind="internal_knowledge",
+            procedural=procedural,
+            clarification_required=clarification,
+            clarification_question=(
+                _extract_marker(str(rag_result or ""), "ANSWER") if clarification else ""
+            ),
+        ),
+        resolved_context=resolved_context,
+        retrieval_plan=retrieval_plan,
+        evidence_bundle=evidence,
+        answer_contract=AnswerContract(
+            allowed_contact_values=tuple(dict.fromkeys(binding["value"] for binding in _model_led_contact_bindings(evidence))),
+            allowed_contact_bindings=_model_led_contact_bindings(evidence),
+        ),
+        events=(
             *retrieval_events,
             {"type": "evidence/completed", "status": evidence.status},
         ),

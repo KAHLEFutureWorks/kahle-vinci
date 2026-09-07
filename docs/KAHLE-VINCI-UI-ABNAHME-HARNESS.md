@@ -1,6 +1,162 @@
 # UI-Abnahme für KAHLE-Vinci und den Wissens-Harness
 
-Stand: 24. August 2026
+Stand: 3. September 2026
+
+## Erste Testphase: Modellführung ohne zusätzliche Ausgabesperre
+
+Freigegeben ist zunächst der beobachtende Ansatz. Der Harness liefert dem Modell
+geprüfte Quellen, vollständige Kontaktzuordnungen und klare Antwortregeln.
+Die zusätzliche Antwortprüfung hält den Text nicht zurück, ruft kein Modell
+zur Korrektur auf und ersetzt keine Antwort. Zugriffsrechte, veröffentlichte
+Versionen und Personio-Quellenhoheit bleiben verbindlich.
+
+Die Prüfung protokolliert nur technische Ergebnisse im Modus `shadow`.
+`delivery_status: observed` bedeutet ausgegeben und beobachtet, nicht fachlich
+bestanden. `final_validation_status` bleibt separat erhalten. Der vorhandene
+Status `retry_required` bezeichnet hier nur einen Prüfbefund, keinen ausgeführten
+oder automatisch geplanten Korrekturlauf. Der
+Reporter zählt je Modell und Profil geprüfte Antworten, Auffälligkeiten,
+Beobachtungsfehler und fehlende Beobachtungen. `flagged_rate` ist der Anteil
+markierter unter tatsächlich geprüften Antworten, keine bewiesene Modellfehlerquote.
+Auffälligkeiten fachlich gegen die freigegebene Testquelle prüfen; auch eine
+automatische Prüfung kann falsch liegen. Fehlende Beobachtungen nicht als Erfolg zählen.
+
+Für jede Modellvariante dieselben Fälle und freigegebenen synthetischen Quellen
+verwenden, einschließlich:
+
+- Allgemein: „Formuliere diese Notiz freundlicher: Bitte lege den Schlüssel zurück.“
+- Funktionskontakt: „Wie erreiche ich die IT für Störungen im Testbereich?“
+- Quellenlücke: dieselbe Frage mit einer ausschließlich im Fließtext gepflegten Kontaktquelle.
+- Personenfrage: „Wie erreiche ich die synthetische Testperson Erika Beispiel geschäftlich?“
+- Prozessfrage: „Wie erfasse ich nach unserer Testanleitung eine Anfrage?“
+
+Anfängliche Antworten und Fehler unverändert bewerten. Keine Rohantworten,
+Kontaktwerte, Dokumentpassagen oder realen Personen in gespeicherte Testberichte
+übernehmen. Normierte Berichte enthalten nur Fallkennungen, technische Statuswerte
+und boolesche Bewertungen. Zusätzliche Ausgabeprüfungen werden erst bei gehäuften,
+reproduzierbaren Fehlern als begrenzter Vergleichstest erwogen. Es gibt keinen
+automatischen Schwellwert und keine automatische Aktivierung.
+
+Die lokale Modell-/UI-Abnahme beginnt erst nach erfolgreichem Offline-Gate und
+mit freigegebenen synthetischen Testdaten. Unit-Tests und simulierte Reports
+belegen noch keine tatsächliche Modellqualität.
+
+## Aktuelle Abnahmematrix und normierte Nachweise (v2)
+
+Verbindlich ist `scripts/openwebui/kahle-harness-acceptance-matrix.json`.
+Die v2-Matrix ersetzt die alte feste Werkzeug-Vorentscheidung durch:
+
+`required_tools ⊆ actual_tools ⊆ allowed_tools`
+
+Zusätzlich müssen alle `expected_source_kinds` in `validated_source_kinds`
+enthalten sein. Eine ausgeführte Suche allein belegt noch keine gültige Quelle.
+Reine Personenfragen bleiben Personio-only, reine Funktionskontakte RAG-only.
+Die ausdrückliche Kombination von Postfach und aktuellen Beschäftigten verlangt
+beide Werkzeuge. Bei mehrdeutigen Bereichskontakten ist RAG erforderlich und
+Personio zusätzlich zulässig. Die Reihenfolge spielt keine Rolle. Allgemeine
+Textaufgaben benötigen weder interne Werkzeuge noch eine Harness-Beobachtung.
+
+Der Reporter ruft keine Modelle auf und liest keine Chat-Datenbank. Ein
+kontrollierter Browser-/API-Testlauf muss die Nachweise liefern:
+
+1. `metrics.actual_tools` aus tatsächlich ausgeführten Werkzeugereignissen des
+   geprüften Turns übernehmen. Keine geplanten Aufrufe, `required_tool`, alte
+   Routingpläne oder bloße Nennungen im Antworttext verwenden. Auch unerlaubte
+   zusätzliche Werkzeuge erfassen; unbekannte Namen werden im Bericht als
+   `unknown_tool` sichtbar, niemals mitsamt Argumenten gespeichert.
+2. `metrics.validated_source_kinds` erst aus den nach Rechte-, Versions- und
+   Evidenzprüfung verbleibenden Quellen ermitteln. Keine rohen Toolquellen oder
+   ungeprüften `source_kinds` einfach umbenennen. Personio- und RAG-Quellen aus
+   dem kontrollierten Produzenten unterscheiden. Bei leerem Ergebnis `[]`
+   eintragen; fehlen die Nachweise, den Lauf nicht als bestanden erklären.
+3. `source_count`, `evidence_status`, `permission_scope_present`,
+   `feedback_link_present` und die Beobachtungsfelder aus dem geprüften Lauf
+   übernehmen. `source_count` allein ersetzt keinen geprüften Quellenbezug.
+4. Alle `required_assertions` des Falls anhand des unveränderten Ergebnisses
+   prüfen und unter `metrics.assertions` als echte Booleans eintragen. Nicht aus
+   der erwarteten Antwort ableiten oder pauschal auf `true` setzen. Insbesondere
+   die richtige Zuordnung von Funktion, Zweck und Bereich fachlich prüfen;
+   ein passender Kontaktwert allein reicht nicht.
+5. Pro Modell und freigegebenem Profil dieselben Pflichtfälle ausführen. Neue
+   Namen in einem frischen Chat prüfen; Gesprächskontext nur in den ausdrücklich
+   dafür vorgesehenen Fällen übernehmen. Bei mehrteiligen Fällen bezieht sich
+   der Run auf den letzten Turn, die Aussagenprüfung schließt die beschriebenen
+   Kontextbedingungen ein.
+
+Minimale Struktur einer lokalen Eingabedatei:
+
+```json
+{
+  "profile_authorization": {"employee": true, "manager": false},
+  "runs": [{
+    "case_id": "functional_contact_email",
+    "profile": "employee",
+    "metrics": {
+      "model_id": "KAHLE-Vinci",
+      "actual_tools": ["rag_chat"],
+      "validated_source_kinds": ["rag_chat"],
+      "evidence_status": "supported",
+      "source_count": 1,
+      "permission_scope_present": true,
+      "feedback_link_present": true,
+      "validation_mode": "shadow",
+      "delivery_status": "observed",
+      "final_validation_status": "accepted",
+      "assertions": {
+        "forbidden_fields_absent": true,
+        "typed_contact_source_present": true,
+        "contact_assignment_correct": true,
+        "answer_unmodified": true
+      }
+    }
+  }]
+}
+```
+
+Das Beispiel erklärt das Format, ist kein ausgeführter Lauf. Ein einzelner Fall
+erfüllt die vollständige Matrix nicht. Nicht freigegebene Profile und fehlende
+Modelle bleiben ausdrücklich unvollständig; keine produktiven Konten dafür ändern.
+Die Eingabedatei enthält bereits keine Rohdaten. Auswertung vom Repository-Root:
+
+```powershell
+.\.venv-verify\Scripts\python.exe scripts/openwebui/kahle-harness-acceptance.py <privacy-safe-runs.json>
+```
+
+Die CLI verwendet ausschließlich die eingecheckte v2-Matrix. Ein Exitcode 0
+bedeutet vollständige bestandene Coverage. Historische v1-Berichte bleiben über
+die Python-Schnittstelle lesbar, erfüllen den neuen Vertrag jedoch nicht.
+Vorhandene Runtime-Metriken allein sind noch kein fertiger v2-Abnahmeexport.
+Die Erhebung und Prüfung im echten Chat bleibt Teil der lokalen Modellabnahme.
+
+### Kontaktfälle und negative Kontrolltests
+
+Die Matrix enthält gültige E-Mail-, Telefon- und Kontaktseitenzeilen,
+Fließtext ohne Kontaktvertrag, fehlenden oder mehrdeutigen Bereich, Konflikte,
+fehlende Rechte, alte Versionen, falsche Kontaktzuordnungen und reine Suchhilfen.
+Hinzu kommen kompakte Nomenphrasen, gemischte Quellen und beide Arten von
+Supervisor-Folgefragen. Testdaten bleiben synthetisch und müssen über die
+vorhandenen Freigaben kontrolliert bereitgestellt werden.
+
+`functional_contact_shadow_fault` ist als `fault_injection` ein separater
+Offline-Kontrolltest der Beobachtung, kein verpflichtend manipulierter Modelllauf.
+Er speist absichtlich eine fehlerhafte Antwort ein und prüft, dass sie unverändert
+bleibt und markiert wird. Er ist nicht für vollständige Live-Modell-Coverage
+erforderlich. Wird ein solcher Lauf dem Reporter übergeben, bleibt seine
+Antwortqualität rot und seine Auffälligkeit sichtbar. Solche Kontrollläufe
+deshalb separat auswerten, nicht in die Modellfehlerquote mischen.
+
+Eine falsche Funktion bei richtigem Kontaktwert erfordert zusätzlich eine
+fachliche Bewertung. Die Literalprüfung kann freie Textzuordnungen nicht
+vollständig beweisen. Ebenso müssen bestehende feste Kontaktangaben in den
+Systemprompts vor der Modellabnahme auf Widersprüche zum Quellenvertrag geprüft
+werden; sie sind keine gültige typisierte Quelle.
+
+Vorlage und Pflegeweg: [Funktionskontakte](templates/funktionskontakte.md),
+[Übertragung und Rückweg](operations/functional-contact-evidence.md).
+
+Die folgenden älteren UI-Szenarien bleiben als Testideen erhalten. Bei
+abweichenden Werkzeugerwartungen gelten der v2-Vertrag und die Quellenhoheit
+dieses Abschnitts, nicht ein historischer Vor-Router.
 
 ## Ziel
 

@@ -5,10 +5,12 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 import sqlite3
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_PATH = ROOT / "open-webui-tools" / "rag_chat_hybrid_tool.py"
+sys.path.insert(0, str(TOOL_PATH.parent))
 REGISTER_PATH = ROOT.parent / "scripts" / "openwebui" / "register-kahle-workflow-tool.py"
 
 
@@ -67,6 +69,84 @@ def chunk(content: str, *, conflict: bool = False):
         conflict=conflict,
         knowledgebase_ids=("service",),
     )
+
+
+def typed_contact_chunk(label="E-Mail", value="it@example.invalid"):
+    from functional_contact_contract import parse_functional_contacts
+    text = ("## Funktionskontakte\n"
+        "| Funktion | Kontaktart | Kontaktwert | Verwendungszweck | Geltungsbereich |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        f"| IT | {label} | {value} | Störungen | gruppenweit |")
+    contact = parse_functional_contacts(text)[0]
+    result = chunk(contact["evidence_span"])
+    result.content = contact["evidence_span"]
+    result.chunk_kind = "functional_contact"
+    result.functional_contact = contact
+    return result
+
+
+@pytest.mark.parametrize("label,value", [("E-Mail", "it@example.invalid"), ("Kontaktseite", "https://it.example.invalid/tickets")])
+def test_structured_contact_claim_and_source_share_exact_row(monkeypatch, label, value):
+    module = load_tool()
+    contact = typed_contact_chunk(label, value)
+    tool = configured_tool(module, monkeypatch, [contact])
+    result = asyncio.run(tool.rag_chat("Kontaktkanäle der IT", __user__={"id": "user-1"}))
+    evidence = evidence_from_result(result)
+    claim = evidence["supported_claims"][0]
+    assert claim["claim_type"] == "functional_contact"
+    assert claim["functional_contact"] == evidence["sources"][0]["functional_contact"] == contact.functional_contact
+    assert claim["text"] == claim["evidence_span"] == contact.content
+    assert claim["document_id"] == "doc-1" and claim["version_id"] == "version-1"
+
+
+def test_document_capability_cannot_turn_plain_prose_into_functional_claim(monkeypatch):
+    module = load_tool()
+    prose = chunk("Marketing nutzt marketing@example.invalid.")
+    prose.evidence_capabilities = ["functional_contact"]
+    tool = configured_tool(module, monkeypatch, [prose])
+    evidence = evidence_from_result(asyncio.run(tool.rag_chat("Wie erreiche ich Marketing?", __user__={"id": "user-1"})))
+    assert all(claim["claim_type"] != "functional_contact" for claim in evidence["supported_claims"])
+
+
+@pytest.mark.parametrize("tamper", ["span", "channel", "kind"])
+def test_mismatched_contact_never_enters_context_or_typed_claim(monkeypatch, tamper):
+    module = load_tool()
+    contact = typed_contact_chunk()
+    if tamper == "span":
+        contact.parent_content = "Different row"
+    elif tamper == "channel":
+        contact.functional_contact["channel"] = "url"
+    else:
+        contact.chunk_kind = "text"
+    tool = configured_tool(module, monkeypatch, [contact])
+    result = asyncio.run(tool.rag_chat("Kontaktkanäle", __user__={"id": "user-1"}))
+    assert "it@example.invalid" not in result
+    assert not evidence_from_result(result)["supported_claims"]
+
+
+def test_conflict_error_preserves_independent_contact_and_partial_status(monkeypatch):
+    module = load_tool()
+    error = chunk("", conflict=True)
+    error.chunk_kind = "functional_contact"
+    error.functional_contact = None
+    error.contact_error = "functional_contact_conflict"
+    valid = typed_contact_chunk()
+    tool = configured_tool(module, monkeypatch, [valid, error])
+    evidence = evidence_from_result(asyncio.run(tool.rag_chat("Kontaktkanäle", __user__={"id": "user-1"})))
+    assert evidence["status"] == "partially_supported"
+    assert "functional_contact_conflict" in evidence["missing_information"]
+    assert len(evidence["supported_claims"]) == 1
+    assert evidence["supported_claims"][0]["functional_contact"] == valid.functional_contact
+
+
+def test_contact_evidence_preserves_outer_row_whitespace(monkeypatch):
+    module = load_tool()
+    contact = typed_contact_chunk()
+    contact.content = contact.parent_content = "  " + contact.content + "  "
+    contact.functional_contact["evidence_span"] = contact.content
+    tool = configured_tool(module, monkeypatch, [contact])
+    result = asyncio.run(tool.rag_chat("Kontaktkanäle", __user__={"id": "user-1"}))
+    assert evidence_from_result(result)["supported_claims"][0]["evidence_span"] == contact.content
 
 
 def test_rag_chat_returns_versioned_partial_evidence_for_overview_only_hit(monkeypatch):
@@ -261,6 +341,7 @@ def test_future_vinci_models_are_discovered_for_the_shared_harness_binding():
         "vendor-model",
     ]
     assert registration.shared_vinci_tool_ids() == [
+        "personio_directory",
         "rag_chat",
         "kahle_tasks",
         "kahle_workflow",
@@ -274,3 +355,27 @@ def test_retrieval_error_result_keeps_feedback_link_contract():
 
     assert "ERROR_CODE: {error_code}\\n" in error_block
     assert "FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}" in error_block
+
+
+def test_rag_chat_never_turns_a_search_example_into_a_mailbox_claim(monkeypatch):
+    module = load_tool()
+    hint = chunk("Wie lautet das Funktionspostfach der IT?")
+    hint.chunk_kind = "retrieval_hint"
+    contact = typed_contact_chunk()
+    tool = configured_tool(
+        module,
+        monkeypatch,
+        [hint, contact],
+    )
+
+    result = asyncio.run(tool.rag_chat(
+        "Wie lautet das Funktionspostfach der IT?",
+        __user__={"id": "user-1"},
+    ))
+    evidence = evidence_from_result(result)
+
+    assert [claim["text"] for claim in evidence["supported_claims"]] == [
+        contact.content
+    ]
+    assert evidence["supported_claims"][0]["claim_type"] == "functional_contact"
+    assert hint.parent_content not in result

@@ -16,8 +16,8 @@ def _service_block(compose: str, service: str) -> str:
     return compose[start:] if next_service is None else compose[start : start + 1 + next_service.start()]
 
 
-def _rendered_compose(*, harness_mode: str | None = None) -> dict:
-    compose_paths = [STACK_ROOT / "docker-compose.yml", STACK_ROOT / "docker-compose.prod.yml"]
+def _rendered_compose(*, harness_mode: str | None = None, local: bool = False) -> dict:
+    compose_paths = [STACK_ROOT / "docker-compose.yml", STACK_ROOT / ("docker-compose.local-edge.yml" if local else "docker-compose.prod.yml")]
     source = "\n".join(path.read_text(encoding="utf-8") for path in compose_paths)
     required_names = set(re.findall(r"\$\{([A-Z0-9_]+):\?", source))
     env = {
@@ -27,6 +27,7 @@ def _rendered_compose(*, harness_mode: str | None = None) -> dict:
     }
     env.update({name: "contract-test" for name in required_names})
     env["KAHLE_ROOT"] = str(STACK_ROOT.parent)
+    env["KAHLE_LOCAL_CODE_ROOT"] = "C:/synthetic-vinci-code"
     env["LEARNINGSUITE_ALLOWED_EMAILS"] = "contract-test@kahle.invalid"
     if harness_mode is not None:
         env["KAHLE_KNOWLEDGE_HARNESS_MODE"] = harness_mode
@@ -48,6 +49,20 @@ def _rendered_compose(*, harness_mode: str | None = None) -> dict:
         check=True,
     )
     return json.loads(completed.stdout)
+
+
+def test_model_led_is_local_only_and_code_mounts_do_not_move_runtime_data():
+    production = _rendered_compose()["services"]["open-webui"]
+    local = _rendered_compose(local=True)["services"]["open-webui"]
+    assert production["environment"]["KAHLE_KNOWLEDGE_ROUTING_MODE"] == "legacy"
+    assert local["environment"]["KAHLE_KNOWLEDGE_ROUTING_MODE"] == "model_led"
+    mounts = {entry["target"]: entry for entry in local["volumes"]}
+    for module in ("middleware", "kahle_knowledge_harness", "kahle_internal_knowledge", "functional_contact_contract", "personio_directory_client", "misc"):
+        mount = mounts[f"/app/backend/open_webui/utils/{module}.py"]
+        assert mount["source"].replace("\\", "/").startswith("C:/synthetic-vinci-code/")
+        assert mount["read_only"] is True
+    assert "synthetic-vinci-code" not in mounts["/knowledgebases"]["source"]
+    assert "synthetic-vinci-code" not in mounts["/kb-sync-state"]["source"]
 
 
 def test_personio_directory_compose_is_internal_and_hardened() -> None:
@@ -76,6 +91,10 @@ def test_personio_credentials_are_only_in_directory_service() -> None:
     assert (
         "personio_directory_client.py:/app/backend/open_webui/utils/"
         "personio_directory_client.py:ro"
+    ) in open_webui
+    assert (
+        "kahle_internal_knowledge.py:/app/backend/open_webui/utils/"
+        "kahle_internal_knowledge.py:ro"
     ) in open_webui
     assert "personio-directory:\n        condition: service_started" in open_webui
 

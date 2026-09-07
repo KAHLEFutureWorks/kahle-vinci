@@ -1,10 +1,13 @@
 from datetime import date
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
 from app.hybrid_sync import (
     CanonicalIndexDocument, HybridIndexBuilder, HybridSyncError, inventory_legacy_files,
+    QdrantHybridClient,
 )
 
 
@@ -118,3 +121,83 @@ def test_legacy_inventory_requires_canonical_metadata(tmp_path: Path):
     assert len(candidates) == 1
     assert candidates[0].path == "service/legacy.md"
     assert "document_id" in candidates[0].missing_fields
+
+
+@pytest.mark.parametrize("incremental", [False, True])
+def test_both_sync_paths_emit_source_bound_contact_and_hint_payloads(incremental):
+    row = "| IT | E-Mail | it@example.invalid | Störungen | gruppenweit |"
+    markdown = "\n".join(("# Wissen", "## Kurzindex", "Wer hilft bei Störungen?", "## Funktionskontakte",
+        "| Funktion | Kontaktart | Kontaktwert | Verwendungszweck | Geltungsbereich |",
+        "| --- | --- | --- | --- | --- |", row))
+    qdrant = IncrementalQdrant() if incremental else Qdrant()
+    builder = HybridIndexBuilder(qdrant, Embeddings())
+    doc = canonical(markdown=markdown)
+    if incremental:
+        builder.sync_document(doc, today=date(2026, 8, 6))
+    else:
+        builder.rebuild([doc], today=date(2026, 8, 6))
+    payloads = [point["payload"] for point in qdrant.points]
+    contacts = [payload for payload in payloads if payload["chunk_kind"] == "functional_contact"]
+    assert len(contacts) == 1
+    contact = contacts[0]
+    assert contact["content"] == contact["parent_content"] == row
+    assert contact["functional_contact"]["row_number"] == 7
+    expected_key = hashlib.sha256(json.dumps(
+        ["IT", "email", "Störungen", "gruppenweit"], ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    assert contact["functional_contact_key"] == expected_key
+    assert contact["source_id"] == "src-1"
+    assert contact["document_id"] == "doc-1" and contact["version_id"] == "v-1"
+    assert contact["published"] is (not incremental)
+    hints = [payload for payload in payloads if payload["chunk_kind"] == "retrieval_hint"]
+    assert len(hints) == 1
+    assert "functional_contact" not in hints[0] and "functional_contact_key" not in hints[0]
+
+
+def test_contact_key_gets_keyword_index(monkeypatch):
+    client = QdrantHybridClient("http://qdrant.invalid")
+    calls = []
+    monkeypatch.setattr(client, "request", lambda method, path, **kwargs: calls.append((path, kwargs["json"])))
+    client.create_staging("synthetic-staging")
+    assert ("/collections/synthetic-staging/index", {
+        "field_name": "functional_contact_key", "field_schema": "keyword",
+    }) in calls
+
+
+@pytest.mark.parametrize("incremental", [False, True])
+@pytest.mark.parametrize("changes", [{"status": "draft"}, {"valid_until": "2026-08-05"}, {"version_id": ""}])
+def test_contact_document_cannot_bypass_publication_or_version_validation(incremental, changes):
+    qdrant = IncrementalQdrant() if incremental else Qdrant()
+    builder = HybridIndexBuilder(qdrant, Embeddings())
+    markdown = ("## Funktionskontakte\n"
+        "| Funktion | Kontaktart | Kontaktwert | Verwendungszweck | Geltungsbereich |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| IT | E-Mail | it@example.invalid | Störungen | gruppenweit |")
+    doc = canonical(markdown=markdown, **changes)
+    with pytest.raises(HybridSyncError):
+        if incremental:
+            builder.sync_document(doc, today=date(2026, 8, 6))
+        else:
+            builder.rebuild([doc], today=date(2026, 8, 6))
+    assert qdrant.points == [] and qdrant.activated is None
+
+
+def test_contact_incremental_publication_failure_restores_previous_version(monkeypatch):
+    qdrant = IncrementalQdrant()
+    publish = qdrant.set_publication
+
+    def fail_new_publication(collection, **kwargs):
+        if kwargs.get("published") and kwargs.get("point_ids"):
+            raise HybridSyncError("synthetic_publication_failure")
+        publish(collection, **kwargs)
+
+    monkeypatch.setattr(qdrant, "set_publication", fail_new_publication)
+    doc = canonical(markdown=("## Funktionskontakte\n"
+        "| Funktion | Kontaktart | Kontaktwert | Verwendungszweck | Geltungsbereich |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| IT | E-Mail | it@example.invalid | Störungen | gruppenweit |"))
+    with pytest.raises(HybridSyncError, match="synthetic_publication_failure"):
+        HybridIndexBuilder(qdrant, Embeddings()).sync_document(doc, today=date(2026, 8, 6))
+    assert any(point["payload"]["chunk_kind"] == "functional_contact" for point in qdrant.points)
+    assert qdrant.calls[-2] == ("publish", True, None, "doc-1", "v-1")
+    assert qdrant.calls[-1] == ("delete_version", "doc-1", "v-1")

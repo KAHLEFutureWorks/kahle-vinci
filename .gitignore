@@ -28,6 +28,9 @@ node_modules/
 .ruff_cache/
 dist/
 build/
+!admin-dashboard/build/
+admin-dashboard/build/*
+!admin-dashboard/build/sites-vite-plugin.ts
 
 # Local model/runtime data
 ollama/

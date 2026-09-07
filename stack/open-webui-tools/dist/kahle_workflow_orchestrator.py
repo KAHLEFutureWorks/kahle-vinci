@@ -5,12 +5,14 @@ version: 0.4.0
 description: Deterministisches Mehrschritt-Tool fuer KAHLE-Workflows mit Tasks, RAG/Web-Recherche und strukturierter Ausgabe.
 """
 # Erzeugt von stack/open-webui-tools/build_tools.py. Nicht direkt bearbeiten.
-# Quellen: hybrid_retrieval.py, hybrid_retrieval_adapters.py, kahle_workflow_orchestrator.py
+# Quellen: functional_contact_contract.py, hybrid_retrieval.py, hybrid_retrieval_adapters.py, kahle_workflow_orchestrator.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 from typing import Any, Protocol
+from urllib.parse import urlsplit
+import hashlib
 import json
 import math
 import os
@@ -20,6 +22,141 @@ import sqlite3
 import time
 import unicodedata
 
+
+CONTACT_SCHEMA = "kahle.functional-contact.v1"
+CONTACT_HEADER = ("Funktion", "Kontaktart", "Kontaktwert", "Verwendungszweck", "Geltungsbereich")
+CONTACT_CHANNELS = {"E-Mail": "email", "Telefon": "phone", "Kontaktseite": "url"}
+CONTACT_HINT_HEADINGS = frozenset({"Für Fragen wie", "Beispielanfragen", "Suchbegriffe", "Synonyme", "Kurzindex"})
+CONTACT_MAX_ROW_CHARS = 900
+_FC_KEYS = frozenset({"schema_version", "function", "channel", "value", "purpose", "scope", "row_number", "evidence_span"})
+_FC_EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+_FC_PHONE = re.compile(r"(?<!\w)\+?\d[\d ()/.-]*\d(?!\w)")
+_FC_URL = re.compile(r"https?://[^\s<>\[\]\"']+", re.IGNORECASE)
+_FC_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$")
+_FC_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+def _fc_phone_valid(value: str) -> bool:
+    if not re.fullmatch(r"\+?\d[\d ()/.-]*\d", value):
+        return False
+    if len(re.sub(r"\D", "", value)) < 6:
+        return False
+    return re.fullmatch(r"\d{1,4}[.-]\d{1,2}[.-]\d{2,4}", value) is None
+def _fc_value_valid(channel: str, value: str) -> bool:
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return False
+    if channel == "email":
+        return _FC_EMAIL.fullmatch(value) is not None
+    if channel == "phone":
+        return _fc_phone_valid(value)
+    if channel != "url" or any(character.isspace() for character in value):
+        return False
+    if any(character in value for character in '<>"\\'):
+        return False
+    try:
+        url = urlsplit(value)
+        # Accessing port also rejects malformed numeric ports.
+        port = url.port
+        return bool(
+            value.startswith("https://") and url.scheme == "https" and url.hostname
+            and url.username is None and url.password is None
+            and (port is None or 0 < port <= 65535)
+        )
+    except ValueError:
+        return False
+def _fc_cells(line: str) -> tuple[str, ...]:
+    value = line.strip()
+    if not value.startswith("|") or not value.endswith("|"):
+        return ()
+    return tuple(cell.strip() for cell in value[1:-1].split("|"))
+def _fc_row(line: str, number: int, limit: int) -> dict | None:
+    if len(line) > limit or "\n" in line or "\r" in line:
+        return None
+    cells = _fc_cells(line)
+    if len(cells) != 5 or not all(cells):
+        return None
+    function, label, value, purpose, scope = cells
+    channel = CONTACT_CHANNELS.get(label)
+    if channel is None or not _fc_value_valid(channel, value):
+        return None
+    if any(any(ord(char) < 32 or ord(char) == 127 for char in cell) for cell in cells):
+        return None
+    return {
+        "schema_version": CONTACT_SCHEMA, "function": function, "channel": channel,
+        "value": value, "purpose": purpose, "scope": scope,
+        "row_number": number, "evidence_span": line,
+    }
+def validate_functional_contact(value: object) -> dict | None:
+    """Validate exact keys/types and bind every field to the unchanged row."""
+    if not isinstance(value, dict) or set(value) != _FC_KEYS:
+        return None
+    if type(value["row_number"]) is not int or value["row_number"] < 1:
+        return None
+    if any(type(value[key]) is not str or not value[key] for key in _FC_KEYS - {"row_number"}):
+        return None
+    parsed = _fc_row(value["evidence_span"], value["row_number"], CONTACT_MAX_ROW_CHARS)
+    return parsed if parsed == value else None
+def functional_contact_key(contact: dict) -> tuple[str, str, str, str]:
+    """Business identity; distinct values with this identity conflict."""
+    return (contact["function"], contact["channel"], contact["purpose"], contact["scope"])
+def parse_functional_contacts(markdown: str, *, max_row_chars: int = 900) -> tuple[dict, ...]:
+    """Read complete rows in explicit sections of canonical, frontmatter-free Markdown."""
+    if not isinstance(markdown, str) or type(max_row_chars) is not int or max_row_chars < 1:
+        return ()
+    lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    headings: list[tuple[int, str]] = []
+    fence: tuple[str, int] | None = None
+    table = False
+    records = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        number = index + 1
+        index += 1
+        marker = _FC_FENCE.match(line)
+        if fence is not None:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and not marker[2].strip():
+                fence = None
+            continue
+        if marker:
+            fence = (marker[1][0], len(marker[1]))
+            table = False
+            continue
+        heading = _FC_HEADING.match(line)
+        if heading:
+            level, title = len(heading[1]), heading[2]
+            headings = [(depth, name) for depth, name in headings if depth < level]
+            headings.append((level, title))
+            table = False
+            continue
+        names = [name for _, name in headings]
+        active = "Funktionskontakte" in names and not CONTACT_HINT_HEADINGS.intersection(names)
+        if not active or line.startswith(("    ", "\t")):
+            table = False
+            continue
+        if _fc_cells(line) == CONTACT_HEADER:
+            separator = _fc_cells(lines[index]) if index < len(lines) else ()
+            table = len(separator) == 5 and all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator)
+            if table:
+                index += 1
+            continue
+        if not line.strip().startswith("|"):
+            table = False
+            continue
+        if table:
+            record = _fc_row(line, number, min(max_row_chars, CONTACT_MAX_ROW_CHARS))
+            if record is not None:
+                records.append(record)
+    return tuple(records)
+def extract_contact_literals(text: str) -> tuple[tuple[str, str], ...]:
+    """Extract candidates for output validation, never for granting permission."""
+    if not isinstance(text, str):
+        return ()
+    values = [("email", match[0]) for match in _FC_EMAIL.finditer(text)]
+    values.extend(
+        ("phone", match[0].strip()) for match in _FC_PHONE.finditer(text)
+        if _fc_phone_valid(match[0].strip())
+    )
+    values.extend(("url", match[0].rstrip(".,;:!?)}")) for match in _FC_URL.finditer(text))
+    return tuple(dict.fromkeys(values))
 
 class RetrievalError(RuntimeError):
     pass
@@ -61,6 +198,9 @@ class RetrievedChunk:
     classification_status: str = "review_required"
     classification_version: str = ""
     classification_confidence: float = 0.0
+    chunk_kind: str = "text"
+    functional_contact: dict | None = None
+    contact_error: str = ""
 class SparseQueryEncoder(Protocol):
     def encode_query(self, query: str) -> dict[str, list[int] | list[float]]: ...
 class Reranker(Protocol):
@@ -251,7 +391,7 @@ def required_evidence_capabilities(query: str) -> tuple[str, ...]:
     procedural = bool(re.search(
         r"\bwie\s+(?:kann|muss|soll|darf|gehe|verfahre|funktioniert|"
         r"bedien|nutz|verwend|richt|beantrag|aender|pfleg|meld|fuehr|"
-        r"oeffn|waehl|trag|gib|erfass|speicher|bestaetig|erstell|plan|buch|sperr)\w*\b",
+        r"oeffn|waehl|trag|gib|erfass|hinterleg|speicher|bestaetig|erstell|plan|buch|sperr)\w*\b",
         folded,
     ))
     return ("procedure",) if procedural else ()
@@ -284,6 +424,8 @@ def pre_rerank_metadata_filter(
         and float((point.get("payload") or {}).get("classification_confidence") or 0) >= 0.8
     ]
     if not trusted:
+        if "approved_functional_responsibility" in required:
+            return []
         return candidates
     selected = [
         point for point in trusted
@@ -301,6 +443,11 @@ def pre_rerank_metadata_filter(
                 point for point in selected
                 if _passage_has_explicit_usage_scope(point, entity)
             ]
+    if required.issubset({"functional_contact", "contact_details", "explicit_relationship"}):
+        # The row carries this evidence itself, independently of document classification.
+        selected.extend(point for point in candidates if point not in selected
+                        and (point.get("payload") or {}).get("chunk_kind") == "functional_contact"
+                        and validate_functional_contact((point.get("payload") or {}).get("functional_contact")) is not None)
     return selected
 def _passage_has_explicit_usage_scope(point: dict[str, Any], entity: str) -> bool:
     payload = point.get("payload") or {}
@@ -444,10 +591,10 @@ def deduplicate_reranked(
         terms = set(re.findall(r"[a-z0-9]{3,}", normalized))
         conflict = bool(payload.get("conflict"))
         duplicate = False
-        if terms and not conflict:
+        if terms and not conflict and payload.get("chunk_kind") != "functional_contact":
             for (existing_index, _existing_score), other in zip(selected, selected_terms):
                 existing_payload = candidates[existing_index].get("payload") or {}
-                if existing_payload.get("conflict"):
+                if existing_payload.get("conflict") or existing_payload.get("chunk_kind") == "functional_contact":
                     continue
                 overlap = len(terms.intersection(other)) / max(1, len(terms.union(other)))
                 if overlap >= similarity_threshold:
@@ -465,6 +612,84 @@ def _metadata_only(point: dict[str, Any]) -> bool:
     inner = content[3:-3]
     lines = [line.strip() for line in inner.splitlines() if line.strip()]
     return bool(lines) and all(":" in line or line.startswith(("-", "#")) for line in lines)
+def procedure_scope_companions(
+    selected_points: list[dict[str, Any]], complete_points: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return missing scope and process passages from selected process documents."""
+    selected_documents = {
+        str((point.get("payload") or {}).get("document_id") or "")
+        for point in selected_points
+    }
+    selected_identities = {
+        str((point.get("payload") or {}).get("parent_id") or point.get("id") or "")
+        for point in selected_points
+    }
+    scope_markers = re.compile(
+        r"\b(?:geltungsbereich|gilt\s+(?:nur|fur)|andere\w*\s+standort|"
+        r"ausnahme|wichtig)\w*\b",
+    )
+    process_summary_markers = re.compile(
+        r"\b(?:kurzablauf|gesamtprozess|vorgehensweise|durchfuhrung|"
+        r"arbeitsschritt|prozessschritt|schritt(?:e|en)?)\w*\b",
+    )
+
+    def folded_point_text(point: dict[str, Any]) -> str:
+        payload = point.get("payload") or {}
+        text = "\n".join((
+            " > ".join(str(item) for item in payload.get("heading_path") or ()),
+            str(payload.get("parent_content") or payload.get("content") or ""),
+        ))
+        return (
+            unicodedata.normalize("NFKD", text)
+            .encode("ascii", "ignore")
+            .decode()
+            .casefold()
+        )
+
+    selected_kinds: dict[str, set[str]] = {document_id: set() for document_id in selected_documents}
+    for point in selected_points:
+        payload = point.get("payload") or {}
+        document_id = str(payload.get("document_id") or "")
+        folded_text = folded_point_text(point)
+        if scope_markers.search(folded_text):
+            selected_kinds.setdefault(document_id, set()).add("scope")
+        if process_summary_markers.search(folded_text) and not scope_markers.search(folded_text):
+            selected_kinds.setdefault(document_id, set()).add("process")
+
+    candidates_by_document: dict[str, dict[str, list[tuple[int, dict[str, Any]]]]] = {}
+    for point in complete_points:
+        payload = point.get("payload") or {}
+        document_id = str(payload.get("document_id") or "")
+        identity = str(payload.get("parent_id") or point.get("id") or "")
+        if document_id not in selected_documents or identity in selected_identities:
+            continue
+        folded_text = folded_point_text(point)
+        buckets = candidates_by_document.setdefault(document_id, {"scope": [], "process": []})
+        if scope_markers.search(folded_text):
+            buckets["scope"].append((0, point))
+            continue
+        process_match = process_summary_markers.search(folded_text)
+        if process_match:
+            heading = " > ".join(str(item) for item in payload.get("heading_path") or ())
+            folded_heading = (
+                unicodedata.normalize("NFKD", heading)
+                .encode("ascii", "ignore")
+                .decode()
+                .casefold()
+            )
+            rank = 2 if "kurzablauf" in folded_heading or "gesamtprozess" in folded_heading else 1
+            buckets["process"].append((rank, point))
+
+    companions: list[dict[str, Any]] = []
+    for document_id in selected_documents:
+        buckets = candidates_by_document.get(document_id, {})
+        kinds = selected_kinds.get(document_id, set())
+        for kind in ("scope", "process"):
+            options = buckets.get(kind) or []
+            if kind in kinds or not options:
+                continue
+            companions.append(max(options, key=lambda item: item[0])[1])
+    return companions
 def document_overview_intent(query: str) -> bool:
     folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
     if any(term in folded for term in (
@@ -485,6 +710,9 @@ def structural_document_overview(
     *, result_limit: int, max_context_chars: int = 40_000,
 ) -> list[tuple[tuple[int, ...], float]]:
     """Group every parent below each numbered main chapter when all chapters fit."""
+    # Contact rows cannot be concatenated into chapter evidence.
+    if any((point.get("payload") or {}).get("chunk_kind") == "functional_contact" for point in candidates):
+        return []
     scores = {index: float(score) for index, score in reranked}
     numbered: dict[int, list[int]] = {}
     for index, point in enumerate(candidates):
@@ -596,6 +824,76 @@ class QdrantHybridRetriever:
             raise RetrievalError("minimum_rerank_score_out_of_range")
         self.minimum_rerank_score = minimum_rerank_score
 
+    @staticmethod
+    def _validate_points(points, scope, today):
+        if not isinstance(points, list):
+            raise RetrievalError("search_response_invalid")
+        for point in points:
+            payload = point.get("payload") if isinstance(point, dict) else None
+            if not isinstance(payload, dict):
+                raise RetrievalError("search_response_invalid")
+            rights = payload.get("knowledgebase_ids")
+            if not isinstance(rights, list) or not all(isinstance(item, str) for item in rights) or not set(rights).intersection(scope.knowledgebase_ids):
+                raise RetrievalError("acl_violation_in_search_response")
+            if payload.get("version_id") not in scope.active_version_ids:
+                raise RetrievalError("non_authoritative_version_returned")
+            if payload.get("status") != "active" or payload.get("published") is not True:
+                raise RetrievalError("inactive_result_returned")
+            try:
+                start, end = (date.fromisoformat(payload[key]) for key in ("valid_from", "valid_until"))
+                if not start <= today <= end:
+                    raise ValueError("outside_validity")
+            except (KeyError, ValueError, TypeError):
+                raise RetrievalError("invalid_result_validity") from None
+        return points
+
+    @staticmethod
+    def _contact(point):
+        payload = point.get("payload") or {}
+        if payload.get("chunk_kind") != "functional_contact":
+            return None
+        contact = validate_functional_contact(payload.get("functional_contact"))
+        if contact is None or payload.get("content") != contact["evidence_span"] or payload.get("parent_content") != contact["evidence_span"]:
+            return None
+        key = json.dumps(functional_contact_key(contact), ensure_ascii=False, separators=(",", ":"))
+        if payload.get("functional_contact_key") != hashlib.sha256(key.encode("utf-8")).hexdigest():
+            return None
+        return contact
+
+    def _contact_check(self, contact, acl, scope, today, observed_values=()):
+        key = json.dumps(functional_contact_key(contact), ensure_ascii=False, separators=(",", ":"))
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        body = {"filter": {"must": [*acl["must"], {"key": "functional_contact_key", "match": {"value": digest}}]},
+                "limit": 100, "with_payload": True, "with_vector": False}
+        values = {contact["value"], *observed_values}
+        for _page in range(10):
+            try:
+                response = requests.post(f"{self.qdrant_url}/collections/{self.alias}/points/scroll", json=body.copy(), timeout=self.timeout)
+                response.raise_for_status()
+                result = response.json()["result"]
+                points = result["points"]
+                if not isinstance(points, list) or "next_page_offset" not in result:
+                    raise ValueError("incomplete_page")
+                for point in points:
+                    try:
+                        self._validate_points([point], scope, today)
+                    except RetrievalError:
+                        # Hidden/stale entries must neither authorize nor expose a conflict.
+                        continue
+                    other = self._contact(point)
+                    if other is None or functional_contact_key(other) != functional_contact_key(contact):
+                        raise ValueError("invalid_contact_response")
+                    values.add(other["value"])
+                offset = result["next_page_offset"]
+                if offset is None:
+                    return "functional_contact_conflict" if len(values) > 1 else ""
+                if not isinstance(offset, (int, str)) or isinstance(offset, bool):
+                    raise ValueError("invalid_offset")
+                body["offset"] = offset
+            except (requests.RequestException, KeyError, TypeError, ValueError):
+                return "functional_contact_conflict_check_incomplete"
+        return "functional_contact_conflict_check_incomplete"
+
     def retrieve(self, query: str, dense_vector: list[float], scope: RetrievalScope,
                  *, candidate_limit: int = 50, result_limit: int = 8,
                  today: date | None = None,
@@ -604,6 +902,7 @@ class QdrantHybridRetriever:
             raise RetrievalError("query_and_dense_vector_required")
         if not 30 <= candidate_limit <= 50 or not 5 <= result_limit <= 8:
             raise RetrievalError("retrieval_limits_out_of_policy")
+        today = today or date.today()
         acl = mandatory_acl_filter(scope, today)
         try:
             sparse = self.sparse_encoder.encode_query(query)
@@ -647,12 +946,22 @@ class QdrantHybridRetriever:
             points = response.json()["result"]["points"]
         except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
             raise RetrievalError("hybrid_search_unavailable") from exc
+        points = self._validate_points(points, scope, today)
+        hint_identities = {
+            (point["payload"].get("document_id"), point["payload"].get("version_id"))
+            for point in points if point["payload"].get("chunk_kind") == "retrieval_hint"
+        }
+        if hint_identities:
+            expanded = self._validate_points(self._document_points({doc for doc, _ in hint_identities if doc}, acl), scope, today)
+            points = points + [point for point in expanded if (point["payload"].get("document_id"), point["payload"].get("version_id")) in hint_identities]
+        points = [point for point in points if point["payload"].get("chunk_kind") != "retrieval_hint"]
         candidates = [
             point for point in self._parent_centered(points, candidate_limit)
             if not _metadata_only(point)
         ]
         if opening_hours_all_locations_intent(query):
-            candidates = self._complete_opening_hours_locations(candidates, acl)
+            candidates = self._complete_opening_hours_locations(candidates, acl, scope, today)
+        candidates = [point for point in candidates if point["payload"].get("chunk_kind") != "retrieval_hint"]
         candidates = pre_rerank_metadata_filter(query, candidates, information_needs)
         if not candidates:
             return []
@@ -682,12 +991,18 @@ class QdrantHybridRetriever:
         }
         selected_document_ids.discard("")
         if selected_document_ids:
-            complete_points = self._document_points(selected_document_ids, acl)
+            complete_points = self._validate_points(self._document_points(selected_document_ids, acl), scope, today)
+            complete_points = [point for point in complete_points if point["payload"].get("document_id") in selected_document_ids and point["payload"].get("chunk_kind") != "retrieval_hint"]
             if complete_points:
                 candidates = [
                     point for point in self._parent_centered(complete_points, 256)
                     if not _metadata_only(point)
                 ]
+        candidates = [point for point in candidates if (
+            point["payload"].get("chunk_kind") != "functional_contact" and not point["payload"].get("functional_contact")
+        ) or self._contact(point) is not None]
+        if not candidates:
+            return []
         try:
             reranked = self.reranker.rerank(
                 query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
@@ -739,6 +1054,24 @@ class QdrantHybridRetriever:
             ranked_selection = diversify_reranked(
                 eligible_reranked, candidates, result_limit=result_limit,
             )
+        if "procedure" in required_evidence_capabilities(query) and ranked_selection:
+            selected_points = [candidates[index] for index, _score in ranked_selection]
+            process_document_ids = {
+                str((point.get("payload") or {}).get("document_id") or "")
+                for point in selected_points
+            }
+            process_document_ids.discard("")
+            if process_document_ids:
+                complete_process_points = self._validate_points(
+                    self._document_points(process_document_ids, acl), scope, today
+                )
+                for companion in procedure_scope_companions(
+                    selected_points, complete_process_points
+                ):
+                    if _metadata_only(companion):
+                        continue
+                    candidates.append(companion)
+                    ranked_selection.append((len(candidates) - 1, 1.0))
         selected: list[RetrievedChunk] = []
         for index, score in ranked_selection:
             point = candidates[index]
@@ -765,11 +1098,28 @@ class QdrantHybridRetriever:
                 classification_status=payload.get("classification_status") or "review_required",
                 classification_version=payload.get("classification_version") or "",
                 classification_confidence=float(payload.get("classification_confidence") or 0),
+                chunk_kind=payload.get("chunk_kind") or "text",
+                functional_contact=self._contact(point),
             ))
+        checks = {}
+        observed = {}
+        for point in candidates:
+            contact = self._contact(point)
+            if contact is not None:
+                observed.setdefault(functional_contact_key(contact), set()).add(contact["value"])
+        for index, chunk in enumerate(selected):
+            if chunk.functional_contact is None:
+                continue
+            key = functional_contact_key(chunk.functional_contact)
+            if key not in checks:
+                checks[key] = self._contact_check(chunk.functional_contact, acl, scope, today, observed.get(key, ()))
+            if checks[key]:
+                selected[index] = replace(chunk, content="", parent_content="", functional_contact=None,
+                                          contact_error=checks[key], conflict=checks[key] == "functional_contact_conflict")
         return selected
 
     def _complete_opening_hours_locations(
-        self, candidates: list[dict[str, Any]], acl: dict[str, Any],
+        self, candidates: list[dict[str, Any]], acl: dict[str, Any], scope: RetrievalScope, today: date,
     ) -> list[dict[str, Any]]:
         """Recover location passages omitted from the broad top-50 fusion pool.
 
@@ -804,7 +1154,7 @@ class QdrantHybridRetriever:
                 points = response.json()["result"]["points"]
             except (RetrievalError, requests.RequestException, KeyError, TypeError, ValueError):
                 continue
-            for point in self._parent_centered(points, 8):
+            for point in self._parent_centered(self._validate_points(points, scope, today), 8):
                 identity = str(
                     (point.get("payload") or {}).get("parent_id") or point.get("id") or ""
                 )
@@ -851,6 +1201,8 @@ class QdrantHybridRetriever:
         for point in points:
             payload = point.get("payload") or {}
             parent_id = str(payload.get("parent_id") or point.get("id") or "")
+            if payload.get("chunk_kind") == "functional_contact":
+                parent_id = str(point.get("id") or "")
             if not parent_id or parent_id in seen_parents:
                 continue
             seen_parents.add(parent_id)

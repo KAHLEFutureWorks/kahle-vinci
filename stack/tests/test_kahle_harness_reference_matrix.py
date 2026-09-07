@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "kahle_knowledge_harness.py"
@@ -196,3 +198,44 @@ def test_model_prompts_leave_canonical_feedback_link_delivery_to_the_harness():
     ):
         prompt = (ROOT / "open-webui-prompts" / filename).read_text(encoding="utf-8")
         assert "Wenn RAG_Chat `FEEDBACK_LINK` liefert" not in prompt
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("kahle-vinci", "kahle-vinci-thinking", "kahle-vinci-max-thinking"),
+)
+def test_result_driven_matrix_consumes_mailbox_and_staff_from_executed_tools(model):
+    """Offline source integration, not proof that a live model selects both tools."""
+    harness = load_harness()
+    query = "Wie lautet das Funktionspostfach und wer arbeitet aktuell im Marketing?"
+    row = "| Marketing | E-Mail | marketing@example.invalid | Anfragen | gruppenweit |"
+    contact = {"schema_version": "kahle.functional-contact.v1", "function": "Marketing",
+               "channel": "email", "value": "marketing@example.invalid", "purpose": "Anfragen",
+               "scope": "gruppenweit", "row_number": 4, "evidence_span": row}
+    rag = rag_result(status="supported", claims=({
+        "claim_id": "R1C1", "source_id": "#1", "document_id": "d1", "version_id": "v1",
+        "claim_type": "functional_contact", "text": row, "evidence_span": row,
+        "functional_contact": contact,
+    },), sources=({"number": 1, "document_id": "d1", "version_id": "v1",
+                  "chunk_kind": "functional_contact", "functional_contact": contact},))
+    personio = {"status": "ok", "claims": [{"display_name": "Erika Beispiel",
+                "department": "Marketing", "source_id": "P1"}],
+                "sources": [{"id": "P1", "kind": "personio_directory"}]}
+    current = harness.build_result_driven_decision(
+        called_tools=("personio_directory", "rag_chat"), query=query, messages=[],
+        model_id=model, permission_scope={"user_id": "synthetic-user", "groups": ["intern"]},
+        rag_result=rag, personio_result=personio,
+    )
+    assert current is not None
+    assert current.retrieval_plan.mode == "model_led"
+    assert current.retrieval_plan.required_tools == ("personio_directory", "rag_chat")
+    assert current.answer_contract.allowed_contact_values == ("marketing@example.invalid",)
+    assert any(claim.get("display_name") == "Erika Beispiel" for claim in current.evidence_bundle.supported_claims)
+    assert {event["tool"] for event in current.events if event["type"] == "retrieval/completed"} == {"personio_directory", "rag_chat"}
+
+
+def test_explicit_mailbox_and_current_staff_selects_both_sources():
+    current = decision(load_harness(),
+        "Wie lautet das Funktionspostfach und wer arbeitet aktuell im Marketing?",
+        rag_result(status="unsupported"))
+    assert current.retrieval_plan.required_tools == ("personio_directory", "rag_chat")

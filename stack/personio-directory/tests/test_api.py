@@ -5,14 +5,21 @@ import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app import main as main_module
+from app import search as search_module
 from app.main import create_app
-from app.search import DirectoryEvidence
+from app.search import DirectoryEvidence, DirectorySearch
 
 
 class FakeSearch:
+    def __init__(self) -> None:
+        self.queries = []
+
     def search(self, query):
+        self.queries.append(query)
         if query.intent == "onboarding_search":
             claims = (
                 {
@@ -80,6 +87,110 @@ def test_search_rejects_missing_or_wrong_internal_key() -> None:
     with client() as api:
         assert api.post("/internal/search", json=request(role="user")).status_code == 403
         assert api.post("/internal/search", json=request(role="user"), headers={"X-API-Key": "wrong"}).status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_intent"),
+    [
+        ("Serviceassistenzen Neustadt", "directory_search"),
+        ("Wo arbeitet Erika Beispiel?", "person_lookup"),
+        ("Wer ist im Onboarding?", "onboarding_search"),
+        ("Wer ist die Führungskraft von Erika Beispiel?", "supervisor_lookup"),
+    ],
+)
+def test_auto_request_resolves_only_the_local_directory_intent(query: str, expected_intent: str) -> None:
+    fake_search = FakeSearch()
+    app = create_app(search=fake_search, internal_api_key="test-key", start_background=False)
+    with TestClient(app) as api:
+        response = api.post(
+            "/internal/search",
+            json={**request(role="user", intent="auto"), "query": query},
+            headers={"X-API-Key": "test-key"},
+        )
+
+    assert response.status_code == 200
+    assert fake_search.queries[0].intent == expected_intent
+    assert response.json()["resolved_intent"] == expected_intent
+
+
+def test_auto_request_classifies_once_before_the_directory_lookup(monkeypatch) -> None:
+    class EmptyDirectoryIndex:
+        def indexed_personio_ids(self) -> set[str]:
+            return set()
+
+        def people_by_personio_ids(self, personio_ids: set[str]) -> dict[str, object]:
+            return {}
+
+    query_text = "Serviceassistenzen Neustadt"
+    calls: list[str] = []
+
+    def count_classification(text: str) -> str:
+        calls.append(text)
+        return "directory_search"
+
+    monkeypatch.setattr(main_module, "classify_directory_query", count_classification)
+    monkeypatch.setattr(search_module, "classify_directory_query", count_classification)
+    directory = DirectorySearch(
+        EmptyDirectoryIndex(), sync_completed_at="2026-08-24T10:15:00Z"
+    )
+    app = create_app(search=directory, internal_api_key="test-key", start_background=False)
+
+    with TestClient(app) as api:
+        response = api.post(
+            "/internal/search",
+            json={**request(role="user", intent="auto"), "query": query_text},
+            headers={"X-API-Key": "test-key"},
+        )
+
+    assert response.status_code == 200
+    assert calls == [query_text]
+
+
+def test_supervisor_consensus_api_exposes_only_safe_aggregate_evidence() -> None:
+    class SupervisorConsensusSearch:
+        def search(self, query):
+            return DirectoryEvidence(
+                "ok",
+                (
+                    {
+                        "display_name": "Erika Beispiel",
+                        "position": "Bereichsleitung",
+                        "source_id": "P1",
+                        "supervisor_scope": "organizational_unit",
+                        "candidate_count": 10,
+                        "support_count": 9,
+                        "support_ratio": 0.9,
+                        "single_candidate_basis": False,
+                    },
+                ),
+                ({"id": "P1", "kind": "personio_directory"},),
+                "2026-08-24T10:15:00Z",
+                False,
+            )
+
+    app = create_app(
+        search=SupervisorConsensusSearch(),
+        internal_api_key="test-key",
+        start_background=False,
+    )
+    with TestClient(app) as api:
+        response = api.post(
+            "/internal/search",
+            json={
+                **request(role="user", intent="supervisor_lookup"),
+                "query": "Wer ist die Führungskraft der Disposition?",
+            },
+            headers={"X-API-Key": "test-key"},
+        )
+
+    assert response.status_code == 200
+    claim = response.json()["claims"][0]
+    assert claim["candidate_count"] == 10
+    assert claim["support_count"] == 9
+    assert claim["support_ratio"] == 0.9
+    rendered = json.dumps(response.json())
+    assert "supervisor_personio_id" not in rendered
+    assert "candidate_names" not in rendered
 
 
 def test_onboarding_api_never_serializes_contact_fields() -> None:

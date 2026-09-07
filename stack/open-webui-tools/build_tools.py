@@ -25,7 +25,11 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parent
 
 # Reihenfolge ist bedeutsam: Adapter benutzen RetrievalError aus hybrid_retrieval.
-SHARED_MODULES = ("hybrid_retrieval.py", "hybrid_retrieval_adapters.py")
+SHARED_MODULES = ("functional_contact_contract.py", "hybrid_retrieval.py", "hybrid_retrieval_adapters.py")
+CONTRACT_COPIES = (
+    "kb-sync/app/functional_contact_contract.py",
+    "open-webui-overrides/open_webui/utils/functional_contact_contract.py",
+)
 BUNDLES = {
     "rag_chat_hybrid_tool.py": SHARED_MODULES,
     "kahle_workflow_orchestrator.py": SHARED_MODULES,
@@ -58,6 +62,11 @@ def split_source(path: Path) -> tuple[str | None, list[str], str]:
         for decorator in getattr(node, "decorator_list", []):
             first = min(first, decorator.lineno)
         segment = "".join(lines[first - 1:node.end_lineno])
+        # This one module is embedded in every bundle. Other imports remain intact.
+        if isinstance(node, ast.ImportFrom) and node.module == "functional_contact_contract":
+            if node.level or any(alias.asname for alias in node.names):
+                raise ValueError("Embedded contract imports must be absolute and unaliased")
+            continue
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             imports.append(segment.rstrip("\n"))
         else:
@@ -123,6 +132,20 @@ def main() -> int:
     dist = TOOLS_DIR / "dist"
     dist.mkdir(exist_ok=True)
     failed = False
+
+    contract = (TOOLS_DIR / "functional_contact_contract.py").read_bytes()
+    for relative_path in CONTRACT_COPIES:
+        target = TOOLS_DIR.parent / relative_path
+        if args.check:
+            if not target.is_file() or target.read_bytes() != contract:
+                print(f"VERALTET {relative_path}: neu bauen")
+                failed = True
+            else:
+                print(f"aktuell  {relative_path}")
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(contract)
+            print(f"kopiert  {relative_path}")
 
     for tool_name, shared in BUNDLES.items():
         bundle = build(tool_name, shared)

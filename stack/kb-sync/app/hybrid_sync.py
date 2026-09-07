@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import uuid
 from dataclasses import dataclass
@@ -13,9 +14,11 @@ import requests
 try:
     from .hybrid_index import BM25Corpus, ParentChildChunker
     from .bm25_snapshot import BM25Snapshot
+    from .functional_contact_contract import functional_contact_key, validate_functional_contact
 except ImportError:  # pragma: no cover
     from hybrid_index import BM25Corpus, ParentChildChunker
     from bm25_snapshot import BM25Snapshot
+    from functional_contact_contract import functional_contact_key, validate_functional_contact
 
 
 HYBRID_SCHEMA_VERSION = 3
@@ -105,6 +108,7 @@ class QdrantHybridClient:
             ("topics", "keyword"), ("evidence_capabilities", "keyword"),
             ("source_provider", "keyword"),
             ("classification_status", "keyword"),
+            ("functional_contact_key", "keyword"),
         ):
             self.request("PUT", f"/collections/{name}/index", json={"field_name": field, "field_schema": schema})
 
@@ -172,6 +176,19 @@ class HybridIndexBuilder:
         self.alias = alias
         self.snapshot_path = snapshot_path
 
+    @staticmethod
+    def _contact_payload(chunk: Any) -> dict[str, Any]:
+        if chunk.kind != "functional_contact":
+            return {}
+        contact = validate_functional_contact(chunk.functional_contact)
+        if contact is None or chunk.content != contact["evidence_span"] or chunk.parent_content != chunk.content:
+            raise HybridSyncError("functional_contact_invalid")
+        key = json.dumps(functional_contact_key(contact), ensure_ascii=False, separators=(",", ":"))
+        return {
+            "functional_contact": contact,
+            "functional_contact_key": hashlib.sha256(key.encode("utf-8")).hexdigest(),
+        }
+
     def rebuild(self, documents: list[CanonicalIndexDocument], *, today: date | None = None) -> dict[str, Any]:
         today = today or date.today()
         if not documents:
@@ -222,6 +239,7 @@ class HybridIndexBuilder:
                     "content": chunk.content,
                     "parent_content": chunk.parent_content,
                     "chunk_kind": chunk.kind,
+                    **self._contact_payload(chunk),
                 }
                 points.append({
                     "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{document.version_id}:{chunk.child_id}")),
@@ -270,6 +288,7 @@ class HybridIndexBuilder:
                     "parent_id": chunk.parent_id, "chunk_order": chunk.order,
                     "heading_path": list(chunk.heading_path), "content": chunk.content,
                     "parent_content": chunk.parent_content, "chunk_kind": chunk.kind,
+                    **self._contact_payload(chunk),
                 },
             })
         point_ids = [point["id"] for point in points]
