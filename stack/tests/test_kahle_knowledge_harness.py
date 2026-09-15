@@ -79,6 +79,243 @@ def test_shadow_harness_accepts_real_procedure_and_preserves_sources():
     assert decision.evidence_bundle.sources[0]["source_id"] == "doc-7"
 
 
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie sperre ich einen Kunden für Bewertungen?",
+        "Wie sperre ich einen Kunden für Zufriedenheitsbefragungen?",
+        "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das?",
+    ),
+)
+def test_marketing_opt_out_wording_resolves_to_canonical_retrieval_query(query):
+    harness = load_harness()
+
+    resolved = harness.resolve_request(
+        query,
+        [{"role": "user", "content": query}],
+    )
+
+    assert "Werbewiderspruch" in resolved.retrieval_query
+    assert "Vaudis" in resolved.retrieval_query
+    assert "DSE-Kontaktfreigaben" in resolved.retrieval_query
+
+
+def test_marketing_opt_out_location_followup_keeps_canonical_process_query():
+    harness = load_harness()
+    messages = [
+        {
+            "role": "user",
+            "content": "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das?",
+        },
+        {
+            "role": "assistant",
+            "content": "Für Hannover, Wunstorf und Wedemark gilt der dokumentierte Ablauf.",
+        },
+        {"role": "user", "content": "Und wie geht es in Nienburg?"},
+    ]
+
+    resolved = harness.resolve_request(messages[-1]["content"], messages)
+
+    assert "Werbewiderspruch" in resolved.retrieval_query
+    assert "Vaudis" in resolved.retrieval_query
+    assert "Nienburg" in resolved.retrieval_query
+
+    plan = harness.plan_retrieval(
+        query=messages[-1]["content"],
+        resolved_query=resolved.retrieval_query,
+        messages=messages,
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user"},
+    )
+    assert plan.required_tools == ("rag_chat",)
+
+
+def test_temporary_survey_location_reply_resolves_the_previous_process_question():
+    harness = load_harness()
+    messages = [
+        {"role": "user", "content": "Wie funktioniert die temporäre Herstellerbefragung?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Der Prozess gilt für Hannover, Wunstorf und Wedemark. "
+                "An welchem Standort arbeitest du? Quellen:"
+            ),
+        },
+        {"role": "user", "content": "Hannover"},
+    ]
+
+    resolved = harness.resolve_request(messages[-1]["content"], messages)
+
+    assert resolved.retrieval_query == (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
+        "am Standort Hannover durchgeführt?"
+    )
+
+
+def test_marketing_opt_out_query_stays_concise_to_preserve_procedure_evidence():
+    harness = load_harness()
+
+    resolved = harness.resolve_request(
+        "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das?",
+        [],
+    )
+
+    assert resolved.retrieval_query == (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben durchgeführt?"
+    )
+
+
+def _marketing_process_result():
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
+        "[Quelle 1] Prozessbeschreibung | Durchführung\n"
+        "Öffne Vaudis. Wähle die DSE-Einstellungen. Entferne die Kontaktfreigaben. "
+        "Dokumentiere die Änderung und speichere sie.\n"
+        "[Quelle 2] Prozessbeschreibung | Geltungsbereich\n"
+        "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. "
+        "Andere Standorte wenden sich an datenschutz@kahle.de.\n"
+        "[Quelle 3] Prozessbeschreibung | Dokumentation in der Sperrliste\n"
+        "Hannover: KD-Sperrprozess-Liste-HAN; Wunstorf: KD-Sperrprozess-Liste-WUN; "
+        "Wedemark: KD-Sperrprozess-Liste-WED.\n"
+        'SOURCES_JSON: [{"number":1,"title":"Prozessbeschreibung"},'
+        '{"number":2,"title":"Prozessbeschreibung"},'
+        '{"number":3,"title":"Prozessbeschreibung"}]'
+    )
+
+
+def test_supported_claims_keep_scope_and_contact_from_long_passage_tail():
+    harness = load_harness()
+    context = (
+        "[Quelle 1] Prozessbeschreibung\n"
+        + ("Ablaufbeschreibung ohne Kontakt. " * 25)
+        + "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. "
+        + "Andere Standorte wenden sich an datenschutz@kahle.de. "
+        + "KD-Sperrprozess-Liste-HAN, KD-Sperrprozess-Liste-WUN, "
+        + "KD-Sperrprozess-Liste-WED."
+    )
+
+    claims = harness._supported_claims(context)
+    joined = " ".join(claims)
+
+    assert len(claims) > 1
+    assert "datenschutz@kahle.de" in joined
+    assert "KD-Sperrprozess-Liste-WED" in joined
+
+
+def test_marketing_answer_contract_exposes_location_context_without_delivery_facts():
+    harness = load_harness()
+    query = "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das am Standort Hannover?"
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=harness.resolve_request(query, []).retrieval_query,
+        messages=[], model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_marketing_process_result(),
+    )
+
+    assert decision.answer_contract.location_mode == "supported_location"
+    assert decision.answer_contract.requested_location == "Hannover"
+    assert decision.answer_contract.allowed_contact_values == ("datenschutz@kahle.de",)
+    assert "KAHLE_KNOWLEDGE_LOCATION_CONTEXT" in decision.answer_prompt()
+
+
+def test_marketing_answer_validation_observes_without_enforcing_process_completeness():
+    harness = load_harness()
+    query = "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das am Standort Hannover?"
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=harness.resolve_request(query, []).retrieval_query,
+        messages=[], model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_marketing_process_result(),
+    )
+
+    result = harness.validate_answer("Öffne Vaudis und speichere die Änderung [1].", decision)
+    assert result.status == "accepted"
+
+
+def test_marketing_location_followup_exposes_out_of_scope_context():
+    harness = load_harness()
+    query = "Wie geht es in Nienburg?"
+    resolved = (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
+        "am Standort Nienburg durchgeführt?"
+    )
+    decision = harness.build_decision(
+        query=query, resolved_query=resolved, messages=[], model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"}, rag_result=_marketing_process_result(),
+    )
+
+    assert decision.answer_contract.location_mode == "out_of_scope_location"
+    assert decision.answer_contract.requested_location == "Nienburg"
+
+
+def test_user_supplied_batch_help_does_not_require_internal_knowledge():
+    harness = load_harness()
+    query = (
+        'Ich nutze start "" cmd /c "robocopy C:\\Quelle D:\\Ziel" mehrfach. '
+        "Wie kann ich die Fenster je Standort unterscheiden?"
+    )
+
+    plan = harness.plan_retrieval(
+        query=query,
+        resolved_query=query,
+        messages=[{"role": "user", "content": query}],
+        model_id="kahle-vinci-thinking",
+        permission_scope={"user_id": "user-1", "role": "user"},
+    )
+
+    assert plan.required_tools == ()
+
+
+def test_batch_help_followup_uses_recent_pasted_code_without_rag():
+    harness = load_harness()
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                '@echo off\nstart "" cmd /c "robocopy C:\\Quelle '
+                'D:\\Standort /MIR /TEE"'
+            ),
+        },
+        {
+            "role": "user",
+            "content": "Wie kann ich die geöffneten Fenster je Standort unterscheiden?",
+        },
+    ]
+
+    plan = harness.plan_retrieval(
+        query=messages[-1]["content"],
+        resolved_query=messages[-1]["content"],
+        messages=messages,
+        model_id="kahle-vinci-thinking",
+        permission_scope={"user_id": "user-1", "role": "user"},
+    )
+
+    assert plan.required_tools == ()
+
+
+def test_answer_contract_tells_model_not_to_render_feedback_link():
+    harness = load_harness()
+    decision = harness.build_shadow_decision(
+        query="Wie läuft der interne Prozess?",
+        resolved_query="Wie läuft der interne Prozess?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=(
+            "KAHLE_RAG_RESULT\nFOUND: false\n"
+            "ANSWER: Dazu habe ich keine verlässliche freigegebene Information.\n"
+            "FEEDBACK_LINK: [Wissensfehler melden](/wissen/?feedback=1&chat_id=c&message_id=m)"
+        ),
+    )
+
+    assert "Gib den FEEDBACK_LINK nicht selbst aus" in decision.answer_prompt()
+
+
 def test_shared_harness_requires_procedural_evidence_for_an_unknown_system():
     harness = load_harness()
     query = "Wie richte ich einen neuen Vorgang in FooDesk ein?"
@@ -1767,16 +2004,6 @@ def test_endvalidator_rejects_supported_but_unrequested_department_sections():
     assert focused.status == "accepted"
 
 
-def test_validation_fallback_uses_only_declared_missing_information():
-    harness = load_harness()
-    decision = _partial_wps_decision(harness)
-
-    assert decision.validation_fallback() == (
-        "Die vorhandenen Quellen beantworten nur einen Teil der Anfrage. "
-        "Eine Bedienungsanleitung fehlt."
-    )
-
-
 def test_harness_metrics_summary_calculates_rates_and_nearest_rank_percentiles():
     harness = load_harness()
     records = [
@@ -2074,6 +2301,47 @@ def test_result_driven_decision_is_absent_without_an_actual_internal_tool_call()
     )
 
     assert decision is None
+
+
+def test_rag_result_from_native_sources_reconstructs_evidence_context():
+    harness = load_harness()
+    sources = [
+        {
+            "source": {"name": "Freigegebener Prozess", "url": "/wissen/source/1"},
+            "document": [
+                "Geltungsbereich: Der Prozess gilt nur fuer Hannover, Wunstorf und Wedemark. "
+                "Andere Standorte wenden sich an datenschutz@kahle.de."
+            ],
+            "metadata": [
+                {
+                    "document_id": "doc-1",
+                    "version_id": "version-1",
+                    "knowledgebase_ids": ["kb-1"],
+                    "valid_until": None,
+                    "url": "/wissen/source/1",
+                }
+            ],
+        }
+    ]
+
+    result = harness.rag_result_from_sources(sources)
+
+    assert "FOUND: true" in result
+    assert "CONTEXT:" in result
+    assert "[Quelle 1] Freigegebener Prozess" in result
+    assert "datenschutz@kahle.de" in result
+    assert "SOURCES_JSON:" in result
+
+
+def test_rag_result_from_sources_preserves_embedded_raw_tool_result():
+    harness = load_harness()
+    raw = "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n[Quelle 1] Prozess\nSchritt"
+
+    result = harness.rag_result_from_sources(
+        [{"source": {"name": "rag_chat"}, "document": [raw]}]
+    )
+
+    assert result == raw
 
 
 def test_personio_not_found_does_not_consume_unexecuted_rag_as_fallback():
@@ -3038,3 +3306,175 @@ def test_contact_validation_checks_rendered_labels_and_relative_targets(answer, 
     decision = _decision_for_rag_authority(harness, "EVIDENCE_BUNDLE_JSON: " + json.dumps(_typed_rag_contact_bundle()), False)
     result = harness.validate_answer(answer, decision, reference_urls=("/wissen/api/portal/sources/v1",))
     assert (result.status == "accepted") is accepted
+
+
+def _full_opt_out_evidence():
+    return (
+        'Geltungsbereich: Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. '
+        'Andere Standorte wenden sich an datenschutz@kahle.de. '
+        'Auslöser: Beschwerde oder Unzufriedenheit, eskalierte Abwicklung, angekündigte schlechte Bewertung, '
+        'erheblicher Termin- oder Kommunikationsfehler, ausdrücklicher Wunsch gegen Befragung. '
+        'Die Sperre erfolgt vor oder spätestens am Tag der Faktura. '
+        'Hannover: HAN – LÖSCHEN & SPERREN; Wunstorf: WUN – LÖSCHEN & SPERREN; '
+        'Wedemark: WED – LÖSCHEN & SPERREN. Die Kundennummer ist erforderlich. '
+        'Vaudis: Kunde öffnen, DSE-Einstellungen öffnen, Kontaktfreigabe-Haken entfernen. '
+        'Entfernte Haken exakt dokumentieren. Danach Sperrliste pflegen. '
+        'Zustimmung erteilt und Weitergabe an Dritte müssen immer angehakt bleiben. '
+        'Allgemein → Serviceassistenz → Sperrliste: KD-Sperrprozess-Liste-HAN, '
+        'KD-Sperrprozess-Liste-WUN, KD-Sperrprozess-Liste-WED. '
+        'Nach 14 Tagen Erinnerung erhalten, Link zur Übersicht öffnen und Grund prüfen, keine automatische Entsperrung. Bei Entsperrung DSE-Einstellungen '
+        'wiederherstellen und Entsperrdatum dokumentieren, sonst Sperre begründet fortführen.'
+    )
+
+
+def _opt_out_decision(location=''):
+    harness = load_harness()
+    query = 'Wie sperre ich Werbung und Zufriedenheitsbefragungen' + (f' am Standort {location}' if location else '') + '?'
+    resolved = harness.resolve_request(query, []).retrieval_query
+    result = ('KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n[Quelle 1] Prozessbeschreibung\n'
+              + _full_opt_out_evidence() + '\nSOURCES_JSON: [{"number":1,"title":"Prozessbeschreibung"}]')
+    return harness, harness.build_decision(query=query, resolved_query=resolved, messages=[],
+        model_id='kahle-vinci', permission_scope={'user_id': 'synthetic'}, rag_result=result)
+
+
+@pytest.mark.parametrize(
+    ("location", "mode", "value"),
+    [
+        ("Hannover", "supported_location", "HAN"),
+        ("Wunstorf", "supported_location", "WUN"),
+        ("Wedemark", "supported_location", "WED"),
+    ],
+)
+def test_opt_out_answer_prompt_exposes_resolved_location_without_delivery_requirements(
+    location, mode, value,
+):
+    _harness, decision = _opt_out_decision(location)
+    prompt = decision.answer_prompt()
+
+    assert decision.answer_contract.location_mode == mode
+    assert decision.answer_contract.requested_location == location
+    assert location in prompt
+    assert "vollständigen belegten Ablauf" in prompt
+    assert "ZWINGENDE_PFLICHTFAKTEN_VOR_DER_ANTWORT" not in prompt
+    assert "KAHLE_KNOWLEDGE_ANSWER_RETRY" not in prompt
+    assert value not in prompt
+
+
+@pytest.mark.parametrize(
+    ("location", "mode", "expected"),
+    [
+        ("", "unspecified_location", "gemeinsamen Vorgang für Hannover"),
+        ("Walsrode", "out_of_scope_location", "gemeinsamen Vorgang für Hannover"),
+    ],
+)
+def test_opt_out_answer_prompt_sets_only_the_location_boundary(location, mode, expected):
+    _harness, decision = _opt_out_decision(location)
+    prompt = decision.answer_prompt()
+
+    assert decision.answer_contract.location_mode == mode
+    assert expected in prompt
+    assert "KD-Sperrprozess-Liste" not in prompt
+    assert "HAN – LÖSCHEN" not in prompt
+
+
+def test_opt_out_followup_resolves_hannover_after_an_unspecified_question():
+    harness = load_harness()
+
+    resolved = harness.resolve_request("Und wie läuft es dann in Hannover?", [
+        {"role": "user", "content": "Wie sperre ich einen Kunden für Hersteller-Zufriedenheitsbefragungen?"},
+        {"role": "assistant", "content": "Für welchen Standort brauchst du den Ablauf?"},
+    ])
+
+    assert "Hannover" in resolved.retrieval_query
+    assert "Werbewiderspruch" in resolved.retrieval_query
+
+
+def test_opt_out_harness_source_has_no_delivery_guard_symbols():
+    source = HARNESS.read_text(encoding="utf-8")
+
+    assert "def validation_fallback" not in source
+    assert "ZWINGENDE_PFLICHTFAKTEN_VOR_DER_ANTWORT" not in source
+    assert "def _required_answer_facts" not in source
+    assert "required_answer_facts" not in source
+    assert "missing_required_evidence" not in source
+
+
+@pytest.mark.parametrize('location,mode', [
+    ('', 'unspecified_location'),
+    ('Hannover', 'supported_location'),
+    ('Wunstorf', 'supported_location'),
+    ('Wedemark', 'supported_location'),
+    ('Nienburg', 'out_of_scope_location'),
+    ('Walsrode', 'out_of_scope_location'),
+])
+def test_opt_out_contract_selects_explicit_location_mode(location, mode):
+    harness, decision = _opt_out_decision(location)
+    assert decision.answer_contract.location_mode == mode
+    assert not hasattr(decision.answer_contract, "required_answer_facts")
+
+
+def test_opt_out_unspecified_location_accepts_only_scope_and_contact_boundary():
+    harness, decision = _opt_out_decision()
+    answer = ('Hannover, Wunstorf, Wedemark: KD-Sperrprozess-Liste-HAN, KD-Sperrprozess-Liste-WUN, '
+              'KD-Sperrprozess-Liste-WED. Andere Standorte: datenschutz@kahle.de [1].')
+    validation = harness.validate_answer(answer, decision)
+    assert validation.status == 'accepted'
+
+
+def test_opt_out_location_prompt_always_explains_the_shared_process_and_contact():
+    harness, decision = _opt_out_decision()
+
+    prompt = decision.answer_prompt()
+
+    assert 'vollständigen belegten Ablauf als gemeinsamen Vorgang' in prompt
+    assert 'datenschutz@kahle.de' in prompt
+
+
+def test_opt_out_complete_evidence_based_answer_is_accepted():
+    harness, decision = _opt_out_decision('Hannover')
+    assert harness.validate_answer(_full_opt_out_evidence() + ' [1]', decision).status == 'accepted'
+
+
+def test_opt_out_unsupported_evidence_keeps_location_context_without_fallback():
+    harness = load_harness()
+    query = 'Wie sperre ich Werbung und Zufriedenheitsbefragungen?'
+    resolved = harness.resolve_request(query, []).retrieval_query
+    decision = harness.build_decision(
+        query=query,
+        resolved_query=resolved,
+        messages=[],
+        model_id='kahle-vinci',
+        permission_scope={'user_id': 'synthetic'},
+        rag_result='KAHLE_RAG_RESULT\nFOUND: false',
+    )
+
+    assert decision.evidence_bundle.status == 'unsupported'
+    assert decision.answer_contract.location_mode == 'unspecified_location'
+    assert not hasattr(decision.answer_contract, "missing_required_evidence")
+    assert "KAHLE_KNOWLEDGE_LOCATION_CONTEXT" in decision.answer_prompt()
+
+
+def test_opt_out_outside_scope_validation_remains_observational():
+    harness, decision = _opt_out_decision('Nienburg')
+    answer = ('Die Anleitung gilt nur für Hannover, Wunstorf und Wedemark, nicht für Nienburg. '
+              'Dort datenschutz@kahle.de kontaktieren. Öffne Vaudis und entferne die DSE-Haken [1].')
+    assert harness.validate_answer(answer, decision).status == 'accepted'
+
+
+@pytest.mark.parametrize('location', ['Berlin', 'Bremen', 'Hamburg'])
+def test_opt_out_unknown_explicit_location_is_never_unspecified(location):
+    harness, decision = _opt_out_decision(location)
+    assert decision.answer_contract.location_mode == 'out_of_scope_location'
+    assert decision.answer_contract.requested_location == location
+    assert location in decision.resolved_context.retrieval_query
+
+
+def test_opt_out_unknown_location_followup_keeps_process_and_current_location():
+    harness = load_harness()
+    resolved = harness.resolve_request('Und wie geht es in Berlin?', [
+        {'role': 'user', 'content': 'Wie sperre ich Werbung in Hannover?'},
+        {'role': 'assistant', 'content': 'In Vaudis werden die DSE-Freigaben bearbeitet.'},
+    ])
+    assert 'Berlin' in resolved.retrieval_query
+    assert 'Hannover' not in resolved.retrieval_query
+    assert 'Werbewiderspruch' in resolved.retrieval_query

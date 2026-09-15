@@ -333,6 +333,16 @@ def test_session_decision_is_driven_only_by_the_recorded_source(
     assert decision.evidence_bundle.status == expected_status
 
 
+def test_session_preserves_the_original_user_query_for_contract_refresh():
+    internal = load_internal_knowledge()
+    original = "Wie sperre ich einen Kunden vorübergehend für Hersteller-Zufriedenheitsbefragungen?"
+    session = internal.KnowledgeEvidenceSession(
+        model=vinci(), messages=[{"role": "user", "content": original}]
+    )
+
+    assert session.request_query() == original
+
+
 def test_second_internal_tool_rebuilds_one_replaced_answer_contract_message():
     internal = load_internal_knowledge()
     session = internal.KnowledgeEvidenceSession(model=vinci(), messages=[])

@@ -448,6 +448,132 @@ def test_specific_responsibility_query_drops_generic_contact_from_unrelated_docu
     ) == []
 
 
+def test_opt_out_companions_include_all_same_version_chapters_without_hints():
+    def chapter(identity, content, **extra):
+        return contact_search_point(
+            chunk_kind="text", functional_contact=None, document_id="opt-out",
+            parent_id=identity, title="Temporäre Sperrung Hersteller-Zufriedenheitsbefragungen",
+            content=content, parent_content=content, **extra,
+        )
+
+    selected = chapter("steps", "DSE-Einstellungen öffnen.")
+    deadline = chapter("deadline", "Spätestens am Tag der Faktura.")
+    exception = chapter("exception", "Zustimmung erteilt muss positiv bleiben.")
+    followup = chapter("followup", "Nach 14 Tagen Grund prüfen.")
+    hint = chapter("hint", "Suchhilfe")
+    hint["payload"]["chunk_kind"] = "retrieval_hint"
+    stale = chapter("stale", "Alte Regel")
+    stale["payload"]["version_id"] = "old-version"
+    other = chapter("other", "Anderer Prozess")
+    other["payload"]["document_id"] = "other-doc"
+    companions = module.procedure_scope_companions(
+        [selected], [selected, deadline, exception, followup, hint, stale, other, deadline],
+        query="Wie wird ein Werbewiderspruch für Zufriedenheitsbefragungen am Standort Hannover durchgeführt?",
+    )
+
+    assert companions == [deadline, exception, followup]
+
+
+def _opt_out_points():
+    def point(identity, content, heading):
+        return contact_search_point(
+            chunk_kind="text",
+            functional_contact=None,
+            document_id="opt-out",
+            version_id="v1",
+            parent_id=identity,
+            title="Temporäre Sperrung Hersteller-Zufriedenheitsbefragungen",
+            content=content,
+            parent_content=content,
+            heading_path=[heading],
+        )
+
+    shared = [
+        point("dse", "In Vaudis die DSE-Einstellungen prüfen.", "Ablauf"),
+        point("deadline", "Nach 14 Tagen Grund prüfen.", "Prüfung"),
+        point(
+            "scope",
+            "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. Andere Standorte: datenschutz@kahle.de.",
+            "Geltungsbereich",
+        ),
+    ]
+    locations = [
+        point("han", "HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN.", "Hannover"),
+        point("wun", "WUN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-WUN.", "Wunstorf"),
+        point("wed", "WED – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-WED.", "Wedemark"),
+    ]
+    return shared, locations
+
+
+@pytest.mark.parametrize(
+    ("location", "wanted", "foreign"),
+    [
+        ("Hannover", "KD-Sperrprozess-Liste-HAN", "KD-Sperrprozess-Liste-WUN"),
+        ("Wunstorf", "KD-Sperrprozess-Liste-WUN", "KD-Sperrprozess-Liste-WED"),
+        ("Wedemark", "KD-Sperrprozess-Liste-WED", "KD-Sperrprozess-Liste-HAN"),
+    ],
+)
+def test_opt_out_companions_keep_complete_shared_chapters_and_one_location_value(
+    location, wanted, foreign,
+):
+    shared, locations = _opt_out_points()
+    companions = module.procedure_scope_companions(
+        [shared[0]], [*shared, *locations],
+        query=(
+            "Wie wird ein Werbewiderspruch für Werbung und "
+            f"herstellerseitige Zufriedenheitsbefragungen am Standort {location} durchgeführt?"
+        ),
+    )
+
+    text = "\n".join(point["payload"]["content"] for point in [shared[0], *companions])
+    assert "Nach 14 Tagen" in text
+    assert wanted in text
+    assert foreign in text
+    assert {point["payload"]["version_id"] for point in [shared[0], *companions]} == {"v1"}
+
+
+def test_opt_out_companions_exclude_unseparable_multi_location_values():
+    shared, locations = _opt_out_points()
+    mixed = contact_search_point(
+        chunk_kind="text",
+        functional_contact=None,
+        document_id="opt-out",
+        version_id="v1",
+        parent_id="mixed",
+        title="Temporäre Sperrung Hersteller-Zufriedenheitsbefragungen",
+        content="KD-Sperrprozess-Liste-HAN und KD-Sperrprozess-Liste-WUN.",
+        parent_content="KD-Sperrprozess-Liste-HAN und KD-Sperrprozess-Liste-WUN.",
+        heading_path=["Sperrlisten"],
+    )
+
+    companions = module.procedure_scope_companions(
+        [shared[0]], [*shared, *locations, mixed],
+        query=(
+            "Wie wird ein Werbewiderspruch für Werbung und "
+            "herstellerseitige Zufriedenheitsbefragungen am Standort Hannover durchgeführt?"
+        ),
+    )
+
+    assert mixed in companions
+
+
+@pytest.mark.parametrize("location", ["", "Walsrode"])
+def test_opt_out_companions_without_supported_location_keep_the_shared_process(location):
+    shared, locations = _opt_out_points()
+    suffix = f" am Standort {location}" if location else ""
+    companions = module.procedure_scope_companions(
+        [shared[0]], [*shared, *locations],
+        query=(
+            "Wie wird ein Werbewiderspruch für Werbung und "
+            f"herstellerseitige Zufriedenheitsbefragungen{suffix} durchgeführt?"
+        ),
+    )
+
+    text = "\n".join(point["payload"]["content"] for point in companions)
+    assert "datenschutz@kahle.de" in text
+    assert "KD-Sperrprozess-Liste" in text
+
+
 def test_procedure_scope_companions_keep_explicit_applicability_from_same_document():
     process = contact_search_point(
         chunk_kind="text",
@@ -477,6 +603,128 @@ def test_procedure_scope_companions_keep_explicit_applicability_from_same_docume
     )
 
     assert module.procedure_scope_companions([process], [process, scope, unrelated]) == [scope]
+
+
+def test_procedure_scope_companions_recognize_gueltig_fuer_standorte_heading():
+    process = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="process-parent", content="Öffne die DSE-Einstellungen.",
+        parent_content="Öffne die DSE-Einstellungen und dokumentiere die Sperre.",
+    )
+    scope = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="scope-parent",
+        heading_path=["Gültig für die Standorte Hannover, Wunstorf und Wedemark"],
+        content="Kontakt: datenschutz@kahle.de.",
+        parent_content="Kontakt: datenschutz@kahle.de.",
+    )
+
+    assert module.procedure_scope_companions([process], [process, scope]) == [scope]
+
+
+def test_canonical_marketing_query_is_recognized_as_procedure():
+    assert module.required_evidence_capabilities(
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
+        "durchgeführt?"
+    ) == ("procedure",)
+
+
+def test_temporary_manufacturer_survey_without_long_form_is_location_scoped():
+    assert module.temporary_survey_location_scope(
+        "Wie funktioniert die temporäre Herstellerbefragung?"
+    ) == ("unspecified_location", "")
+
+
+def test_temporary_survey_request_recognizes_zufriedenheitsabfragen():
+    assert module.temporary_survey_location_scope(
+        "Wie sperre ich einen Kunden für Zufriedenheitsabfragen?"
+    ) == ("unspecified_location", "")
+
+
+def test_temporary_survey_query_with_vaudis_is_not_an_out_of_scope_location():
+    assert module.temporary_survey_location_scope(
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben durchgeführt?"
+    ) == ("unspecified_location", "")
+
+
+def test_temporary_survey_without_location_keeps_the_complete_shared_process():
+    point = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="opt-out",
+        parent_id="opt-out-steps", content="Öffne die DSE-Einstellungen.",
+        parent_content=(
+            "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. "
+            "Andere Standorte: datenschutz@kahle.de. Öffne die DSE-Einstellungen."
+        ),
+    )
+
+    assert module.temporary_survey_point_is_allowed(
+        point, "Wie funktioniert die temporäre Herstellerbefragung?"
+    )
+
+
+def test_temporary_survey_process_survives_when_reranker_omits_it(monkeypatch):
+    process = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="opt-out",
+        parent_id="opt-out-steps", title="Temporäre Sperrung Hersteller-Zufriedenheitsbefragungen",
+        content="DSE-Kontaktfreigaben prüfen.",
+        parent_content="DSE-Kontaktfreigaben prüfen und die Sperre dokumentieren.",
+    )
+    unrelated = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="other",
+        parent_id="other-steps", title="Allgemeine Marketinginformation",
+        content="Allgemeiner Hinweis.", parent_content="Allgemeiner Hinweis.",
+    )
+
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"result": {"points": [process, unrelated], "next_page_offset": None}}
+
+    monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: Response())
+    retriever = module.QdrantHybridRetriever(
+        "http://qdrant", "vinci_knowledge",
+        SimpleNamespace(encode_query=lambda _: {"build_id": "build-1", "indices": [1], "values": [1.0]}),
+        SimpleNamespace(rerank=lambda *_args: [(1, .99)]),
+    )
+
+    chunks = retriever.retrieve(
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen am Standort Hannover in Vaudis über die DSE-Kontaktfreigaben durchgeführt?",
+        [1.0], module.RetrievalScope("u", ("service",), ("v1",)), today=date(2026, 9, 3),
+    )
+
+    assert [chunk.document_id for chunk in chunks] == ["opt-out"]
+
+
+def test_procedure_scope_companions_add_named_location_lists():
+    process = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="process-parent", content="Öffne die DSE-Einstellungen.",
+        parent_content="Öffne die DSE-Einstellungen und dokumentiere die Sperre.",
+    )
+    scope = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="scope-parent", heading_path=["Geltungsbereich"],
+        content="Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark.",
+        parent_content=(
+            "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. "
+            "Andere Standorte wenden sich an datenschutz@kahle.de."
+        ),
+    )
+    lists = contact_search_point(
+        chunk_kind="text", functional_contact=None, document_id="process-doc",
+        parent_id="list-parent", heading_path=["Dokumentation in der Sperrliste"],
+        content="Hannover: Liste HAN; Wunstorf: Liste WUN; Wedemark: Liste WED.",
+        parent_content=(
+            "Für jeden Standort wird eine eigene Sperrliste verwendet. "
+            "Wichtig ist die vollständige Dokumentation."
+        ),
+    )
+
+    assert module.procedure_scope_companions(
+        [process], [process, scope, lists]
+    ) == [scope, lists]
 
 
 def test_procedure_scope_companions_add_process_summary_when_scope_was_selected():
@@ -584,6 +832,22 @@ def test_explicit_marketing_opt_out_uses_rag_without_clarification():
     assert guided(query) == ""
 
 
+@pytest.mark.parametrize(
+    "query",
+    (
+        "Wie sperre ich einen Kunden für Bewertungen?",
+        "Wie sperre ich einen Kunden für Zufriedenheitsbefragungen?",
+    ),
+)
+def test_marketing_survey_synonyms_do_not_trigger_customer_lock_clarification(query):
+    clarification, instruction = load_tool_helpers(
+        "_clarification_for_query", "_rag_answer_instruction",
+    )
+
+    assert clarification(query) == ""
+    assert "Werbewiderspruch" in instruction(query)
+
+
 def test_marketing_opt_out_instruction_blocks_unrelated_vaudis_fields():
     (instruction,) = load_tool_helpers("_rag_answer_instruction")
 
@@ -595,6 +859,8 @@ def test_marketing_opt_out_instruction_blocks_unrelated_vaudis_fields():
     assert "Werbewiderspruch" in value
     assert "besondere Merkmale" in value
     assert "Finanzdaten" in value
+    assert "Sperrliste" in value
+    assert "AnswerContract" not in value
 
 
 def test_location_department_overview_instruction_excludes_unrequested_people_and_cross_site_inference():

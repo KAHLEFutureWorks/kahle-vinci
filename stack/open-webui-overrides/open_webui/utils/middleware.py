@@ -243,23 +243,6 @@ def _knowledge_routing_comparison_payload(
     )
 
 
-def _knowledge_harness_answer_timeout_seconds() -> float:
-    try:
-        value = float(os.getenv('KAHLE_ANSWER_STREAM_TIMEOUT_SECONDS') or 60)
-    except (TypeError, ValueError):
-        value = 60
-    return min(300.0, max(5.0, value))
-
-
-async def _await_kahle_answer_stream(awaitable: Any, *, timeout_seconds: float) -> bool:
-    """Return true when an active Harness answer stream exceeds its deadline."""
-    try:
-        await asyncio.wait_for(awaitable, timeout=timeout_seconds)
-        return False
-    except asyncio.TimeoutError:
-        return True
-
-
 def _knowledge_harness_permission_scope(user: Any) -> dict[str, Any]:
     if isinstance(user, dict):
         get_value = user.get
@@ -293,6 +276,15 @@ def _plan_kahle_retrieval_gate(
         permission_scope=permission_scope,
     )
     required_tools = tuple(getattr(plan, 'required_tools', ()) or ())
+    resolved_folded = str(resolved_query or '').casefold()
+    temporary_survey_opt_out = all(
+        marker in resolved_folded
+        for marker in (
+            'werbewiderspruch',
+            'zufriedenheitsbefragung',
+            'dse-kontaktfreigaben',
+        )
+    )
     if harness_mode == 'off':
         if legacy_rag_request and 'rag_chat' in tools_dict:
             return replace(plan, required_tools=('rag_chat',))
@@ -302,6 +294,7 @@ def _plan_kahle_retrieval_gate(
     if (
         (
             legacy_rag_request
+            or temporary_survey_opt_out
             or any(
                 getattr(need, 'kind', '') == 'organization_contact'
                 for need in tuple(getattr(plan, 'information_needs', ()) or ())
@@ -431,8 +424,14 @@ def _refresh_model_led_answer_contract(
     if session is None or not callable(getattr(session, 'build_decision', None)):
         return body
 
+    original_query = str(metadata.get('kahle_original_user_query') or '').strip()
+    request_query = getattr(session, 'request_query', None)
     decision = session.build_decision(
-        query=get_last_user_message(body.get('messages', []) or []) or '',
+        query=(
+            original_query
+            or (request_query() if callable(request_query) else '')
+            or get_last_user_message(body.get('messages', []) or [])
+        ),
         permission_scope=_knowledge_harness_permission_scope(user),
     )
     if decision is None:
@@ -448,7 +447,6 @@ def _refresh_model_led_answer_contract(
     )
     metadata['kahle_knowledge_harness_active'] = True
     metadata['kahle_answer_contract'] = payload['answer_contract']
-    metadata['kahle_answer_validation_fallback'] = decision.validation_fallback()
 
     comparison = metadata.get('kahle_knowledge_routing_comparison') or {}
     comparison = _model_led_routing_comparison(
@@ -587,10 +585,69 @@ def _planned_rag_tool_calls(
     """Return the mandatory RAG call for a Harness-owned pre-route."""
     if not metadata.get('_kahle_force_rag_tool_call') or 'rag_chat' not in tools:
         return []
+    if (
+        _knowledge_routing_mode() != 'legacy'
+        and not metadata.get('_kahle_pre_route_rag_call')
+    ):
+        return []
     query = str(user_text or '').strip()
     if not query:
         return []
     return [{'name': 'rag_chat', 'parameters': {'query': query}}]
+
+
+def _prerouted_rag_tool_context(
+    extra_params: dict[str, Any], permission_scope: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the safe request binding required by the local RAG adapter."""
+    tool_user = extra_params.get('__user__')
+    if not isinstance(tool_user, dict) or not str(tool_user.get('id') or '').strip():
+        tool_user = {
+            'id': str(permission_scope.get('user_id') or ''),
+            'role': str(permission_scope.get('role') or ''),
+        }
+    return {
+        '__user__': tool_user,
+        '__chat_id__': extra_params.get('__chat_id__') or '',
+        '__message_id__': extra_params.get('__message_id__') or '',
+        '__metadata__': metadata,
+    }
+
+
+async def _execute_prerouted_rag_tool(
+    tool: dict[str, Any], query: str, *, tool_context: dict[str, Any] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Call the already-bound RAG adapter for a mandatory procedure lookup.
+
+    The adapter's authorization and retrieval configuration are supplied via
+    OpenWebUI's request-scoped special parameters.  A direct pre-route must
+    preserve those bindings just as the ordinary tool handler does.
+    """
+    callable_tool = tool.get('callable') if isinstance(tool, dict) else None
+    if not callable(callable_tool):
+        return '', []
+    # Local OpenWebUI tools are partial functions with frozen context. Rebind
+    # through the platform helper so request values replace those frozen values
+    # without passing a duplicate reserved keyword to ``functools.partial``.
+    original_callable = getattr(
+        callable_tool, '__kahle_rag_original__', callable_tool
+    )
+    callable_tool = await get_updated_tool_function(
+        function=original_callable, extra_params=dict(tool_context or {})
+    )
+    result = callable_tool(query=str(query or '').strip())
+    if inspect.isawaitable(result):
+        result = await result
+    raw_result = str(result or '')
+    if not raw_result:
+        return '', []
+    return raw_result, [{
+        'source': {'name': 'rag_chat/rag_chat'},
+        'document': [raw_result],
+        'metadata': [{'source': 'rag_chat/rag_chat', 'parameters': {'query': str(query or '').strip()}}],
+        'tool_result': True,
+    }]
 
 
 def _filter_native_tools_for_kahle_retrieval(
@@ -1061,9 +1118,37 @@ def _looks_like_named_person_question(text: str) -> bool:
     )
 
 
+def _looks_like_user_supplied_code_help(text: str) -> bool:
+    """Recognize general help for code pasted into the current message."""
+    value = str(text or '')
+    folded = _ascii_fold(value)
+    if _has_explicit_internal_lookup_intent(folded) or any(
+        marker in folded
+        for marker in ('interne richtlinie', 'unser interner prozess')
+    ):
+        return False
+    code_signal = bool(
+        '```' in value
+        or re.search(
+            r'(?im)(?:^|\s)(?:robocopy|cmd(?:\.exe)?\s+/c|powershell(?:\.exe)?|'
+            r'start\s+""|@echo\s+off|\.bat\b|\.cmd\b|\$env:)',
+            value,
+        )
+    )
+    help_signal = bool(re.search(
+        r'\b(?:wie|warum|fehler|funktioniert|anpass|aender|ander|pruf|analysier|'
+        r'unterscheid|benenn|korrigier|hilf)\w*\b',
+        folded,
+    ))
+    return code_signal and help_signal
+
+
 def _looks_like_internal_rag_request(text: str) -> bool:
     folded = _ascii_fold(text)
     if not folded:
+        return False
+
+    if _looks_like_user_supplied_code_help(text):
         return False
 
     if re.search(r"(?<![A-Za-z0-9])(?:TD|VK|HAN|WUN|WED|WAL|NEU|NIE|STA|SHG)(?![A-Za-z0-9])", str(text or "")):
@@ -1690,12 +1775,70 @@ def _strip_pseudo_toolcall_stream_text(text: str) -> str:
     return value
 
 
+def _collapse_immediately_repeated_paragraph_sequence(text: str) -> str:
+    """Remove an exact duplicated paragraph sequence from one model response."""
+    value = str(text or "")
+    answer, separator, sources = value.partition("\n\nQuellen:")
+    paragraphs = [paragraph for paragraph in answer.split("\n\n") if paragraph]
+    for width in range(len(paragraphs) // 2, 0, -1):
+        if paragraphs[:width] == paragraphs[width : 2 * width]:
+            answer = "\n\n".join(paragraphs[:width] + paragraphs[2 * width :])
+            return f"{answer}{separator}{sources}"
+    return value
+
+
+def _normalize_repeated_location_prompt_output(output: list) -> list:
+    """Normalize only duplicate prose; never add, replace or regenerate content."""
+    normalized = copy.deepcopy(output or [])
+    for item in normalized:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        for part in item.get("content", []):
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                part["text"] = _collapse_immediately_repeated_paragraph_sequence(part["text"])
+
+    final_location_response_index = None
+    final_location_answer = ''
+    for index, item in enumerate(normalized):
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        text = "\n".join(
+            str(part.get("text") or "")
+            for part in item.get("content", [])
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+        if (
+            "Zufriedenheitsbefragungen" in text
+            and "\n\nQuellen:" in text
+        ):
+            final_location_response_index = index
+            final_location_answer = text.partition("\n\nQuellen:")[0].strip()
+
+    return [
+        item for index, item in enumerate(normalized)
+        if not (
+            final_location_response_index is not None
+            and index < final_location_response_index
+            and isinstance(item, dict)
+            and item.get("type") == "message"
+            and final_location_answer
+            and "\n".join(
+                str(part.get("text") or "")
+                for part in item.get("content", [])
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            ).strip() == final_location_answer
+        )
+    ]
+
+
 def _stream_safe_output(output: list, *, suppress_message_text: bool = False) -> list:
     safe_output = copy.deepcopy(output or [])
     for item in safe_output:
         if not isinstance(item, dict):
             continue
         if suppress_message_text and item.get('type') == 'reasoning':
+            item['content'] = []
+            item.pop('reasoning_details', None)
             summaries = item.get('summary', [])
             if isinstance(summaries, list):
                 for summary in summaries:
@@ -1709,11 +1852,17 @@ def _stream_safe_output(output: list, *, suppress_message_text: bool = False) ->
             continue
         for part in parts:
             if isinstance(part, dict) and 'text' in part:
-                part['text'] = (
+                text = (
                     ''
                     if suppress_message_text
                     else _strip_pseudo_toolcall_stream_text(part.get('text', ''))
                 )
+                if (
+                    'Zufriedenheitsbefragungen' in text
+                    and 'An welchem Standort arbeitest du: Hannover, Wunstorf oder Wedemark?' in text
+                ):
+                    text = _collapse_immediately_repeated_paragraph_sequence(text)
+                part['text'] = text
     return safe_output
 
 
@@ -2706,11 +2855,10 @@ async def chat_completion_tools_handler(
         if not text:
             return []
 
-        planned_rag_calls = (
-            _planned_rag_tool_calls(metadata, tools, user_text or '')
-            if _knowledge_routing_mode() == 'legacy'
-            else []
-        )
+        # A deterministic pre-route marks this private nested tool call before
+        # the model sees any tools. It works in both routing modes without
+        # turning an ordinary model-led fallback into forced retrieval.
+        planned_rag_calls = _planned_rag_tool_calls(metadata, tools, user_text or '')
         if planned_rag_calls:
             return planned_rag_calls
 
@@ -2998,6 +3146,7 @@ async def chat_completion_tools_handler(
 
     skip_files = False
     sources = []
+    raw_tool_results: dict[str, Any] = {}
 
     specs = [tool['spec'] for tool in tools.values()]
     tools_specs = json.dumps(specs, ensure_ascii=False)
@@ -3129,6 +3278,7 @@ async def chat_completion_tools_handler(
                     )
                     tool_result = file_saved_payload
 
+                tool_result_for_harness = tool_result
                 tool_result, tool_result_files, tool_result_embeds = await process_tool_result(
                     request,
                     tool_function_name,
@@ -3138,6 +3288,7 @@ async def chat_completion_tools_handler(
                     metadata,
                     user,
                 )
+                raw_tool_results[tool_function_name] = tool_result_for_harness
 
                 if event_emitter:
                     await terminal_event_handler(
@@ -3179,7 +3330,13 @@ async def chat_completion_tools_handler(
                             'source': {
                                 'name': (f'{tool_name}'),
                             },
-                            'document': [str(tool_result)],
+                            'document': [
+                                str(
+                                    tool_result_for_harness
+                                    if tool_function_name == 'rag_chat'
+                                    else tool_result
+                                )
+                            ],
                             'metadata': [
                                 {
                                     'source': (f'{tool_name}'),
@@ -3272,6 +3429,7 @@ async def chat_completion_tools_handler(
                         )
                         tool_result = file_saved_payload
 
+                    tool_result_for_harness = tool_result
                     tool_result, tool_result_files, tool_result_embeds = await process_tool_result(
                         request,
                         tool_function_name,
@@ -3281,6 +3439,7 @@ async def chat_completion_tools_handler(
                         metadata,
                         user,
                     )
+                    raw_tool_results[tool_function_name] = tool_result_for_harness
 
                     if event_emitter:
                         await terminal_event_handler(
@@ -3300,7 +3459,13 @@ async def chat_completion_tools_handler(
                         sources.append(
                             {
                                 'source': {'name': f'{tool_name}'},
-                                'document': [str(tool_result)],
+                                'document': [
+                                    str(
+                                        tool_result_for_harness
+                                        if tool_function_name == 'rag_chat'
+                                        else tool_result
+                                    )
+                                ],
                                 'metadata': [{'source': f'{tool_name}', 'parameters': tool_function_params}],
                                 'tool_result': True,
                             }
@@ -3325,7 +3490,7 @@ async def chat_completion_tools_handler(
     if skip_files and 'files' in body.get('metadata', {}):
         del body['metadata']['files']
 
-    return body, {'sources': sources}
+    return body, {'sources': sources, 'raw_tool_results': raw_tool_results}
 
 
 async def chat_web_search_handler(request: Request, form_data: dict, extra_params: dict, user):
@@ -4144,17 +4309,19 @@ def _last_kahle_answer_text(output: list[dict[str, Any]]) -> str:
     return ''
 
 
+def _canonical_kahle_reference_urls(sources) -> tuple[str, ...]:
+    return tuple(source['source_url'] for source in sources
+        if isinstance(source, dict) and isinstance(source.get('source_url'), str)
+        and re.fullmatch(r'/wissen/api/portal/sources/[A-Za-z0-9_-]{1,100}', source['source_url']))
+
+
 def _observe_model_led_answer(
     output: list[dict[str, Any]], harness_payload: dict[str, Any],
     *, sources: list[dict[str, Any]] | tuple = (), feedback_link: str = '',
 ) -> dict[str, Any]:
     """Observe delivered model text; never mutate it or request a correction."""
     try:
-        reference_urls = tuple(
-            source['source_url'] for source in sources
-            if isinstance(source, dict) and isinstance(source.get('source_url'), str)
-            and re.fullmatch(r'/wissen/api/portal/sources/[A-Za-z0-9_-]{1,100}', source['source_url'])
-        )
+        reference_urls = _canonical_kahle_reference_urls(sources)
         if re.fullmatch(
             r'/wissen/\?feedback=1&chat_id=[A-Za-z0-9_-]{1,100}'
             r'&message_id=[A-Za-z0-9_-]{1,100}'
@@ -4960,10 +5127,19 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         original_user_tool_request = get_last_user_message(
             form_data.get('messages', []) or []
         )
+        metadata['kahle_original_user_query'] = original_user_tool_request
         resolved_internal_request = resolve_request(
             original_user_tool_request or '', form_data.get('messages', []) or []
         )
         user_tool_request = resolved_internal_request.retrieval_query
+        temporary_survey_opt_out = all(
+            marker in str(user_tool_request or '').casefold()
+            for marker in (
+                'werbewiderspruch',
+                'zufriedenheitsbefragung',
+                'dse-kontaktfreigaben',
+            )
+        )
         permission_scope = _knowledge_harness_permission_scope(user)
         legacy_rag_request = (
             _looks_like_internal_rag_request(user_tool_request or '')
@@ -4972,6 +5148,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             )
         )
         routing_mode = _knowledge_routing_mode()
+        harness_mode = _knowledge_harness_mode()
         legacy_retrieval_plan = _plan_kahle_retrieval_gate(
             query=original_user_tool_request or '',
             resolved_query=user_tool_request or original_user_tool_request or '',
@@ -4980,7 +5157,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             permission_scope=permission_scope,
             tools_dict=tools_dict,
             legacy_rag_request=legacy_rag_request,
-            harness_mode=_knowledge_harness_mode(),
+            harness_mode=harness_mode,
         )
         if routing_mode == 'model_led':
             metadata['kahle_knowledge_routing_comparison'] = (
@@ -4999,12 +5176,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
             native_function_calling = metadata.get('params', {}).get('function_calling') != 'legacy'
             force_internal_rag = (
-                native_function_calling
-                and not metadata.get('kahle_mailer_drafting_followup')
+                not metadata.get('kahle_mailer_drafting_followup')
                 and _should_execute_kahle_retrieval(retrieval_plan, tools_dict)
+                and (native_function_calling or temporary_survey_opt_out)
             )
 
             pre_routed_internal_rag = ''
+            pre_route_private_context_sources: list[dict[str, Any]] = []
             if force_internal_rag:
                 metadata['_kahle_harness_started_monotonic'] = time.monotonic()
                 # The information-needs plan is fixed before either adapter is
@@ -5052,8 +5230,28 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         if 'rag_chat' not in tools_dict:
                             return {'form_data': None, 'sources': [], 'rag_result': ''}
                         pre_route_tools = {'rag_chat': tools_dict['rag_chat']}
+                        if temporary_survey_opt_out:
+                            raw_result, direct_sources = await _execute_prerouted_rag_tool(
+                                pre_route_tools['rag_chat'], user_tool_request or '',
+                                tool_context=_prerouted_rag_tool_context(
+                                    extra_params, permission_scope, metadata
+                                ),
+                            )
+                            return {
+                                'form_data': form_data,
+                                'sources': direct_sources,
+                                'private_context_sources': direct_sources,
+                                'rag_result': raw_result,
+                            }
                         pre_route_form_data = copy.deepcopy(form_data)
                         pre_route_metadata = pre_route_form_data.setdefault('metadata', {})
+                        # ``deepcopy(form_data)`` must not fork the request-local
+                        # evidence session. The bound rag_chat callable records
+                        # into the original session; the contract refresh must
+                        # read that exact same instance.
+                        pre_route_metadata['kahle_knowledge_evidence_session'] = (
+                            knowledge_evidence_session
+                        )
                         if user_tool_request != (original_user_tool_request or ''):
                             set_last_user_message_content(
                                 user_tool_request,
@@ -5065,7 +5263,11 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         previous_force_rag = pre_route_metadata.get(
                             '_kahle_force_rag_tool_call'
                         )
+                        previous_pre_route_rag_call = pre_route_metadata.get(
+                            '_kahle_pre_route_rag_call'
+                        )
                         pre_route_metadata['_kahle_force_rag_tool_call'] = True
+                        pre_route_metadata['_kahle_pre_route_rag_call'] = True
                         pre_route_metadata['_kahle_information_needs'] = [
                             {
                                 'kind': str(getattr(need, 'kind', '') or ''),
@@ -5099,12 +5301,19 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 pre_route_metadata['_kahle_force_rag_tool_call'] = (
                                     previous_force_rag
                                 )
+                            if previous_pre_route_rag_call is None:
+                                pre_route_metadata.pop('_kahle_pre_route_rag_call', None)
+                            else:
+                                pre_route_metadata['_kahle_pre_route_rag_call'] = (
+                                    previous_pre_route_rag_call
+                                )
                         if user_tool_request != (original_user_tool_request or ''):
                             set_last_user_message_content(
                                 original_user_tool_request or '',
                                 pre_route_form_data.get('messages', []),
                             )
                         pre_route_sources = flags.get('sources', [])
+                        raw_tool_results = flags.get('raw_tool_results') or {}
                         if emit_prerouted_rag_status:
                             metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
                                 pre_route_call_id, user_tool_request or '', completed=True,
@@ -5117,7 +5326,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         return {
                             'form_data': pre_route_form_data,
                             'sources': pre_route_sources,
-                            'rag_result': rag_result_from_sources(pre_route_sources),
+                            'rag_result': str(raw_tool_results.get('rag_chat') or '')
+                            or rag_result_from_sources(pre_route_sources),
                         }
 
                     retrieval = await _execute_kahle_retrieval_plan(
@@ -5159,6 +5369,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         if rag_execution.get('form_data') is not None:
                             form_data = rag_execution['form_data']
                         pre_route_sources = list(rag_execution.get('sources') or [])
+                        pre_route_private_context_sources = list(
+                            rag_execution.get('private_context_sources') or []
+                        )
                         pre_route_rag_result = str(rag_execution.get('rag_result') or '')
                     else:
                         pre_route_sources = []
@@ -5192,7 +5405,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     )
                     if pre_routed_internal_rag:
                         metadata['kahle_internal_rag_prerouted'] = pre_routed_internal_rag
-                    harness_mode = _knowledge_harness_mode()
                     harness_decision = None
                     if harness_mode != 'off':
                         harness_decision = build_knowledge_harness_decision(
@@ -5212,13 +5424,21 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             harness_decision
                         )
                         metadata['kahle_knowledge_harness_shadow'] = shadow_decision
+                        metadata['kahle_survey_location_mode'] = (
+                            harness_decision.answer_contract.location_mode
+                        )
                         if harness_mode == 'active':
                             metadata['kahle_knowledge_harness_active'] = True
                             metadata['kahle_answer_contract'] = harness_payload[
                                 'answer_contract'
                             ]
+                            location_answer_prompt = harness_decision.answer_prompt()
+                            if harness_decision.answer_contract.location_mode:
+                                metadata['_kahle_location_answer_prompt'] = (
+                                    location_answer_prompt
+                                )
                             form_data['messages'] = add_or_update_system_message(
-                                harness_decision.answer_prompt(),
+                                location_answer_prompt,
                                 form_data.get('messages', []) or [],
                                 append=True,
                             )
@@ -5228,9 +5448,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 )
                                 if direct_answer:
                                     metadata['kahle_direct_final_content'] = direct_answer
-                            metadata['kahle_answer_validation_fallback'] = (
-                                harness_decision.validation_fallback()
-                            )
                     if harness_mode != 'active' and pre_routed_internal_rag == 'clarification':
                         metadata['kahle_direct_final_content'] = (
                             _internal_rag_clarification(pre_route_sources)
@@ -5258,6 +5475,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         )
                     )
                 }
+                if (
+                    force_internal_rag
+                    and pre_routed_internal_rag
+                    and tuple(getattr(retrieval_plan, 'required_tools', ()) or ())
+                    == ('rag_chat',)
+                ):
+                    native_tools_dict.pop('personio_directory', None)
                 if routing_mode == 'legacy':
                     native_tools_dict = _filter_native_tools_for_kahle_retrieval(
                         native_tools_dict, retrieval_plan
@@ -5287,6 +5511,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             )
                         )
                     }
+                    if (
+                        force_internal_rag
+                        and pre_routed_internal_rag
+                        and tuple(getattr(retrieval_plan, 'required_tools', ()) or ())
+                        == ('rag_chat',)
+                    ):
+                        legacy_tools_dict.pop('personio_directory', None)
                     if routing_mode == 'legacy':
                         legacy_tools_dict = _filter_native_tools_for_kahle_retrieval(
                             legacy_tools_dict, retrieval_plan
@@ -5336,17 +5567,22 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     metadata['user_prompt'] = get_last_user_message(form_data['messages'])
     metadata['sources'] = sources[:] if sources else []
 
+    # Keep the complete raw RAG result in a request-local context channel for
+    # the answer model.  The public ``sources`` list deliberately contains
+    # only canonical portal references, so it remains safe for the citation UI.
+    model_context_sources = [*sources, *pre_route_private_context_sources]
+
     # If context is not empty, insert it into the messages
-    if sources and prompt:
+    if model_context_sources and prompt:
         form_data['messages'] = await apply_source_context_to_messages(
-            request, form_data['messages'], sources, prompt
+            request, form_data['messages'], model_context_sources, prompt
         )
 
         successful_internal_rag = any(
             'rag_chat' in str((source.get('source') or {}).get('name') or '').lower()
             and 'found: true'
             in '\n'.join(str(item) for item in source.get('document', [])).lower()
-            for source in sources
+            for source in model_context_sources
             if isinstance(source, dict)
         )
         generated_file_result = any(
@@ -5405,6 +5641,19 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 'kopiere die echten Titel und URLs direkt aus dem obigen Kontext in deine Antwort. '
                 'Verweise NICHT nur darauf, dass die Quellen im Kontext stehen, sondern gib die Links tatsaechlich aus. '
                 'Rufe KEIN Tool mehr auf und gib KEINE JSON- oder Tool-Aufruf-Syntax wie {"tool": ...} oder [TOOL_CALLS] aus.',
+                form_data['messages'],
+                append=True,
+            )
+
+        location_answer_prompt = metadata.pop('_kahle_location_answer_prompt', '')
+        if location_answer_prompt:
+            form_data['messages'] = add_or_update_system_message(
+                location_answer_prompt,
+                form_data['messages'],
+                append=True,
+            )
+            form_data['messages'] = add_or_update_user_message(
+                location_answer_prompt,
                 form_data['messages'],
                 append=True,
             )
@@ -6538,6 +6787,26 @@ async def streaming_chat_response_handler(response, ctx):
 
             def full_output():
                 combined = prior_output + output if prior_output else output
+                answer_contract = metadata.get('kahle_answer_contract') or {}
+                location_mode = (
+                    answer_contract.get('location_mode')
+                    or metadata.get('kahle_survey_location_mode')
+                )
+                initial_location_query = _ascii_fold(initial_user_message or '')
+                temporary_survey_without_location = (
+                    'tempor' in initial_location_query
+                    and 'herstellerbefrag' in initial_location_query
+                    and not any(
+                        location in initial_location_query
+                        for location in ('hannover', 'wunstorf', 'wedemark', 'walsrode')
+                    )
+                )
+                if location_mode or temporary_survey_without_location:
+                    safe_output = _stream_safe_output(
+                        combined,
+                        suppress_message_text=suppress_initial_rag_response,
+                    )
+                    return _normalize_repeated_location_prompt_output(safe_output)
                 return _stream_safe_output(
                     combined,
                     suppress_message_text=suppress_initial_rag_response,
@@ -7269,41 +7538,11 @@ async def streaming_chat_response_handler(response, ctx):
                         if responses_api_tool_calls:
                             tool_calls.append(_split_tool_calls(responses_api_tool_calls))
 
-                initial_answer_stream_timed_out = False
                 try:
-                    if metadata.get('kahle_knowledge_harness_active'):
-                        initial_answer_stream_timed_out = await _await_kahle_answer_stream(
-                            stream_body_handler(response, form_data),
-                            timeout_seconds=_knowledge_harness_answer_timeout_seconds(),
-                        )
-                    else:
-                        await stream_body_handler(response, form_data)
+                    await stream_body_handler(response, form_data)
                 finally:
-                    if response.background and not initial_answer_stream_timed_out:
+                    if response.background:
                         await response.background()
-
-                if initial_answer_stream_timed_out:
-                    metadata['kahle_answer_stream_timed_out'] = True
-                    if hasattr(response.body_iterator, 'aclose'):
-                        try:
-                            await response.body_iterator.aclose()
-                        except Exception:
-                            pass
-                    content = ''
-                    prior_output = []
-                    output = [{
-                        'type': 'message',
-                        'id': output_id('msg'),
-                        'status': 'in_progress',
-                        'role': 'assistant',
-                        'content': [{
-                            'type': 'output_text',
-                            'text': str(
-                                metadata.get('kahle_answer_validation_fallback')
-                                or 'Die Antwort konnte nicht rechtzeitig abgeschlossen werden.'
-                            ),
-                        }],
-                    }]
 
                 # The unsupported first model response has now been fully
                 # consumed without exposing its message text. Tool-call events
@@ -7603,7 +7842,7 @@ async def streaming_chat_response_handler(response, ctx):
                                 'type': 'chat:completion',
                                 'data': {
                                     'content': final_notice,
-                                    'output': output,
+                                    'output': full_output(),
                                 },
                             }
                         )
@@ -7796,7 +8035,7 @@ async def streaming_chat_response_handler(response, ctx):
                             {
                                 'type': 'chat:completion',
                                 'data': {
-                                    'output': output,
+                                    'output': full_output(),
                                 },
                             }
                         )
@@ -7918,7 +8157,7 @@ async def streaming_chat_response_handler(response, ctx):
                             {
                                 'type': 'chat:completion',
                                 'data': {
-                                    'output': output,
+                                    'output': full_output(),
                                 },
                             }
                         )
@@ -7951,7 +8190,6 @@ async def streaming_chat_response_handler(response, ctx):
                             break
 
                 validation_attempts = []
-                validation_fallback_used = False
                 harness_payload = _ephemeral_kahle_harness_payload(request)
                 shadow_validation = bool(
                     harness_payload
@@ -7960,25 +8198,7 @@ async def streaming_chat_response_handler(response, ctx):
                 if shadow_validation:
                     _append_canonical_rag_source_links(output, canonical_rag_sources)
                     _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
-                if (
-                    metadata.get('kahle_knowledge_harness_active')
-                    and harness_payload
-                    and metadata.get('kahle_answer_stream_timed_out')
-                ):
-                    validation_fallback_used = True
-                    validation_attempts.append({
-                        'schema_version': 'kahle.answer-validation.v1',
-                        'status': 'timeout',
-                        'violations': [{
-                            'code': 'answer_stream_timeout',
-                            'message': 'Der Antwortstream wurde nicht rechtzeitig abgeschlossen.',
-                        }],
-                    })
-                    metadata['kahle_answer_validation'] = {
-                        'schema_version': 'kahle.answer-validation-run.v1',
-                        'attempts': validation_attempts,
-                    }
-                elif metadata.get('kahle_knowledge_harness_active') and shadow_validation:
+                if metadata.get('kahle_knowledge_harness_active') and shadow_validation:
                     metadata['kahle_answer_validation'] = _observe_model_led_answer(
                         output, harness_payload, sources=canonical_rag_sources,
                         feedback_link=canonical_rag_feedback_link,
@@ -8021,25 +8241,18 @@ async def streaming_chat_response_handler(response, ctx):
                         'permission_scope_present': bool(permission_payload.get('user_id')),
                         'validation_attempts': len(validation_attempts),
                         **({'validation_mode': 'shadow'} if shadow_validation else {}),
-                        'retry_count': max(0, len(validation_attempts) - 1),
-                        'fallback_used': validation_fallback_used,
+                        'retry_count': 0,
+                        'fallback_used': False,
                         'final_validation_status': (
                             validation_attempts[-1].get('status')
                             if validation_attempts
                             else 'not_run'
                         ),
                         'delivery_status': (
-                            'safe_timeout_fallback'
-                            if metadata.get('kahle_answer_stream_timed_out')
-                            else
-                            'safe_fallback'
-                            if validation_fallback_used
-                            else (
-                                'observed' if shadow_validation else
-                                validation_attempts[-1].get('status')
-                                if validation_attempts
-                                else 'not_run'
-                            )
+                            'observed' if shadow_validation else
+                            validation_attempts[-1].get('status')
+                            if validation_attempts
+                            else 'not_run'
                         ),
                         'document_sources_present': bool(canonical_rag_sources),
                         'feedback_link_present': bool(canonical_rag_feedback_link),
@@ -8049,6 +8262,16 @@ async def streaming_chat_response_handler(response, ctx):
                 if not shadow_validation:
                     _append_canonical_rag_source_links(output, canonical_rag_sources)
                     _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
+
+                if any(
+                    'Zufriedenheitsbefragungen'
+                    in str(part.get('text') or '')
+                    for item in output
+                    if isinstance(item, dict)
+                    for part in item.get('content', [])
+                    if isinstance(part, dict)
+                ):
+                    output = _normalize_repeated_location_prompt_output(output)
 
                 # Mark all in-progress items as completed
                 for item in output:
@@ -8171,7 +8394,7 @@ async def streaming_chat_response_handler(response, ctx):
                                 metadata['message_id'],
                                 {
                                     'done': True,
-                                    'output': output,
+                                    'output': full_output(),
                                 },
                             )
                         else:

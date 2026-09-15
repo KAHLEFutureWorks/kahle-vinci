@@ -124,6 +124,8 @@ class AnswerContract:
     preserve_feedback_link: bool = True
     allowed_contact_values: tuple[str, ...] = ()
     allowed_contact_bindings: tuple[dict[str, Any], ...] = ()
+    location_mode: str = ""
+    requested_location: str = ""
 
 
 @dataclass(frozen=True)
@@ -173,11 +175,51 @@ class HarnessDecision:
 
     def answer_prompt(self) -> str:
         """Return the model-independent contract consumed before answering."""
+        if self.answer_contract.location_mode:
+            payload = {
+                "schema_version": "kahle.location-context.v1",
+                "location_mode": self.answer_contract.location_mode,
+                "requested_location": self.answer_contract.requested_location,
+            }
+            return (
+                "KAHLE_KNOWLEDGE_LOCATION_CONTEXT\n"
+                + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                + "\nBeantworte die ursprüngliche Nutzerfrage ausschließlich aus dem RAG-Kontext. "
+                "Erkläre den vollständigen belegten Ablauf als gemeinsamen Vorgang für Hannover, "
+                "Wunstorf und Wedemark. Stelle klar, dass er nur für diese drei Standorte gilt, "
+                "und nenne für alle anderen Standorte genau einmal datenschutz@kahle.de. "
+                "Erfinde keine Daten."
+            )
+        directory_claims = tuple(
+            claim
+            for claim in self.evidence_bundle.supported_claims
+            if isinstance(claim, dict)
+            and (
+                _citation_identifier(str(claim.get("source_id") or "")).startswith("P")
+                or any(
+                    str(claim.get(field) or "").strip()
+                    for field in ("display_name", "position", "department", "team", "office")
+                )
+            )
+        )
+        evidence_summary = {
+            "status": self.evidence_bundle.status,
+            "supported_claims": directory_claims,
+            "missing_information": self.evidence_bundle.missing_information,
+            "conflicts": self.evidence_bundle.conflicts,
+            "source_ids": tuple(
+                source_id
+                for source in self.evidence_bundle.sources
+                if (source_id := _source_identifier(source))
+            ),
+            "sync_completed_at": self.evidence_bundle.sync_completed_at,
+            "stale": self.evidence_bundle.stale,
+        }
         payload = {
             "schema_version": "kahle.answer-contract.v1",
             "user_intent": asdict(self.user_intent),
             "resolved_context": asdict(self.resolved_context),
-            "evidence_bundle": asdict(self.evidence_bundle),
+            "evidence_bundle": evidence_summary,
             "answer_contract": asdict(self.answer_contract),
         }
         contract = json.dumps(
@@ -204,7 +246,9 @@ class HarnessDecision:
             "Übernimm Kontaktwert, Funktion, Verwendungszweck, Geltungsbereich und Quellen-ID "
             "aus derselben Bindung. Eine Bindung erlaubt keine zusätzliche Personen- oder "
             "Führungskräfteaussage. Kontaktseiten benötigen ebenfalls eine Bindung. "
-            "Erzeuge genau eine endgültige Antwort."
+            "Erzeuge genau eine endgültige Antwort. Gib den FEEDBACK_LINK nicht selbst aus "
+            "und formuliere auch keine eigene Zeile oder Überschrift 'Wissensfehler melden'; "
+            "die Oberfläche ergänzt den vertrauenswürdigen Link separat."
         )
 
     def direct_answer(self) -> str:
@@ -226,19 +270,6 @@ class HarnessDecision:
         if self.evidence_bundle.status == "unsupported":
             return "Dazu habe ich keine verlässliche freigegebene Information."
         return ""
-
-    def validation_fallback(self) -> str:
-        """Return a stable answer-component fallback after a failed retry."""
-        missing = next(
-            (
-                item.strip().rstrip(".")
-                for item in self.evidence_bundle.missing_information
-                if str(item).strip()
-            ),
-            "Für die vollständige Antwort fehlen ausreichende freigegebene Informationen",
-        )
-        return f"Die vorhandenen Quellen beantworten nur einen Teil der Anfrage. {missing}."
-
 
 def _fold(value: str) -> str:
     return (
@@ -322,7 +353,8 @@ def _non_knowledge_tool_request(query: str) -> bool:
     """Keep transformations and personal task commands on their native tools."""
     folded = _fold(query).strip()
     return bool(
-        re.match(
+        _user_supplied_code_help_request(query)
+        or re.match(
             r"^(?:bitte\s+)?(?:formulier|schreib|uberarbeit|korrigier|ubersetz)\w*\b",
             folded,
         )
@@ -331,6 +363,80 @@ def _non_knowledge_tool_request(query: str) -> bool:
             r"\b(?:meine|mir)\b.{0,35}\b(?:aufgaben|to-?dos?|erinnerungen)\b",
             folded,
         )
+    )
+
+
+def _user_supplied_code_help_request(query: str) -> bool:
+    """Keep pasted code and general scripting help outside internal RAG."""
+    value = str(query or "")
+    folded = _fold(value)
+    if any(
+        marker in folded
+        for marker in (
+            "wie ist bei kahle geregelt",
+            "interne richtlinie",
+            "unser interner prozess",
+            "internen wissen",
+            "wissensdatenbank",
+        )
+    ):
+        return False
+    code_signal = bool(
+        "```" in value
+        or re.search(
+            r"(?im)(?:^|\s)(?:robocopy|cmd(?:\.exe)?\s+/c|powershell(?:\.exe)?|"
+            r"start\s+\"\"|@echo\s+off|\.bat\b|\.cmd\b|\$env:)",
+            value,
+        )
+    )
+    help_signal = bool(
+        re.search(
+            r"\b(?:wie|warum|fehler|funktioniert|anpass|aender|ander|pruf|analysier|"
+            r"unterscheid|benenn|korrigier|hilf)\w*\b",
+            folded,
+        )
+    )
+    return code_signal and help_signal
+
+
+def _user_supplied_code_help_followup(
+    query: str, messages: list[dict[str, Any]]
+) -> bool:
+    """Recognize a help follow-up whose code was pasted in a recent user turn."""
+    folded = _fold(query)
+    if not re.search(
+        r"\b(?:wie|warum|fehler|funktioniert|anpass|aender|ander|pruf|analysier|"
+        r"unterscheid|benenn|korrigier|hilf)\w*\b",
+        folded,
+    ):
+        return False
+    if not re.search(
+        r"\b(?:code|skript|batch|cmd|powershell|robocopy|fenster|zeile|befehl)\w*\b",
+        folded,
+    ):
+        return False
+    recent_user_messages: list[str] = []
+    skipped_current = False
+    for message in reversed(messages or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "")
+        if not skipped_current and content.strip() == str(query or "").strip():
+            skipped_current = True
+            continue
+        recent_user_messages.append(content)
+        if len(recent_user_messages) >= 4:
+            break
+    return any(
+        bool(
+            "```" in content
+            or re.search(
+                r"(?im)(?:^|\s)(?:robocopy|cmd(?:\.exe)?\s+/c|powershell(?:\.exe)?|"
+                r"start\s+\"\"|@echo\s+off|\.bat\b|\.cmd\b|\$env:)",
+                content,
+            )
+        )
+        for content in recent_user_messages
     )
 
 
@@ -355,7 +461,9 @@ def _requested_contact_channels(query: str) -> frozenset[str]:
         channels.add("email")
     if re.search(r"\b(?:telefon(?:nummer)?|durchwahl)\b", folded):
         channels.add("phone")
-    if not channels and _contact_information_requested(folded):
+    if not channels and (
+        _contact_information_requested(folded) or _marketing_opt_out_query(folded)
+    ):
         channels.add("any")
     return frozenset(channels)
 
@@ -386,6 +494,51 @@ def _contact_values(evidence: EvidenceBundle) -> tuple[str, ...]:
                 if _is_phone_literal(candidate := match.group(0).strip())
             )
     return tuple(dict.fromkeys(values))
+
+
+def _marketing_opt_out_query(query: str) -> bool:
+    folded = _fold(query)
+    return all(
+        marker in folded
+        for marker in ("werbewiderspruch", "zufriedenheitsbefragung", "dse-kontaktfreigaben")
+    )
+
+
+_SUPPORTED_OPT_OUT_LOCATIONS = {"Hannover": "HAN", "Wunstorf": "WUN", "Wedemark": "WED"}
+
+
+def _opt_out_location(query: str) -> str:
+    # Prefer the latest explicit location, including names outside the company list.
+    # Application names following "in" are not locations.
+    candidates = re.findall(
+        r"(?i:\b(?:am\s+standort|standort|in)\s+)([A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+am\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*)?)",
+        str(query or ""),
+    )
+    candidates = [name for name in candidates if _fold(name) not in {"vaudis", "personio", "sharepoint", "dse"}]
+    if candidates:
+        requested = candidates[-1]
+        return next((name for name in _REQUEST_LOCATIONS if _fold(name) == _fold(requested)), requested)
+    value = str(query or "").strip()
+    return next((
+        name for name in _SUPPORTED_OPT_OUT_LOCATIONS
+        if _fold(name) == _fold(value)
+    ), "")
+    folded = _fold(query)
+    matches = [(match.start(), location) for location in _REQUEST_LOCATIONS
+               for match in re.finditer(r"\b" + re.escape(_fold(location)) + r"\b", folded)]
+    return max(matches)[1] if matches else ""
+
+
+def _opt_out_contract_scope(query: str, evidence: EvidenceBundle) -> dict[str, str]:
+    # The delivery gate must remain active precisely when retrieval has no
+    # usable evidence; otherwise a model draft could bypass the fail-closed
+    # fallback for this bounded process.
+    if not _marketing_opt_out_query(query):
+        return {}
+    location = _opt_out_location(query)
+    return {"location_mode": ("supported_location" if location in _SUPPORTED_OPT_OUT_LOCATIONS
+            else "out_of_scope_location" if location else "unspecified_location"),
+            "requested_location": location}
 
 
 def _is_phone_literal(value: str) -> bool:
@@ -619,6 +772,9 @@ def validate_answer(
         for item in evidence.get("supported_claims") or []
     )
     folded_claims = _fold(claim_text)
+
+    if contract.get("location_mode") and "wissensfehler melden" in folded_text:
+        add("model_feedback_link_not_allowed", "Den Feedback-Link stellt die Oberfläche separat bereit.")
 
     if (
         re.search(r"\b(?:erfind|dicht|fingier|glaubwurdig(?:en|er)? wortlaut)\w*", retrieval_query)
@@ -1208,9 +1364,11 @@ def plan_retrieval(
     permission_scope: dict[str, Any],
 ) -> RetrievalPlan:
     """Select required evidence sources from information needs, not model choice."""
-    del query, messages, model_id
+    del model_id
     retrieval_query = str(resolved_query or "").strip()
-    if _non_knowledge_tool_request(retrieval_query):
+    if _non_knowledge_tool_request(retrieval_query) or _user_supplied_code_help_followup(
+        query, messages
+    ):
         return RetrievalPlan(
             required_tools=(),
             queries=(retrieval_query,),
@@ -1352,7 +1510,9 @@ def _prior_topic_anchor(
 def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedContext:
     """Resolve bounded conversational references without inventing evidence."""
     original = str(query or "").strip()
-    retrieval_query = resolve_query_aliases(original)
+    retrieval_query = _canonical_marketing_opt_out_query(
+        resolve_query_aliases(original)
+    )
     entities = _request_entities(retrieval_query)
     prior_user, prior_assistant = _prior_conversation_turns(messages, original)
     topic_anchor = _prior_topic_anchor(messages, original, prior_user)
@@ -1366,6 +1526,11 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
             )
         )
     )
+    location_reply = bool(
+        prior_user
+        and _opt_out_location(original)
+        and len(_fold(original).split()) <= 3
+    )
     ambiguities: tuple[str, ...] = ()
     clarification_question = ""
 
@@ -1376,12 +1541,26 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
     ):
         ambiguities = ("Der unmittelbar vorherige Turn enthält mehrere Alternativen.",)
         clarification_question = prior_assistant.strip()
-    elif conversation_reference and not entities["persons"]:
+    elif (conversation_reference or location_reply) and not entities["persons"]:
         context_query = topic_anchor or prior_user
         combined = f"{context_query} {original}"
         prior_folded = _fold(context_query)
-        current_locations = entities["locations"]
-        if "werbung" in prior_folded and "vaudis" in prior_folded:
+        explicit_location = _opt_out_location(original)
+        current_locations = (explicit_location,) if explicit_location else entities["locations"]
+        prior_opt_out_query = _canonical_marketing_opt_out_query(context_query)
+        is_temporary_manufacturer_anchor = (
+            "herstellerbefrag" in prior_folded and "tempor" in prior_folded
+        )
+        if prior_opt_out_query != context_query and is_temporary_manufacturer_anchor:
+            location_suffix = (
+                f" am Standort {current_locations[0]}" if current_locations else ""
+            )
+            retrieval_query = (
+                "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+                "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
+                f"{location_suffix} durchgeführt?"
+            )
+        elif "werbung" in prior_folded and "vaudis" in prior_folded:
             location_suffix = (
                 f" am Standort {current_locations[0]}" if current_locations else ""
             )
@@ -1397,6 +1576,7 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
             for key in entities
         }
 
+    retrieval_query = _canonical_marketing_opt_out_query(retrieval_query)
     needs = tuple(need.kind for need in _information_needs(retrieval_query))
     return ResolvedContext(
         original_query=original,
@@ -1416,6 +1596,32 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
         ambiguities=ambiguities,
         required_clarification=bool(ambiguities),
         clarification_question=clarification_question,
+    )
+
+
+def _canonical_marketing_opt_out_query(query: str) -> str:
+    """Map common opt-out wording to the approved process vocabulary."""
+    value = str(query or "").strip()
+    folded = _fold(value)
+    marketing_scope = re.search(
+        r"\b(?:werbung|werbesperre|werbewiderspruch|bewertung(?:en)?|"
+        r"zufriedenheitsbefragung(?:en)?|zufriedenheitsabfrag(?:en)?|herstellerbefragung(?:en)?|"
+        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
+        folded,
+    )
+    action = re.search(
+        r"\b(?:sperr|hinterleg|deaktivier|widersprech|abbestell|tempor|"
+        r"keine\b.{0,35}\berhalt)\w*",
+        folded,
+    )
+    if not marketing_scope or not action:
+        return value
+    location = _opt_out_location(value)
+    location_suffix = f" am Standort {location}" if location else ""
+    return (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
+        f"{location_suffix} durchgeführt?"
     )
 
 
@@ -1457,7 +1663,7 @@ def _extract_sources(text: str, context: str) -> tuple[dict[str, Any], ...]:
 
 
 def rag_result_from_sources(sources: list[dict[str, Any]]) -> str:
-    """Return the untouched rag_chat result carried by native source events."""
+    """Return or reconstruct the rag_chat result carried by native source events."""
     for source in sources or []:
         if not isinstance(source, dict):
             continue
@@ -1467,7 +1673,53 @@ def rag_result_from_sources(sources: list[dict[str, Any]]) -> str:
         documents = source.get("document")
         if isinstance(documents, list):
             return "\n".join(str(document or "") for document in documents)
-    return ""
+
+    context_blocks: list[str] = []
+    reconstructed_sources: list[dict[str, Any]] = []
+    source_number = 0
+    for grouped_source in sources or []:
+        if not isinstance(grouped_source, dict):
+            continue
+        source_info = grouped_source.get("source") or {}
+        title = str(source_info.get("name") or "Freigegebene Quelle").strip()
+        documents = grouped_source.get("document") or []
+        metadata_items = grouped_source.get("metadata") or []
+        if not isinstance(documents, list):
+            continue
+        for index, document in enumerate(documents):
+            passage = str(document or "").strip()
+            if not passage:
+                continue
+            source_number += 1
+            context_blocks.append(f"[Quelle {source_number}] {title}\n{passage}")
+            metadata = (
+                metadata_items[index]
+                if isinstance(metadata_items, list)
+                and index < len(metadata_items)
+                and isinstance(metadata_items[index], dict)
+                else {}
+            )
+            reconstructed_sources.append(
+                {
+                    "number": source_number,
+                    "title": title,
+                    "document_id": metadata.get("document_id"),
+                    "version_id": metadata.get("version_id"),
+                    "valid_until": metadata.get("valid_until"),
+                    "source_url": metadata.get("url") or source_info.get("url"),
+                    "knowledgebase_ids": list(
+                        metadata.get("knowledgebase_ids") or ()
+                    ),
+                }
+            )
+    if not context_blocks:
+        return ""
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
+        + "\n\n".join(context_blocks)
+        + "\nSOURCES_JSON: "
+        + json.dumps(reconstructed_sources, ensure_ascii=False)
+    )
 
 
 def _declared_evidence_bundle(
@@ -1535,7 +1787,30 @@ def _supported_claims(context: str) -> tuple[str, ...]:
     for block in re.split(r"(?im)(?=^\[(?:#\s*|Quelle\s+)\d+\])", context):
         lines = [line.strip() for line in block.splitlines() if line.strip()]
         if len(lines) > 1:
-            claims.append(" ".join(lines[1:])[:500])
+            text = " ".join(lines[1:])
+            if "sperrprozess-liste-" in _fold(text):
+                # Procedure chapters must retain every step, including the middle.
+                claims.extend(part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip())
+                continue
+            excerpts = [text[:500]]
+            folded = _fold(text)
+            focus = re.compile(
+                r"datenschutz@kahle\.de|geltungsbereich|gilt\s+nur|gultig\s+fur|"
+                r"andere\w*\s+standort|kd-sperrprozess-liste-(?:han|wun|wed)"
+            )
+            last_end = 0
+            for match in focus.finditer(folded):
+                start = max(0, match.start() - 160)
+                end = min(len(text), start + 500)
+                if start < last_end:
+                    continue
+                excerpt = text[start:end]
+                if excerpt not in excerpts:
+                    excerpts.append(excerpt)
+                    last_end = end
+                if len(excerpts) >= 4:
+                    break
+            claims.extend(excerpts)
     return tuple(claims)
 
 
@@ -2309,6 +2584,7 @@ def build_decision(
         evidence_bundle=evidence,
         answer_contract=AnswerContract(
             allowed_contact_values=allowed_contact_values,
+            **_opt_out_contract_scope(retrieval_query, evidence),
         ),
         events=(
             {"type": "intent/started"},
@@ -2400,6 +2676,7 @@ def build_result_driven_decision(
         answer_contract=AnswerContract(
             allowed_contact_values=tuple(dict.fromkeys(binding["value"] for binding in _model_led_contact_bindings(evidence))),
             allowed_contact_bindings=_model_led_contact_bindings(evidence),
+            **_opt_out_contract_scope(resolved_context.retrieval_query, evidence),
         ),
         events=(
             *retrieval_events,

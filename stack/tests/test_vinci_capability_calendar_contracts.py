@@ -20,6 +20,14 @@ def test_vinci_prompts_truthfully_disable_unavailable_capabilities():
         assert "Behaupte oder verspreche diese Funktionen niemals" in prompt
 
 
+def test_vinci_prompts_use_available_chat_text_when_an_image_is_also_attached():
+    for path in PROMPTS:
+        prompt = path.read_text(encoding="utf-8")
+        assert "bereits als Text oder Code im aktuellen Chat stehen" in prompt
+        assert "Lehne die Anfrage nicht wegen fehlender Bildfaehigkeit ab" in prompt
+        assert "Bewahre bei Aenderungen an eingefuegtem Code Reihenfolge und Zuordnung" in prompt
+
+
 def test_all_three_vinci_models_are_hardened_on_every_registration():
     source = REGISTER.read_text(encoding="utf-8")
     assert '"kahle-vinci-max-thinking"' in source

@@ -57,6 +57,49 @@ def configured_tool(module, monkeypatch, chunks):
     return tool
 
 
+def test_marketing_opt_out_claims_keep_scope_contact_and_location_lists():
+    module = load_tool()
+    query = (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben durchgeführt?"
+    )
+    passage = (
+        "Öffnen Sie die DSE-Einstellungen und speichern Sie die Änderung. "
+        "Geltungsbereich: Der Prozess gilt nur für Hannover, Wunstorf und Wedemark. "
+        "Andere Standorte wenden sich an datenschutz@kahle.de. "
+        "Verwenden Sie KD-Sperrprozess-Liste-HAN, KD-Sperrprozess-Liste-WUN und "
+        "KD-Sperrprozess-Liste-WED."
+    )
+
+    claims = module._claim_evidence_spans(query, passage)
+    combined = " ".join(claims)
+
+    assert "Hannover, Wunstorf und Wedemark" in combined
+    assert "datenschutz@kahle.de" in combined
+    assert "KD-Sperrprozess-Liste-HAN" in combined
+    assert "KD-Sperrprozess-Liste-WUN" in combined
+    assert "KD-Sperrprozess-Liste-WED" in combined
+
+
+def test_opt_out_bundle_retains_entire_authoritative_chapter_beyond_sentence_ranking():
+    module = load_tool()
+    passage = (
+        "DSE-Einstellungen öffnen. " * 80
+        + "Zustimmung erteilt und Weitergabe an Dritte müssen angehakt bleiben. "
+        + "Nach 14 Tagen Grund prüfen und das Entsperrdatum dokumentieren."
+    )
+    bundle = module._evidence_bundle(
+        "Wie sperre ich einen Kunden für Zufriedenheitsbefragungen?", passage,
+        [{"number": 1, "title": "Temporäre Sperrung Hersteller-Zufriedenheitsbefragungen",
+          "document_id": "process", "version_id": "v1", "evidence_text": passage}],
+    )
+    claims = bundle["supported_claims"]
+    combined = " ".join(claim["evidence_span"] for claim in claims)
+    assert "Zustimmung erteilt und Weitergabe an Dritte müssen angehakt bleiben." in combined
+    assert "Nach 14 Tagen Grund prüfen und das Entsperrdatum dokumentieren." in combined
+    assert all(claim["evidence_span"] in passage for claim in claims)
+
+
 def chunk(content: str, *, conflict: bool = False):
     return SimpleNamespace(
         title="KAHLE Systemwissen",
@@ -69,6 +112,248 @@ def chunk(content: str, *, conflict: bool = False):
         conflict=conflict,
         knowledgebase_ids=("service",),
     )
+
+
+def _opt_out_chunk(content, heading, *, parent_content=None):
+    result = chunk(parent_content or content)
+    result.title = "Temporäre Sperrung Hersteller-Zufriedenheitsbefragungen"
+    result.heading_path = (heading,)
+    result.content = content
+    return result
+
+
+@pytest.mark.parametrize(
+    ("location", "wanted", "foreign"),
+    [
+        ("Hannover", "KD-Sperrprozess-Liste-HAN", "KD-Sperrprozess-Liste-WUN"),
+        ("Wunstorf", "KD-Sperrprozess-Liste-WUN", "KD-Sperrprozess-Liste-WED"),
+        ("Wedemark", "KD-Sperrprozess-Liste-WED", "KD-Sperrprozess-Liste-HAN"),
+    ],
+)
+def test_opt_out_rag_context_has_complete_shared_chapters_and_one_location_value(
+    monkeypatch, location, wanted, foreign,
+):
+    module = load_tool()
+    chunks = [
+        _opt_out_chunk("Öffne die DSE-Einstellungen.", "Ablauf"),
+        _opt_out_chunk("Nach 14 Tagen Grund prüfen.", "Prüfung"),
+        _opt_out_chunk(
+            "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. Andere Standorte: datenschutz@kahle.de.",
+            "Geltungsbereich",
+        ),
+        _opt_out_chunk("HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN.", "Hannover"),
+        _opt_out_chunk("WUN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-WUN.", "Wunstorf"),
+        _opt_out_chunk("WED – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-WED.", "Wedemark"),
+    ]
+    result = asyncio.run(configured_tool(module, monkeypatch, chunks).rag_chat(
+        query=(
+            "Wie sperre ich einen Kunden für herstellerseitige "
+            f"Zufriedenheitsbefragungen am Standort {location}?"
+        ),
+        __user__={"id": "user-1"},
+    ))
+    context = result.split("CONTEXT:\n", 1)[1].split("\nSOURCES_JSON:", 1)[0]
+    evidence = evidence_from_result(result)
+
+    assert "Öffne die DSE-Einstellungen." in context
+    assert "Nach 14 Tagen Grund prüfen." in context
+    assert wanted in context
+    assert foreign in context
+    assert {source["version_id"] for source in evidence["sources"]} == {"version-1"}
+    assert "FINAL_ANSWER_REQUIREMENTS:" not in result
+    assert "BELEGTE_PFLICHTFAKTEN" not in result
+    assert "AnswerContract" not in result
+
+
+def test_opt_out_rag_context_without_location_has_the_shared_process(monkeypatch):
+    module = load_tool()
+    chunks = [
+        _opt_out_chunk("Öffne die DSE-Einstellungen.", "Ablauf"),
+        _opt_out_chunk(
+            "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. Andere Standorte: datenschutz@kahle.de.",
+            "Geltungsbereich",
+        ),
+        _opt_out_chunk("HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN.", "Hannover"),
+    ]
+    result = asyncio.run(configured_tool(module, monkeypatch, chunks).rag_chat(
+        query="Wie sperre ich einen Kunden für Zufriedenheitsbefragungen?",
+        __user__={"id": "user-1"},
+    ))
+    context = result.split("CONTEXT:\n", 1)[1].split("\nSOURCES_JSON:", 1)[0]
+
+    assert "Hannover, Wunstorf und Wedemark" in context
+    assert "datenschutz@kahle.de" in context
+    assert "DSE-Einstellungen" in context
+    assert "KD-Sperrprozess-Liste" in context
+    assert context.count("[Quelle ") >= 1
+
+
+def test_opt_out_rag_context_for_other_location_has_scope_and_contact(monkeypatch):
+    module = load_tool()
+    chunks = [
+        _opt_out_chunk("Öffne die DSE-Einstellungen.", "Ablauf"),
+        _opt_out_chunk(
+            "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. Andere Standorte: datenschutz@kahle.de.",
+            "Geltungsbereich",
+        ),
+        _opt_out_chunk("HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN.", "Hannover"),
+    ]
+
+    result = asyncio.run(configured_tool(module, monkeypatch, chunks).rag_chat(
+        query="Wie sperre ich einen Kunden für Zufriedenheitsbefragungen am Standort Walsrode?",
+        __user__={"id": "user-1"},
+    ))
+    context = result.split("CONTEXT:\n", 1)[1].split("\nSOURCES_JSON:", 1)[0]
+
+    assert "Hannover, Wunstorf und Wedemark" in context
+    assert "datenschutz@kahle.de" in context
+    assert "DSE-Einstellungen" in context
+    assert "KD-Sperrprozess-Liste" in context
+
+
+def test_opt_out_rag_context_serializes_wide_parent_content_without_location(monkeypatch):
+    module = load_tool()
+    parent_content = (
+        "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. "
+        "Andere Standorte: datenschutz@kahle.de. "
+        "Öffne die DSE-Einstellungen. "
+        "HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN. "
+        "WUN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-WUN."
+    )
+    chunks = [
+        _opt_out_chunk("Öffne die DSE-Einstellungen.", "Ablauf", parent_content=parent_content),
+        _opt_out_chunk(
+            "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. "
+            "Andere Standorte: datenschutz@kahle.de.",
+            "Geltungsbereich",
+            parent_content=parent_content,
+        ),
+        _opt_out_chunk(
+            "HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN.",
+            "Hannover",
+            parent_content=parent_content,
+        ),
+    ]
+
+    result = asyncio.run(configured_tool(module, monkeypatch, chunks).rag_chat(
+        query="Wie sperre ich einen Kunden für Zufriedenheitsbefragungen?",
+        __user__={"id": "user-1"},
+    ))
+    context = result.split("CONTEXT:\n", 1)[1].split("\nSOURCES_JSON:", 1)[0]
+
+    assert "Hannover, Wunstorf und Wedemark" in context
+    assert "datenschutz@kahle.de" in context
+    assert "DSE-Einstellungen" in context
+    assert "KD-Sperrprozess-Liste" in context
+    assert "FINAL_RESPONSE_INSTRUCTION: Unabdingbare Ausgabeform" in result
+    assert "Für alle anderen Standorte" in result
+
+
+def test_opt_out_rag_context_uses_child_passages_when_parent_contains_all_locations(monkeypatch):
+    module = load_tool()
+    parent_content = (
+        "Diese Anleitung gilt nur für Hannover, Wunstorf und Wedemark. "
+        "Öffne die DSE-Einstellungen. "
+        "HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN. "
+        "WUN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-WUN."
+    )
+    chunks = [
+        _opt_out_chunk("Öffne die DSE-Einstellungen.", "Ablauf", parent_content=parent_content),
+        _opt_out_chunk(
+            "HAN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-HAN.",
+            "Hannover",
+            parent_content=parent_content,
+        ),
+        _opt_out_chunk(
+            "WUN – LÖSCHEN & SPERREN. KD-Sperrprozess-Liste-WUN.",
+            "Wunstorf",
+            parent_content=parent_content,
+        ),
+    ]
+
+    result = asyncio.run(configured_tool(module, monkeypatch, chunks).rag_chat(
+        query=(
+            "Wie sperre ich einen Kunden für herstellerseitige "
+            "Zufriedenheitsbefragungen am Standort Hannover?"
+        ),
+        __user__={"id": "user-1"},
+    ))
+    context = result.split("CONTEXT:\n", 1)[1].split("\nSOURCES_JSON:", 1)[0]
+
+    assert "Öffne die DSE-Einstellungen." in context
+    assert "KD-Sperrprozess-Liste-HAN" in context
+    assert "KD-Sperrprozess-Liste-WUN" in context
+
+
+def test_marketing_opt_out_prioritizes_required_evidence_before_process_body():
+    module = load_tool()
+    query = (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben durchgeführt?"
+    )
+    process = chunk("Öffnen Sie die DSE-Einstellungen und dokumentieren Sie die Änderung.")
+    scope = chunk(
+        "Geltungsbereich: Der Prozess gilt nur für Hannover, Wunstorf und Wedemark. "
+        "Andere Standorte wenden sich an datenschutz@kahle.de."
+    )
+    location_lists = chunk(
+        "KD-Sperrprozess-Liste-HAN, KD-Sperrprozess-Liste-WUN und "
+        "KD-Sperrprozess-Liste-WED."
+    )
+
+    ordered = module._prioritize_marketing_opt_out_evidence(
+        query, [process, scope, location_lists]
+    )
+
+    assert ordered == [scope, location_lists, process]
+
+
+def test_rag_model_context_deduplicates_identical_parent_passages(monkeypatch):
+    module = load_tool()
+    repeated = "Öffnen Sie die DSE-Einstellungen und dokumentieren Sie die Änderung."
+    first = chunk(repeated)
+    second = chunk(repeated)
+    second.heading_path = ("Andere Überschrift",)
+    tool = configured_tool(module, monkeypatch, [first, second])
+
+    result = asyncio.run(tool.rag_chat(
+        query="Wie wird der dokumentierte Ablauf durchgeführt?",
+        __user__={"id": "user-1"},
+        __chat_id__="chat-1",
+        __message_id__="message-1",
+    ))
+    context = result.split("CONTEXT:\n", 1)[1].split("\nSOURCES_JSON:", 1)[0]
+
+    assert context.count(repeated) == 1
+
+
+@pytest.mark.parametrize("query", [
+    "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das?",
+    "Wie sperre ich einen Kunden für Zufriedenheitsbefragungen?",
+])
+def test_natural_marketing_opt_out_wording_activates_required_evidence(query):
+    module = load_tool()
+    complete = (
+        "Der Ablauf gilt nur für Hannover, Wunstorf und Wedemark. "
+        "Andere Standorte wenden sich an datenschutz@kahle.de. "
+        "KD-Sperrprozess-Liste-HAN, KD-Sperrprozess-Liste-WUN, "
+        "KD-Sperrprozess-Liste-WED."
+    )
+
+    assert module._marketing_opt_out_query(query)
+
+
+def test_marketing_opt_out_filter_excludes_system_map_distraction():
+    module = load_tool()
+    query = (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben durchgeführt?"
+    )
+    process = chunk("Öffnen Sie die DSE-Einstellungen.")
+    system_map = chunk("Vaudis wird zur Kundenpflege verwendet.")
+    system_map.title = "KAHLE Systemlandkarte"
+
+    assert module._filter_evidence_chunks(query, [system_map, process]) == [process]
 
 
 def typed_contact_chunk(label="E-Mail", value="it@example.invalid"):

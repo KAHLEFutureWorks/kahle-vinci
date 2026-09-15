@@ -124,7 +124,9 @@ def _clarification_for_query(query):
         and re.search(r"(?:\b(?:sperr|entsperr)\w*|\bkunden(?:sperr|entsperr)\w*)", value)
     )
     marketing_scope = re.search(
-        r"\b(?:werbung|werbewiderspruch|befragung(?:en)?|kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
+        r"\b(?:werbung|werbewiderspruch|bewertung(?:en)?|befragung(?:en)?|"
+        r"zufriedenheitsbefragung(?:en)?|herstellerbefragung(?:en)?|"
+        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
         value,
     )
     general_scope = re.search(
@@ -175,6 +177,24 @@ def _filter_evidence_chunks(query, chunks):
         )))
 
     selected = list(chunks or [])
+    marketing_request = bool(re.search(
+        r"\b(?:werbung|werbesperre|werbewiderspruch|bewertung(?:en)?|befragung(?:en)?|"
+        r"zufriedenheitsbefragung(?:en)?|herstellerbefragung(?:en)?|"
+        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
+        folded_query,
+    )) and bool(re.search(
+        r"\b(?:sperr|deaktivier|hinterleg|abmeld|widerruf|werbewiderspruch|"
+        r"widerspruch|durchfuehr|entfern|"
+        r"keine\w*\s+werbung|nicht\s+mehr\s+erhalt)\w*\b",
+        folded_query,
+    ))
+    if marketing_request:
+        selected = [
+            chunk for chunk in selected
+            if "systemlandkarte" not in _fold_evidence_text(
+                str(getattr(chunk, "title", "") or "")
+            )
+        ]
     responsibility = re.search(
         r"\b(?:an\s+wen|ansprechpartner|zustandig|zustandigkeit|"
         r"wende\s+(?:ich|mich)|kontaktier)\w*\b",
@@ -270,7 +290,8 @@ def _rag_answer_instruction(query):
     """Return query-specific grounding rules without replacing retrieval."""
     value = str(query or "").strip().casefold()
     marketing_scope = re.search(
-        r"\b(?:werbung|werbesperre|werbewiderspruch|befragung(?:en)?|"
+        r"\b(?:werbung|werbesperre|werbewiderspruch|bewertung(?:en)?|befragung(?:en)?|"
+        r"zufriedenheitsbefragung(?:en)?|herstellerbefragung(?:en)?|"
         r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
         value,
     )
@@ -282,6 +303,7 @@ def _rag_answer_instruction(query):
         instruction += (
             "Nutze ausschließlich einschlägige Textstellen zu Werbewiderspruch, Werbung, "
             "automatisierten Befragungen, DSE-Kontaktfreigaben und Sperrliste. "
+            "Übertrage keine Schritte oder Standortwerte außerhalb des belegten Geltungsbereichs. "
             "Leite keine allgemeine Kundensperre und keine Felder, Register oder Datenkategorien "
             "aus anderen Vaudis-Handbuchtreffern ab. Nenne insbesondere besondere Merkmale oder "
             "Finanzdaten nur, wenn die einschlägige Quelle zum Werbewiderspruch dies ausdrücklich verlangt. "
@@ -304,12 +326,151 @@ def _rag_answer_instruction(query):
     return instruction
 
 
+def _rag_final_response_instruction(query):
+    """Put a location boundary at the end of native tool context for the model."""
+    location_mode, _location_code = _temporary_survey_location_scope(query)
+    if location_mode:
+        return (
+            "Unabdingbare Ausgabeform: Erkläre den vollständigen belegten Vorgang für die "
+            "Standorte Hannover, Wunstorf und Wedemark. Stelle klar, dass er ausschließlich "
+            "für diese drei Standorte gilt. Schließe genau einmal ab: 'Für alle anderen Standorte "
+            "wende dich bitte an datenschutz@kahle.de.' Erfinde keine weiteren Standortwerte."
+        )
+    return ""
+
+
+def _prioritize_marketing_opt_out_evidence(query, chunks):
+    """Put supported scope, contact and list passages before the procedure body."""
+    if not _marketing_opt_out_query(query):
+        return list(chunks or [])
+
+    def priority(chunk):
+        text = _fold_evidence_text("\n".join((
+            " > ".join(str(item) for item in getattr(chunk, "heading_path", ()) or ()),
+            str(getattr(chunk, "parent_content", "") or ""),
+        )))
+        location_lists = all(
+            marker in text
+            for marker in (
+                "kd-sperrprozess-liste-han",
+                "kd-sperrprozess-liste-wun",
+                "kd-sperrprozess-liste-wed",
+            )
+        )
+        explicit_scope = all(
+            location in text for location in ("hannover", "wunstorf", "wedemark")
+        ) and bool(re.search(r"\b(?:geltungsbereich|gilt\s+nur|andere\w*\s+standort)", text))
+        contact = "datenschutz@kahle.de" in text
+        return (
+            3 if contact else 0,
+            2 if explicit_scope else 0,
+            1 if location_lists else 0,
+        )
+
+    return sorted(list(chunks or []), key=priority, reverse=True)
+
+
 def _fold_evidence_text(value):
     return (
         str(value or "").casefold()
         .replace("ä", "ae").replace("ö", "oe")
         .replace("ü", "ue").replace("ß", "ss")
     )
+
+
+def _marketing_opt_out_query(query):
+    value = _fold_evidence_text(query)
+    marketing_scope = re.search(
+        r"\b(?:werbung|werbesperre|werbewiderspruch|bewertung(?:en)?|befragung(?:en)?|"
+        r"zufriedenheitsbefragung(?:en)?|herstellerbefragung(?:en)?|"
+        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
+        value,
+    )
+    opt_out_action = re.search(
+        r"\b(?:sperr|deaktivier|hinterleg|abmeld|widerruf|werbewiderspruch|"
+        r"widerspruch|durchfuehr|entfern|"
+        r"keine\w*\s+werbung|nicht\s+mehr\s+erhalt)\w*\b",
+        value,
+    )
+    return bool(marketing_scope and opt_out_action)
+
+
+_TEMPORARY_SURVEY_LOCATION_CODES = {
+    "hannover": "HAN",
+    "wunstorf": "WUN",
+    "wedemark": "WED",
+}
+
+
+def _temporary_survey_location_scope(query):
+    folded = _fold_evidence_text(query)
+    is_manufacturer_survey = (
+        "zufriedenheitsbefrag" in folded
+        or "zufriedenheitsabfrag" in folded
+        or "herstellerbefrag" in folded
+    )
+    if not (is_manufacturer_survey and any(
+        marker in folded for marker in ("werb", "kontaktfreigab", "dse", "hersteller", "tempor", "sperr")
+    )):
+        return "", ""
+    matches = [
+        (match.start(), code)
+        for location, code in _TEMPORARY_SURVEY_LOCATION_CODES.items()
+        for match in re.finditer(rf"\b{re.escape(location)}\b", folded)
+    ]
+    if matches:
+        return "supported_location", max(matches)[1]
+    named_location = re.search(r"\b(?:am\s+standort|standort|in)\s+([a-z][\w-]*)", folded)
+    if named_location and named_location.group(1) not in {"vaudis", "personio", "sharepoint", "dse"}:
+        return "out_of_scope_location", ""
+    return "unspecified_location", ""
+
+
+def _temporary_survey_codes(text, heading_path=()):
+    folded = _fold_evidence_text(
+        "\n".join((str(text or ""), " > ".join(str(item) for item in heading_path or ())))
+    )
+    return {
+        code
+        for code in _TEMPORARY_SURVEY_LOCATION_CODES.values()
+        if re.search(
+            rf"(?:kd-sperrprozess-liste-{code.casefold()}|\b{code.casefold()}\s*[-–:]?\s*loschen)",
+            folded,
+        )
+    }
+
+
+def _is_temporary_survey_scope_or_contact(text):
+    folded = _fold_evidence_text(text)
+    return not _temporary_survey_codes(text) and (
+        "datenschutz@kahle.de" in folded
+        or all(location in folded for location in _TEMPORARY_SURVEY_LOCATION_CODES)
+    )
+
+
+def _temporary_survey_scope_or_contact_passage(text, *, include_contact):
+    """Keep only the scope and, when needed, contact sentences from broad evidence."""
+    fragments = re.split(r"(?<=[.!?])\s+|\n+", str(text or "").strip())
+    selected = []
+    for fragment in fragments:
+        candidate = fragment.strip()
+        folded = _fold_evidence_text(candidate)
+        if candidate and (
+            all(location in folded for location in _TEMPORARY_SURVEY_LOCATION_CODES)
+            or (include_contact and "datenschutz@kahle.de" in folded)
+        ):
+            selected.append(candidate)
+    return " ".join(dict.fromkeys(selected))
+
+
+def _context_passage_for_temporary_survey(chunk, query):
+    """Return the complete approved process shared by its three locations."""
+    location_mode, location_code = _temporary_survey_location_scope(query)
+    parent = str(getattr(chunk, "parent_content", "") or "").strip()
+    child = str(getattr(chunk, "content", "") or "").strip()
+    if not location_mode:
+        return parent
+    return parent or child
 
 
 def _procedural_evidence_intent(query):
@@ -371,7 +532,7 @@ def _detected_conflict_source_ids(source_items):
     return sorted(conflicts, key=lambda value: int(value.lstrip("#")))
 
 
-def _claim_evidence_spans(query, passage):
+def _claim_evidence_spans(query, passage, *, full_procedure=False):
     """Select exact relevant sentences; never synthesize a claim across passages."""
     sentences = [
         sentence.strip()
@@ -380,6 +541,11 @@ def _claim_evidence_spans(query, passage):
     ]
     if not sentences:
         return []
+    if full_procedure:
+        # Keep exact source spans, including low-query-overlap exceptions and
+        # later review steps. The AnswerContract needs every chapter fact.
+        return [sentence[start:start + 1000]
+                for sentence in sentences for start in range(0, len(sentence), 1000)]
     stopwords = {
         "aber", "dass", "eine", "einen", "einer", "fuer", "kahle", "oder",
         "sind", "ueber", "unter", "unser", "unsere", "unseren", "unserer",
@@ -396,10 +562,60 @@ def _claim_evidence_spans(query, passage):
     best = max(score for score, _position, _sentence in scored)
     if best <= 0:
         return []
-    return [
+    selected = [
         sentence for score, _position, sentence in scored
         if score == best
     ][:3]
+    folded_query = _fold_evidence_text(query)
+    if all(
+        marker in folded_query
+        for marker in (
+            "werbewiderspruch",
+            "zufriedenheitsbefragung",
+            "dse-kontaktfreigaben",
+        )
+    ):
+        for sentence in sentences:
+            folded_sentence = _fold_evidence_text(sentence)
+            if (
+                "datenschutz@kahle.de" in folded_sentence
+                or re.search(
+                    r"\b(?:geltungsbereich|gilt\s+nur|gultig\s+fur|andere\w*\s+standort)",
+                    folded_sentence,
+                )
+                or re.search(
+                    r"kd-sperrprozess-liste-(?:han|wun|wed)",
+                    folded_sentence,
+                )
+            ) and sentence not in selected:
+                selected.append(sentence)
+        folded_passage = _fold_evidence_text(passage)
+        carries_scope_or_contact = (
+            all(
+                location in folded_passage
+                for location in ("hannover", "wunstorf", "wedemark")
+            )
+            and (
+                "datenschutz@kahle.de" in folded_passage
+                or re.search(
+                    r"\b(?:geltungsbereich|gilt\s+nur|gultig\s+fur|andere\w*\s+standort)",
+                    folded_passage,
+                )
+            )
+        )
+        carries_location_lists = all(
+            marker in folded_passage
+            for marker in (
+                "kd-sperrprozess-liste-han",
+                "kd-sperrprozess-liste-wun",
+                "kd-sperrprozess-liste-wed",
+            )
+        )
+        if carries_scope_or_contact or carries_location_lists:
+            exact_block = str(passage or "").strip()[:1000]
+            if exact_block and exact_block not in selected:
+                selected.append(exact_block)
+    return selected[:8]
 
 
 def _evidence_bundle(query, context="", sources=None, missing_information=None):
@@ -424,7 +640,13 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
                 })
             continue
         if number and passage:
-            for claim_index, claim in enumerate(_claim_evidence_spans(query, passage), 1):
+            full_procedure = _marketing_opt_out_query(query) and all(
+                term in _fold_evidence_text(source.get("title", ""))
+                for term in ("tempor", "sperr", "zufriedenheitsbefrag")
+            )
+            for claim_index, claim in enumerate(_claim_evidence_spans(
+                query, passage, full_procedure=full_procedure,
+            ), 1):
                 claims.append({
                     "claim_id": f"R{number}C{claim_index}",
                     "source_id": f"#{number}",
@@ -608,6 +830,7 @@ class Tools:
                         continue
                 valid_chunks.append(chunk)
             chunks = _filter_evidence_chunks(query, valid_chunks) + contact_errors
+            chunks = _prioritize_marketing_opt_out_evidence(query, chunks)
         except Exception as exc:
             error_code = (
                 str(exc).strip()
@@ -628,12 +851,34 @@ class Tools:
                                  False, 0, started_at)
             return _missing_rag_result(query, __chat_id__, __message_id__)
         context, sources = [], []
+        seen_context_passages = set()
+        temporary_survey_location_mode, _temporary_survey_location_code = (
+            _temporary_survey_location_scope(query)
+        )
+        scope_context_added = False
         for index, chunk in enumerate(chunks, 1):
             heading = " > ".join(chunk.heading_path)
             contact_error = getattr(chunk, "contact_error", "")
             passage = "" if contact_error else chunk.parent_content
-            if passage:
+            if passage and _temporary_survey_location_scope(query)[0]:
+                passage = _context_passage_for_temporary_survey(chunk, query)
+            if not passage and not contact_error:
+                continue
+            context_identity = (
+                str(getattr(chunk, "document_id", "") or ""),
+                passage.strip(),
+            )
+            if passage and context_identity not in seen_context_passages:
                 context.append(f"[Quelle {index}] {chunk.title} | {heading}\n{passage}")
+                seen_context_passages.add(context_identity)
+            evidence_passage = passage
+            if (
+                passage
+                and heading
+                and _marketing_opt_out_query(query)
+                and getattr(chunk, "functional_contact", None) is None
+            ):
+                evidence_passage = f"{heading}\n{passage}"
             sources.append({
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
@@ -651,7 +896,7 @@ class Tools:
                 "classification_confidence": float(
                     getattr(chunk, "classification_confidence", 0) or 0
                 ),
-                "evidence_text": passage,
+                "evidence_text": evidence_passage,
             })
             if contact_error:
                 sources[-1]["contact_error"] = contact_error
@@ -668,5 +913,6 @@ class Tools:
             f"INSTRUCTION: {_rag_answer_instruction(query)}\n"
             f"CONTEXT:\n{joined_context}\n"
             f"SOURCES_JSON: {json.dumps(sources, ensure_ascii=False)}\n"
-            f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}"
+            f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}\n"
+            f"FINAL_RESPONSE_INSTRUCTION: {_rag_final_response_instruction(query)}"
         )

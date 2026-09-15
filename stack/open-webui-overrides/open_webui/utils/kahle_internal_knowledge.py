@@ -123,6 +123,15 @@ class KnowledgeEvidenceSession:
     def called_tools(self) -> tuple[str, ...]:
         return tuple(self._calls)
 
+    def request_query(self) -> str:
+        """Return the original user query captured before tool orchestration."""
+        for message in reversed(self._messages):
+            if isinstance(message, dict) and message.get("role") == "user":
+                content = str(message.get("content") or "").strip()
+                if content:
+                    return content
+        return ""
+
     def build_decision(
         self, *, query: str, permission_scope: dict[str, Any]
     ) -> HarnessDecision | None:
@@ -227,6 +236,9 @@ def _recording_rag_tool(
         session.record("rag_chat", result)
         return result
 
+    # Mandatory pre-routing must rebind the platform's original tool context
+    # (user, chat and metadata) without unwrapping this recorder accidentally.
+    setattr(call_and_record, "__kahle_rag_original__", original)
     return {**tool, "callable": call_and_record}
 
 
