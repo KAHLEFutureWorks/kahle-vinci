@@ -372,6 +372,18 @@ def test_retrieval_alias_resolution_expands_only_documented_whole_tokens():
     assert module.resolve_query_aliases("Studie und Hinweis") == "Studie und Hinweis"
 
 
+def test_retrieval_alias_resolution_expands_the_complete_case_sensitive_legend():
+    module = load_harness()
+
+    assert module.resolve_query_aliases("DA, Perso, WAL, WED, NEU und WUN") == (
+        "Digitales Autohaus, Personalabteilung, Walsrode, Wedemark, "
+        "Neustadt am Rübenberge und Wunstorf"
+    )
+    assert module.resolve_query_aliases("Ich bin da und neu, nicht in wal oder wed.") == (
+        "Ich bin da und neu, nicht in wal oder wed."
+    )
+
+
 def test_request_resolution_turns_a_process_followup_into_a_standalone_query():
     harness = load_harness()
     original = "Und wie geht es dann, wenn ich in Hannover bin?"

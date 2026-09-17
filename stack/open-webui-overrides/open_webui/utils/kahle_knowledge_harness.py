@@ -22,9 +22,15 @@ SCHEMA_VERSION = "kahle.knowledge-harness.v1"
 
 KNOWN_ALIASES = {
     "TD": "Teiledienst",
+    "DA": "Digitales Autohaus",
+    "Perso": "Personalabteilung",
     "VK": "Verkauf",
     "NIE": "Nienburg",
     "HAN": "Hannover",
+    "WAL": "Walsrode",
+    "WED": "Wedemark",
+    "NEU": "Neustadt am Rübenberge",
+    "WUN": "Wunstorf",
     "SHG": "Stadthagen",
 }
 
@@ -1202,10 +1208,29 @@ def _internal_system_entity(query: str) -> str:
     return match.group(1) if match else ""
 
 
-def _information_needs(query: str) -> tuple[InformationNeed, ...]:
+def _documented_abbreviation_definition(query: str) -> bool:
+    """Recognize one documented alias in an explicit definition question."""
+    aliases = _aliases_in_query(query)
+    return len(aliases) == 1 and bool(
+        re.search(r"\b(?:abkurzung|wofur\s+steht|was\s+bedeutet)\b", _fold(query))
+    )
+
+
+def _information_needs(
+    query: str, *, original_query: str | None = None
+) -> tuple[InformationNeed, ...]:
     """Describe required evidence before retrieval, independently of the model."""
     folded = _fold(query)
     relation_target = _relation_target(query)
+    if _documented_abbreviation_definition(original_query or query):
+        return (
+            InformationNeed(
+                kind="abbreviation_definition",
+                domain="internal_glossary",
+                document_types=("knowledge_document",),
+                evidence_capabilities=("exact_abbreviation_definition",),
+            ),
+        )
     if _functional_responsibility_question(folded):
         return (
             InformationNeed(
@@ -1388,7 +1413,9 @@ def plan_retrieval(
         required_tools=required_tools,
         queries=(retrieval_query,),
         permission_scope=dict(permission_scope or {}),
-        information_needs=_information_needs(retrieval_query),
+        information_needs=_information_needs(
+            retrieval_query, original_query=str(query or "")
+        ),
     )
 
 
@@ -1396,7 +1423,7 @@ def _aliases_in_query(query: str) -> dict[str, str]:
     return {
         alias: expansion
         for alias, expansion in KNOWN_ALIASES.items()
-        if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", query, re.IGNORECASE)
+        if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", query)
     }
 
 
@@ -1413,7 +1440,6 @@ def resolve_query_aliases(query: str) -> str:
             rf"(?<!\w){re.escape(alias)}(?!\w)",
             expansion,
             resolved,
-            flags=re.IGNORECASE,
         )
     return resolved
 

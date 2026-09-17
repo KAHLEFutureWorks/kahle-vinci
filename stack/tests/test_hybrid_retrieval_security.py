@@ -892,8 +892,21 @@ def test_kahle_abbreviations_are_expanded_before_opening_hours_clarification():
 
     expanded = expand("Wie sind unsere TD Öffnungszeiten in NIE?")
 
-    assert expanded == "Wie sind unsere Teiledienst Öffnungszeiten in Nienburg?"
+    assert expanded == "Wie sind unsere TD (Teiledienst) Öffnungszeiten in NIE (Nienburg)?"
     assert clarification(expanded) == ""
+
+
+def test_kahle_alias_expansion_retains_codes_for_glossary_retrieval():
+    (expand,) = load_tool_helpers("_expand_kahle_query_aliases")
+
+    assert expand("Wie arbeite ich im TD mit dem DA?") == (
+        "Wie arbeite ich im TD (Teiledienst) mit dem DA (Digitales Autohaus)?"
+    )
+    assert expand("Perso in WAL, WED, NEU und WUN") == (
+        "Perso (Personalabteilung) in WAL (Walsrode), WED (Wedemark), "
+        "NEU (Neustadt am Rübenberge) und WUN (Wunstorf)"
+    )
+    assert expand("Wie arbeite ich da und neu?") == "Wie arbeite ich da und neu?"
 
 
 def test_sales_and_stadthagen_abbreviations_are_expanded_before_clarification():
@@ -903,7 +916,7 @@ def test_sales_and_stadthagen_abbreviations_are_expanded_before_clarification():
 
     expanded = expand("Wie sind unsere VK Öffnungszeiten in SHG?")
 
-    assert expanded == "Wie sind unsere Verkauf Öffnungszeiten in Stadthagen?"
+    assert expanded == "Wie sind unsere VK (Verkauf) Öffnungszeiten in SHG (Stadthagen)?"
     assert clarification(expanded) == ""
 
 
@@ -911,8 +924,9 @@ def test_all_supported_location_codes_expand_as_standalone_tokens_only():
     (expand,) = load_tool_helpers("_expand_kahle_query_aliases")
 
     assert expand("HAN WUN WED WAL NEU NIE STA SHG") == (
-        "Hannover Wunstorf Wedemark Walsrode Neustadt am Rübenberge "
-        "Nienburg Stadthagen Stadthagen"
+        "HAN (Hannover) WUN (Wunstorf) WED (Wedemark) WAL (Walsrode) "
+        "NEU (Neustadt am Rübenberge) NIE (Nienburg) STA (Stadthagen) "
+        "SHG (Stadthagen)"
     )
     assert expand("STATUS und NEUigkeit") == "STATUS und NEUigkeit"
 
@@ -1794,6 +1808,128 @@ def test_ionos_reranker_reports_safe_http_diagnostic_without_response_body(monke
 
     assert str(captured.value) == "reranker_unavailable:http_429"
     assert "secret" not in str(captured.value)
+
+
+def test_abbreviation_definition_rejects_reranked_sources_without_the_exact_pair(monkeypatch):
+    def point(identifier, title, content):
+        return {
+            "id": identifier,
+            "score": .9,
+            "payload": {
+                "document_id": identifier,
+                "version_id": "v1",
+                "title": title,
+                "content": content,
+                "parent_content": content,
+                "parent_id": identifier,
+                "heading_path": [title],
+                "knowledgebase_ids": ["allgemein"],
+                "status": "active",
+                "published": True,
+                "source_id": identifier,
+                "source_url": f"/source/{identifier}",
+                "valid_from": "2026-01-01",
+                "valid_until": "2026-12-31",
+                "authority": "6:information_or_training",
+                "conflict": False,
+            },
+        }
+
+    matching = point(
+        "systemlandkarte",
+        "KAHLE Systemlandkarte",
+        "DA steht für Digitales Autohaus.",
+    )
+    unrelated = point(
+        "academy",
+        "kontext kahle academy",
+        "Die KAHLE-Academy ist unsere zentrale Lernplattform.",
+    )
+
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"result": {"points": [matching, unrelated]}}
+
+    monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: Response())
+    reranker = SimpleNamespace(rerank=lambda *_args: [(1, .99), (0, .9)])
+    retriever = module.QdrantHybridRetriever(
+        "http://qdrant", "vinci_knowledge",
+        SimpleNamespace(encode_query=lambda _: {"build_id": "build-1", "indices": [1], "values": [1.0]}),
+        reranker,
+    )
+
+    chunks = retriever.retrieve(
+        "Wofür steht bei uns die Abkürzung DA (Digitales Autohaus)?",
+        [1.0], module.RetrievalScope("u", ("allgemein",), ("v1",)), today=date(2026, 9, 17),
+    )
+
+    assert [chunk.title for chunk in chunks] == ["KAHLE Systemlandkarte"]
+
+
+def test_abbreviation_definition_recovers_the_missing_exact_source_before_reranking(monkeypatch):
+    def point(identifier, title, content):
+        return {
+            "id": identifier,
+            "score": .9,
+            "payload": {
+                "document_id": identifier,
+                "version_id": "v1",
+                "title": title,
+                "content": content,
+                "parent_content": content,
+                "parent_id": identifier,
+                "heading_path": [title],
+                "knowledgebase_ids": ["allgemein"],
+                "status": "active",
+                "published": True,
+                "source_id": identifier,
+                "source_url": f"/source/{identifier}",
+                "valid_from": "2026-01-01",
+                "valid_until": "2026-12-31",
+                "authority": "6:information_or_training",
+                "conflict": False,
+            },
+        }
+
+    matching = point(
+        "systemlandkarte",
+        "KAHLE Systemlandkarte",
+        "DA steht für Digitales Autohaus.",
+    )
+    unrelated = point(
+        "academy",
+        "kontext kahle academy",
+        "Die KAHLE-Academy ist unsere zentrale Lernplattform.",
+    )
+    encoded_queries = []
+
+    def post(_url, json, **_kwargs):
+        points = [matching] if json.get("using") == "bm25" else [unrelated]
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"result": {"points": points}},
+        )
+
+    def encode_query(query):
+        encoded_queries.append(query)
+        return {"build_id": "build-1", "indices": [1], "values": [1.0]}
+
+    monkeypatch.setattr(module.requests, "post", post)
+    retriever = module.QdrantHybridRetriever(
+        "http://qdrant", "vinci_knowledge", SimpleNamespace(encode_query=encode_query),
+        SimpleNamespace(rerank=lambda *_args: [(0, .99)]),
+    )
+
+    chunks = retriever.retrieve(
+        "Wofür steht bei uns die Abkürzung DA (Digitales Autohaus)?",
+        [1.0], module.RetrievalScope("u", ("allgemein",), ("v1",)), today=date(2026, 9, 17),
+    )
+
+    assert [chunk.title for chunk in chunks] == ["KAHLE Systemlandkarte"]
+    assert encoded_queries == [
+        "Wofür steht bei uns die Abkürzung DA (Digitales Autohaus)?",
+        "DA Digitales Autohaus",
+    ]
 
 
 def test_distributed_tool_bundles_are_self_contained_and_current():

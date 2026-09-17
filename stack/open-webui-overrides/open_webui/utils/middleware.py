@@ -296,7 +296,10 @@ def _plan_kahle_retrieval_gate(
             legacy_rag_request
             or temporary_survey_opt_out
             or any(
-                getattr(need, 'kind', '') == 'organization_contact'
+                getattr(need, 'kind', '') in {
+                    'abbreviation_definition',
+                    'organization_contact',
+                }
                 for need in tuple(getattr(plan, 'information_needs', ()) or ())
             )
         )
@@ -5178,7 +5181,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             force_internal_rag = (
                 not metadata.get('kahle_mailer_drafting_followup')
                 and _should_execute_kahle_retrieval(retrieval_plan, tools_dict)
-                and (native_function_calling or temporary_survey_opt_out)
+                and (
+                    native_function_calling
+                    or temporary_survey_opt_out
+                    or any(
+                        getattr(need, 'kind', '') == 'abbreviation_definition'
+                        for need in tuple(
+                            getattr(retrieval_plan, 'information_needs', ()) or ()
+                        )
+                    )
+                )
             )
 
             pre_routed_internal_rag = ''

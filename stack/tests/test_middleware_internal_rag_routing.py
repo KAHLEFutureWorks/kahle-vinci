@@ -857,6 +857,36 @@ def test_actual_middleware_gate_preroutes_temporary_survey_opt_out_without_legac
     assert plan.required_tools == ("rag_chat",)
 
 
+@pytest.mark.parametrize(
+    ("query", "resolved_query"),
+    (
+        ("Was bedeutet DA?", "Was bedeutet Digitales Autohaus?"),
+        ("Wofür steht Perso?", "Wofür steht Personalabteilung?"),
+        ("Wofür steht WAL?", "Wofür steht Walsrode?"),
+    ),
+)
+def test_actual_middleware_gate_preroutes_documented_abbreviation_definitions(
+    query, resolved_query
+):
+    """A documented abbreviation must not be answered from model knowledge."""
+    gate = load_retrieval_gate()
+
+    plan = gate(
+        query=query,
+        resolved_query=resolved_query,
+        messages=[{"role": "user", "content": query}],
+        model_id="test-model",
+        permission_scope={"user_id": "user-1", "role": "user"},
+        tools_dict={"rag_chat": object()},
+        legacy_rag_request=False,
+        harness_mode="active",
+    )
+
+    assert plan is not None
+    assert plan.required_tools == ("rag_chat",)
+    assert plan.information_needs[0].kind == "abbreviation_definition"
+
+
 def test_actual_middleware_gate_respects_explicit_harness_off_for_directory_calls():
     gate = load_retrieval_gate()
     query = "Wo arbeitet Max Mustermann?"

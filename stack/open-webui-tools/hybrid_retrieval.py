@@ -106,6 +106,46 @@ def explicit_source_identifiers(query: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_fold_identifier(item.rsplit(".", 1)[0]) for item in identifiers))
 
 
+def abbreviation_definition_terms(query: str) -> tuple[str, str] | None:
+    """Return one expanded abbreviation for a direct definition question only.
+
+    The RAG tool keeps the literal code and adds its expansion in parentheses.
+    This detects that narrow, source-verifiable form without turning ordinary
+    process questions that happen to use an abbreviation into glossary lookups.
+    """
+    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
+    if not re.search(r"\b(?:abkurzung|wofur\s+steht|was\s+bedeutet)\b", folded):
+        return None
+    pairs = [
+        (code, " ".join(expansion.split()))
+        for code, expansion in re.findall(
+            r"(?<![A-Za-z0-9])([A-Z]{2,8}|[A-Z][a-z]{1,10})\s*\(([^()\n]{2,120})\)",
+            query or "",
+        )
+    ]
+    return pairs[0] if len(pairs) == 1 else None
+
+
+def abbreviation_definition_point_matches(point: dict[str, Any], terms: tuple[str, str]) -> bool:
+    """Require the literal code and its expansion in the same source passage."""
+    code, expansion = terms
+    payload = point.get("payload") or {}
+    text = "\n".join((
+        str(payload.get("title") or ""),
+        " > ".join(str(item) for item in (payload.get("heading_path") or ())),
+        str(payload.get("parent_content") or payload.get("content") or ""),
+    ))
+    if not re.search(rf"(?<![A-Za-z0-9]){re.escape(code)}(?![A-Za-z0-9])", text):
+        return False
+    folded_text = " ".join(
+        unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold().split()
+    )
+    folded_expansion = " ".join(
+        unicodedata.normalize("NFKD", expansion).encode("ascii", "ignore").decode().casefold().split()
+    )
+    return folded_expansion in folded_text
+
+
 _TITLE_STOPWORDS = {
     "am", "an", "auf", "aus", "das", "der", "die", "ein", "eine", "einer",
     "fur", "im", "in", "mit", "oder", "steht", "und", "unser", "unsere",
@@ -1030,6 +1070,19 @@ class QdrantHybridRetriever:
         candidates = pre_rerank_metadata_filter(query, candidates, information_needs)
         if not candidates:
             return []
+        abbreviation_terms = abbreviation_definition_terms(query)
+        if abbreviation_terms:
+            exact_abbreviation_candidates = [
+                point for point in candidates
+                if abbreviation_definition_point_matches(point, abbreviation_terms)
+            ]
+            if not exact_abbreviation_candidates:
+                exact_abbreviation_candidates = self._recover_abbreviation_definition_evidence(
+                    abbreviation_terms, acl, scope, today,
+                )
+            candidates = exact_abbreviation_candidates
+            if not candidates:
+                return []
         identifiers = explicit_source_identifiers(query)
         if identifiers:
             candidates = [
@@ -1046,7 +1099,7 @@ class QdrantHybridRetriever:
         temporary_process_intent = temporary_survey_process_intent(query)
         focused_ids = (
             focused_document_ids_for_query(query, candidates)
-            if not identifiers and not temporary_process_intent else set()
+            if not identifiers and not temporary_process_intent and not abbreviation_terms else set()
         )
         if focused_ids:
             candidates = [
@@ -1087,25 +1140,30 @@ class QdrantHybridRetriever:
             if temporary_process_intent
             and is_temporary_survey_process(str((point.get("payload") or {}).get("title") or ""))
         ]
-        try:
-            reranked = self.reranker.rerank(
-                query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
-                rerank_candidate_count(query, len(candidates), result_limit=result_limit),
-            )
-        except RetrievalError as exc:
+        if abbreviation_terms:
+            # Literal code-and-expansion evidence is already more specific than
+            # a semantic rerank and must not fluctuate with that provider.
+            reranked = [(index, 1.0) for index in range(len(candidates))]
+        else:
+            try:
+                reranked = self.reranker.rerank(
+                    query, [item["payload"].get("parent_content") or item["payload"]["content"] for item in candidates],
+                    rerank_candidate_count(query, len(candidates), result_limit=result_limit),
+                )
+            except RetrievalError as exc:
             # A named person, e-mail address or an otherwise unambiguous document
             # identifier has already been matched against ACL-filtered active
             # documents above. For that narrow case the hybrid RRF order is a
             # safer degraded mode than returning "kein Wissen" solely because
             # the external reranker is temporarily unavailable. Broad queries
             # continue to fail closed because their relevance needs reranking.
-            if not str(exc).startswith("reranker_unavailable") or not (identifiers or focused_ids):
-                raise
-            reranked = sorted(
-                ((index, 1.0) for index in range(len(candidates))),
-                key=lambda item: float(candidates[item[0]].get("score") or 0),
-                reverse=True,
-            )[: min(len(candidates), result_limit * 3)]
+                if not str(exc).startswith("reranker_unavailable") or not (identifiers or focused_ids):
+                    raise
+                reranked = sorted(
+                    ((index, 1.0) for index in range(len(candidates))),
+                    key=lambda item: float(candidates[item[0]].get("score") or 0),
+                    reverse=True,
+                )[: min(len(candidates), result_limit * 3)]
         for index, _score in reranked:
             if index < 0 or index >= len(candidates):
                 raise RetrievalError("reranker_response_invalid")
@@ -1138,7 +1196,7 @@ class QdrantHybridRetriever:
             # short reranker list that omits it; companions restore its full
             # version below.
             ranked_selection = temporary_process_selection[:1]
-        elif identifiers or focused_ids:
+        elif identifiers or focused_ids or abbreviation_terms:
             ranked_selection = eligible_reranked[:result_limit]
         else:
             ranked_selection = diversify_reranked(
@@ -1254,6 +1312,38 @@ class QdrantHybridRetriever:
                     result.append(point)
                     seen.add(identity)
         return result
+
+    def _recover_abbreviation_definition_evidence(
+        self,
+        terms: tuple[str, str],
+        acl: dict[str, Any],
+        scope: RetrievalScope,
+        today: date,
+    ) -> list[dict[str, Any]]:
+        """Run one narrow, ACL-filtered lookup when the hybrid pool missed it."""
+        code, expansion = terms
+        try:
+            sparse = self.sparse_encoder.encode_query(f"{code} {expansion}")
+            sparse.pop("build_id", None)
+            response = requests.post(
+                f"{self.qdrant_url}/collections/{self.alias}/points/query",
+                json={
+                    "query": sparse,
+                    "using": "bm25",
+                    "filter": acl,
+                    "limit": 8,
+                    "with_payload": True,
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            points = response.json()["result"]["points"]
+        except (RetrievalError, requests.RequestException, KeyError, TypeError, ValueError):
+            return []
+        return [
+            point for point in self._parent_centered(self._validate_points(points, scope, today), 8)
+            if not _metadata_only(point) and abbreviation_definition_point_matches(point, terms)
+        ]
 
     def _document_points(
         self, document_ids: set[str], acl: dict[str, Any],

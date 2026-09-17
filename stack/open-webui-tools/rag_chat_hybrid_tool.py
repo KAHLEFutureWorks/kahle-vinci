@@ -89,6 +89,8 @@ def _expand_kahle_query_aliases(query):
     value = str(query or "").strip()
     aliases = (
         ("TD", "Teiledienst"),
+        ("DA", "Digitales Autohaus"),
+        ("Perso", "Personalabteilung"),
         ("VK", "Verkauf"),
         ("HAN", "Hannover"),
         ("WUN", "Wunstorf"),
@@ -102,7 +104,7 @@ def _expand_kahle_query_aliases(query):
     for alias, canonical in aliases:
         value = re.sub(
             rf"(?<![A-Za-z0-9])(?:LOC-)?{re.escape(alias)}(?![A-Za-z0-9])",
-            canonical,
+            lambda match: f"{match.group(0)} ({canonical})",
             value,
         )
     return value
