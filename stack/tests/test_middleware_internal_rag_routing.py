@@ -887,6 +887,21 @@ def test_actual_middleware_gate_preroutes_documented_abbreviation_definitions(
     assert plan.information_needs[0].kind == "abbreviation_definition"
 
 
+def test_abbreviation_preroute_keeps_the_raw_alias_for_literal_source_matching():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    route_start = source.index("original_user_tool_request = get_last_user_message(")
+    retrieve_start = source.index("async def retrieve_pre_route_rag()", route_start)
+    retrieve_end = source.index(
+        "retrieval = await _execute_kahle_retrieval_plan(", retrieve_start
+    )
+    block = source[route_start:retrieve_end]
+
+    assert "rag_tool_request = (" in block
+    assert "getattr(need, 'kind', '') == 'abbreviation_definition'" in block
+    assert "original_user_tool_request or user_tool_request" in block
+    assert "set_last_user_message_content(\n                                rag_tool_request," in block
+
+
 def test_actual_middleware_gate_respects_explicit_harness_off_for_directory_calls():
     gate = load_retrieval_gate()
     query = "Wo arbeitet Max Mustermann?"

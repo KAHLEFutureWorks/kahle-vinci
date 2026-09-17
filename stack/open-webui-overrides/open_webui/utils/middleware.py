@@ -5169,6 +5169,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         retrieval_plan = _routing_plan_for_execution(
             routing_mode, legacy_retrieval_plan
         )
+        rag_tool_request = (
+            original_user_tool_request or user_tool_request
+            if any(
+                getattr(need, 'kind', '') == 'abbreviation_definition'
+                for need in tuple(
+                    getattr(retrieval_plan, 'information_needs', ()) or ()
+                )
+            )
+            else user_tool_request
+        )
         if _should_prepare_knowledge_route(
             tools_dict, retrieval_plan is not None
         ):
@@ -5264,9 +5274,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         pre_route_metadata['kahle_knowledge_evidence_session'] = (
                             knowledge_evidence_session
                         )
-                        if user_tool_request != (original_user_tool_request or ''):
+                        if rag_tool_request != (original_user_tool_request or ''):
                             set_last_user_message_content(
-                                user_tool_request,
+                                rag_tool_request,
                                 pre_route_form_data.get('messages', []),
                             )
                         previous_information_needs = pre_route_metadata.get(
@@ -5319,7 +5329,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 pre_route_metadata['_kahle_pre_route_rag_call'] = (
                                     previous_pre_route_rag_call
                                 )
-                        if user_tool_request != (original_user_tool_request or ''):
+                        if rag_tool_request != (original_user_tool_request or ''):
                             set_last_user_message_content(
                                 original_user_tool_request or '',
                                 pre_route_form_data.get('messages', []),
