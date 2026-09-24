@@ -1318,10 +1318,15 @@ def portal_list_documents(
         ]
         if item.get("active_version_id"):
             item["original_url"] = f"/wissen/api/portal/sources/{item['active_version_id']}"
+            item["markdown_url"] = (
+                f"/wissen/api/portal/sources/{item['active_version_id']}/markdown"
+            )
         elif item.get("latest_case_id"):
             item["original_url"] = f"/wissen/api/portal/cases/{item['latest_case_id']}/original"
+            item["markdown_url"] = None
         else:
             item["original_url"] = None
+            item["markdown_url"] = None
         item.pop("latest_case_id", None)
         documents.append(item)
     return {"documents": documents}
@@ -2249,6 +2254,30 @@ def portal_source(
     return FileResponse(
         originals[0], filename=record["original_filename"],
         content_disposition_type=disposition,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/portal/sources/{version_id}/markdown")
+def portal_source_markdown(
+    version_id: str, identity: dict[str, Any] = Depends(require_portal_identity),
+) -> FileResponse:
+    try:
+        record = DOCUMENT_LIFECYCLE.source_record(version_id, identity["user_id"])
+    except (LifecycleError, GovernanceError) as exc:
+        raise HTTPException(status_code=404, detail="source_not_available") from exc
+    version_root = (PORTAL_FILES_ROOT / record["document_id"] / version_id).resolve()
+    try:
+        version_root.relative_to(PORTAL_FILES_ROOT.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="source_not_available") from exc
+    markdown_path = version_root / "rag.md"
+    if not markdown_path.is_file():
+        raise HTTPException(status_code=404, detail="source_not_available")
+    return FileResponse(
+        markdown_path,
+        media_type="text/markdown; charset=utf-8",
+        content_disposition_type="inline",
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
 

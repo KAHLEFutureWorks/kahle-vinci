@@ -130,6 +130,80 @@ def test_marketing_opt_out_location_followup_keeps_canonical_process_query():
     assert plan.required_tools == ("rag_chat",)
 
 
+@pytest.mark.parametrize(
+    ("reply", "expected_location"),
+    (
+        ("Werbung", ""),
+        ("Werbung und Befragung", ""),
+        ("Es ist für Hannover", "Hannover"),
+        ("Wunstorf", "Wunstorf"),
+        ("Wedemark", "Wedemark"),
+    ),
+)
+def test_customer_lock_clarification_followup_selects_the_documented_opt_out_process(
+    reply, expected_location,
+):
+    harness = load_harness()
+    messages = [
+        {"role": "user", "content": "Wie sperre ich einen Kunden in Vaudis?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+                "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+                "Kundensperre in Vaudis für einen anderen Standort?"
+            ),
+        },
+        {"role": "user", "content": reply},
+    ]
+
+    resolved = harness.resolve_request(reply, messages)
+    plan = harness.plan_retrieval(
+        query=reply,
+        resolved_query=resolved.retrieval_query,
+        messages=messages,
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1", "role": "user"},
+    )
+
+    assert resolved.required_clarification is False
+    assert resolved.retrieval_query == (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
+        + (f" am Standort {expected_location}" if expected_location else "")
+        + " durchgeführt?"
+    )
+    assert plan.required_tools == ("rag_chat",)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ("Nienburg", "Allgemeine Kundensperre in Hannover"),
+)
+def test_customer_lock_clarification_general_choice_does_not_select_opt_out_process(reply):
+    harness = load_harness()
+    messages = [
+        {"role": "user", "content": "Wie sperre ich einen Kunden in Vaudis?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+                "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+                "Kundensperre in Vaudis für einen anderen Standort?"
+            ),
+        },
+        {"role": "user", "content": reply},
+    ]
+
+    resolved = harness.resolve_request(reply, messages)
+
+    assert "Werbewiderspruch" not in resolved.retrieval_query
+    if reply == "Nienburg":
+        assert "Nienburg" in resolved.retrieval_query
+    else:
+        assert "allgemeine Kundensperre" in resolved.retrieval_query
+
+
 def test_temporary_survey_location_reply_resolves_the_previous_process_question():
     harness = load_harness()
     messages = [
@@ -544,6 +618,35 @@ def test_shadow_harness_records_followup_context_and_real_ambiguity():
     assert followup.resolved_context.aliases["HAN"] == "Hannover"
     assert ambiguous.user_intent.clarification_required is True
     assert ambiguous.user_intent.clarification_question.startswith("Geht es um")
+
+
+def test_clarification_answer_prompt_requires_the_exact_rag_question_without_fallback():
+    harness = load_harness()
+    question = (
+        "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+        "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+        "Kundensperre in Vaudis für einen anderen Standort?"
+    )
+
+    decision = harness.build_result_driven_decision(
+        query="Wie sperre ich einen Kunden in Vaudis?",
+        messages=[],
+        model_id="kahle-vinci-thinking",
+        permission_scope={"user_id": "user-1"},
+        called_tools=("rag_chat",),
+        rag_result=(
+            "KAHLE_RAG_RESULT\nFOUND: false\nCLARIFICATION_REQUIRED: true\n"
+            f"ANSWER: {question}"
+        ),
+    )
+
+    prompt = decision.answer_prompt()
+
+    assert prompt.startswith("KAHLE_KNOWLEDGE_CLARIFICATION\n")
+    assert question in prompt
+    assert "genau diese eine Rückfrage" in prompt
+    assert "keine Evidenz" in prompt
+    assert "KAHLE_KNOWLEDGE_ANSWER_CONTRACT" not in prompt
 
 
 def test_shadow_harness_is_model_invariant_and_emits_native_event_plan():
@@ -1858,6 +1961,381 @@ def test_answer_prompt_is_model_independent_and_carries_evidence_contract():
     assert '"status":"partially_supported"' in prompts[0]
     assert "Eine Anleitung fehlt." in prompts[0]
     assert "Antworte nur aus der bereitgestellten Evidenz" in prompts[0]
+
+
+def _complete_numbered_document_result(sections):
+    sources = [
+        {
+            "number": number,
+            "document_id": "procedure-1",
+            "version_id": "version-1",
+            "section_heading": f"{number} {heading}",
+            "document_overview": True,
+        }
+        for number, heading in sections
+    ]
+    claims = [
+        {
+            "claim_id": f"R{number}C1",
+            "source_id": f"#{number}",
+            "text": f"Der Abschnitt {heading} ist dokumentiert.",
+            "evidence_span": f"Der Abschnitt {heading} ist dokumentiert.",
+            "document_id": "procedure-1",
+            "version_id": "version-1",
+            "claim_type": "procedure",
+        }
+        for number, heading in sections
+    ]
+    return "EVIDENCE_BUNDLE_JSON: " + json.dumps(
+        {
+            "schema_version": "kahle.evidence-bundle.v1",
+            "status": "supported",
+            "supported_claims": claims,
+            "missing_information": [],
+            "conflicts": [],
+            "sources": sources,
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_result_driven_decision_declares_complete_numbered_document_blueprint_before_answer():
+    harness = load_harness()
+    sections = (
+        (1, "Eingang"),
+        (2, "Prüfung"),
+        (3, "Bearbeitung"),
+    )
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_complete_numbered_document_result(sections),
+    )
+
+    assert decision.answer_contract.required_sections == (
+        "1 Eingang",
+        "2 Prüfung",
+        "3 Bearbeitung",
+    )
+    prompt = decision.answer_prompt()
+    assert "KAHLE_KNOWLEDGE_ANSWER_BLUEPRINT" in prompt
+    assert prompt.index("1 Eingang") < prompt.index("2 Prüfung") < prompt.index("3 Bearbeitung")
+    assert "Überspringe keinen Abschnitt" in prompt
+    assert "auxiliary_ocr sind nur ergänzende Lesehilfe" in prompt
+    assert "Bei coverage missing benenne die Evidenzlücke" in prompt
+
+
+def _answer_blueprint_result():
+    bundle = json.loads(
+        _complete_numbered_document_result(
+            ((1, "Eingang"), (2, "Prüfung"), (3, "Bearbeitung"))
+        ).split("EVIDENCE_BUNDLE_JSON: ", 1)[1]
+    )
+    bundle["supported_claims"] = [
+        {
+            "claim_id": "R1C1",
+            "source_id": "#1",
+            "evidence_span": "Anfrage öffnen.",
+            "document_id": "procedure-1",
+            "version_id": "version-1",
+            "evidence_role": "editorial",
+        },
+        {
+            "claim_id": "R1C2",
+            "source_id": "#1",
+            "evidence_span": "OCR-Menüfragment.",
+            "document_id": "procedure-1",
+            "version_id": "version-1",
+            "evidence_role": "auxiliary_ocr",
+        },
+        {
+            "claim_id": "R2C1",
+            "source_id": "#2",
+            "evidence_span": "Angaben vollständig prüfen.",
+            "document_id": "procedure-1",
+            "version_id": "version-1",
+            "evidence_role": "editorial",
+        },
+        {
+            "claim_id": "R3C1",
+            "source_id": "#3",
+            "evidence_span": "Dieser Text gehört zu einer anderen Version.",
+            "document_id": "procedure-1",
+            "version_id": "other-version",
+            "evidence_role": "editorial",
+        },
+    ]
+    return "EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle, ensure_ascii=False)
+
+
+def test_result_driven_decision_builds_ordered_answer_blueprint_from_exact_claims():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_answer_blueprint_result(),
+    )
+
+    assert decision.answer_blueprint.to_dict() == {
+        "schema_version": "kahle.answer-blueprint.v1",
+        "intent": "document_overview",
+        "sections": [
+            {
+                "section_id": "1",
+                "heading": "Eingang",
+                "order": 1,
+                "claims": [
+                    {
+                        "claim_id": "R1C1",
+                        "source_id": "#1",
+                        "evidence_span": "Anfrage öffnen.",
+                        "evidence_role": "editorial",
+                    },
+                ],
+                "coverage": "supported",
+            },
+            {
+                "section_id": "2",
+                "heading": "Prüfung",
+                "order": 2,
+                "claims": [
+                    {
+                        "claim_id": "R2C1",
+                        "source_id": "#2",
+                        "evidence_span": "Angaben vollständig prüfen.",
+                        "evidence_role": "editorial",
+                    }
+                ],
+                "coverage": "supported",
+            },
+            {
+                "section_id": "3",
+                "heading": "Bearbeitung",
+                "order": 3,
+                "claims": [],
+                "coverage": "missing",
+            },
+        ],
+    }
+
+
+def test_answer_prompt_emits_one_model_independent_answer_blueprint():
+    harness = load_harness()
+    prompts = []
+    for model_id in (
+        "kahle-vinci",
+        "kahle-vinci-thinking",
+        "kahle-vinci-max-thinking",
+    ):
+        decision = harness.build_result_driven_decision(
+            called_tools=("rag_chat",),
+            query="Wie arbeite ich mit diesem Prozess?",
+            messages=[],
+            model_id=model_id,
+            permission_scope={"user_id": "user-1"},
+            rag_result=_answer_blueprint_result(),
+        )
+        prompts.append(decision.answer_prompt())
+
+    assert prompts[1:] == prompts[:-1]
+    assert prompts[0].count("KAHLE_KNOWLEDGE_ANSWER_BLUEPRINT") == 1
+    assert '"schema_version":"kahle.answer-blueprint.v1"' in prompts[0]
+    assert '"coverage":"missing"' in prompts[0]
+    assert "OCR-Menüfragment." not in prompts[0]
+    assert "KAHLE_KNOWLEDGE_DOCUMENT_OUTLINE" not in prompts[0]
+    assert "Formuliere die sichtbare Antwort direkt in einem Lauf" in prompts[0]
+
+
+def _answer_contract_payload(prompt):
+    raw = prompt.split("KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n", 1)[1]
+    raw = raw.split("\nKAHLE_KNOWLEDGE_ANSWER_BLUEPRINT\n", 1)[0]
+    return json.loads(raw)
+
+
+def test_answer_prompt_uses_blueprint_as_the_only_rag_claim_transport():
+    harness = load_harness()
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci-thinking",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_answer_blueprint_result(),
+    )
+
+    evidence = _answer_contract_payload(decision.answer_prompt())["evidence_bundle"]
+
+    assert evidence["claim_transport"] == "answer_blueprint.sections[].claims"
+    assert "supported_claims" not in evidence
+    assert decision.evidence_bundle.supported_claims
+
+
+def test_answer_prompt_keeps_directory_claims_separate_from_blueprint_claims():
+    harness = load_harness()
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat", "personio_directory"),
+        query="Wie arbeite ich mit diesem Prozess und wer arbeitet dort?",
+        messages=[],
+        model_id="kahle-vinci-max-thinking",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_answer_blueprint_result(),
+        personio_result=_result_driven_personio_payload(),
+    )
+
+    evidence = _answer_contract_payload(decision.answer_prompt())["evidence_bundle"]
+
+    assert evidence["claim_transport"] == "answer_blueprint.sections[].claims"
+    assert "supported_claims" not in evidence
+    assert evidence["directory_claims"] == [
+        {
+            "display_name": "Erika Beispiel",
+            "position": "Serviceassistenz",
+            "business_email": "person@example.invalid",
+            "source_id": "P1",
+        }
+    ]
+
+
+def test_answer_blueprint_keeps_auxiliary_ocr_out_of_the_model_payload():
+    harness = load_harness()
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_answer_blueprint_result(),
+    )
+
+    assert any(
+        claim.get("evidence_role") == "auxiliary_ocr"
+        for claim in decision.evidence_bundle.supported_claims
+        if isinstance(claim, dict)
+    )
+    assert all(
+        claim.evidence_role == "editorial"
+        for section in decision.answer_blueprint.sections
+        for claim in section.claims
+    )
+    assert "OCR-Menüfragment." not in decision.answer_prompt()
+
+
+def test_answer_blueprint_rejects_an_unknown_evidence_role_fail_closed():
+    harness = load_harness()
+    bundle = json.loads(
+        _answer_blueprint_result().split("EVIDENCE_BUNDLE_JSON: ", 1)[1]
+    )
+    bundle["supported_claims"][0]["evidence_role"] = "untrusted_ocr"
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result="EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle, ensure_ascii=False),
+    )
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert "evidence_bundle_claim_evidence_role_invalid" in decision.evidence_bundle.conflicts
+    assert decision.answer_blueprint is None
+
+
+def test_answer_validation_observes_missing_required_document_outline_sections():
+    harness = load_harness()
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci-thinking",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_complete_numbered_document_result(
+            ((1, "Eingang"), (2, "Prüfung"), (3, "Bearbeitung"))
+        ),
+    )
+
+    validation = harness.validate_answer(
+        "## 1. Eingang\nDie Anfrage wird aufgenommen. [1]", decision
+    )
+
+    assert validation.status == "retry_required"
+    violation = next(
+        item for item in validation.violations
+        if item["code"] == "required_document_sections_missing"
+    )
+    assert violation["section_indices"] == [2, 3]
+
+
+def test_answer_validation_accepts_numbered_headings_with_non_breaking_spaces():
+    harness = load_harness()
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci-thinking",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_complete_numbered_document_result(
+            ((1, "Plantafel Teiledienst"), (2, "Auftragseingang"))
+        ),
+    )
+
+    validation = harness.validate_answer(
+        "1\u202fPlantafel\u202fTeiledienst\nDetails. [1]\n"
+        "2\u202fAuftragseingang\nDetails. [1]",
+        decision,
+    )
+
+    assert validation.status == "accepted"
+    assert validation.violations == ()
+
+
+def test_result_driven_decision_omits_document_outline_for_incomplete_numbering():
+    harness = load_harness()
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result=_complete_numbered_document_result(
+            ((1, "Eingang"), (3, "Bearbeitung"))
+        ),
+    )
+
+    assert decision.answer_contract.required_sections == ()
+    assert "KAHLE_KNOWLEDGE_DOCUMENT_OUTLINE" not in decision.answer_prompt()
+
+
+def test_result_driven_decision_omits_document_outline_without_overview_evidence():
+    harness = load_harness()
+    bundle = json.loads(
+        _complete_numbered_document_result(
+            ((1, "Eingang"), (2, "Prüfung"), (3, "Bearbeitung"))
+        ).split("EVIDENCE_BUNDLE_JSON: ", 1)[1]
+    )
+    for source in bundle["sources"]:
+        source["document_overview"] = False
+
+    decision = harness.build_result_driven_decision(
+        called_tools=("rag_chat",),
+        query="Wie arbeite ich mit diesem Prozess?",
+        messages=[],
+        model_id="kahle-vinci",
+        permission_scope={"user_id": "user-1"},
+        rag_result="EVIDENCE_BUNDLE_JSON: " + json.dumps(bundle, ensure_ascii=False),
+    )
+
+    assert decision.answer_contract.required_sections == ()
+    assert "KAHLE_KNOWLEDGE_DOCUMENT_OUTLINE" not in decision.answer_prompt()
 
 
 def test_unsupported_decision_provides_one_stable_pre_answer_result():

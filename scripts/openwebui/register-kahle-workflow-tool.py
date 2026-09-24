@@ -42,6 +42,11 @@ KAHLE_VINCI_BASE_MODEL_IDS = [
     "openai/gpt-oss-120b",
     KAHLE_VINCI_MAX_BASE_MODEL_ID,
 ]
+KAHLE_VINCI_PROMPT_PATHS = {
+    "vinci-2-clone-clone-clone": PROMPTS_DIR / "kahle-vinci-systemprompt.md",
+    "kahle-vinci-thinking": PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md",
+    KAHLE_VINCI_MAX_MODEL_ID: PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md",
+}
 PUBLIC_MODEL_IDS = KAHLE_VINCI_MODEL_IDS + KAHLE_VINCI_BASE_MODEL_IDS
 PUBLIC_TOOL_IDS = [
     "kahle_tasks",
@@ -789,14 +794,9 @@ def main() -> int:
 
         max_registration = ensure_max_vinci_models(con, now)
 
-        prompts = {
-            "vinci-2-clone-clone-clone": PROMPTS_DIR / "kahle-vinci-systemprompt.md",
-            "kahle-vinci-thinking": PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md",
-            "kahle-vinci-max-thinking": PROMPTS_DIR / "kahle-vinci-thinking-systemprompt.md",
-        }
         resolved_vinci_model_ids = resolve_vinci_model_ids(con)
         for model_id in resolved_vinci_model_ids:
-            prompt_path = prompts.get(model_id)
+            prompt_path = KAHLE_VINCI_PROMPT_PATHS.get(model_id)
             if prompt_path is None:
                 name_row = con.execute("select name from model where id = ?", (model_id,)).fetchone()
                 model_name = str(name_row["name"] or "").strip().lower() if name_row else ""

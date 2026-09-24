@@ -316,6 +316,8 @@ test("keeps draft publication controls unavailable and exposes the original", as
   const portal = await source("components/KnowledgePortal.tsx");
   assert.match(portal, /Original ansehen/);
   assert.match(portal, /href=\{doc\.original_url\}/);
+  assert.match(portal, /RAG-Markdown ansehen/);
+  assert.match(portal, /href=\{doc\.markdown_url\}/);
   assert.match(portal, /doc\.status === "active"/);
   assert.match(portal, /Erst nach der Freigabe kannst du weitere Wissensbereiche zuordnen/);
   assert.match(portal, /Wissensbereich hinzufügen\?/);

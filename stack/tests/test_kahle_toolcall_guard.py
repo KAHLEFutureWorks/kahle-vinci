@@ -11,6 +11,8 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FILTER_PATH = ROOT / "open-webui-functions" / "kahle_toolcall_guard.py"
@@ -65,6 +67,64 @@ def test_guard_expands_short_marketing_reply_from_customer_lock_clarification():
         "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
         "in Vaudis über die DSE-Kontaktfreigaben?"
     )
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected_location"),
+    (
+        ("Es ist für Hannover", "Hannover"),
+        ("Wunstorf", "Wunstorf"),
+        ("Wedemark", "Wedemark"),
+    ),
+)
+def test_guard_expands_supported_location_after_customer_lock_clarification(
+    reply, expected_location,
+):
+    module = load_module()
+    messages = [
+        {"role": "user", "content": "Wie sperre ich einen Kunden in Vaudis?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+                "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+                "Kundensperre in Vaudis für einen anderen Standort?"
+            ),
+        },
+    ]
+
+    assert module._expand_customer_lock_followup(reply, messages) == (
+        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
+        f"am Standort {expected_location} durchgeführt?"
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ("Nienburg", "Allgemeine Kundensperre in Hannover"),
+)
+def test_guard_keeps_general_or_other_location_out_of_the_marketing_opt_out_process(reply):
+    module = load_module()
+    messages = [
+        {"role": "user", "content": "Wie sperre ich einen Kunden in Vaudis?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
+                "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
+                "Kundensperre in Vaudis für einen anderen Standort?"
+            ),
+        },
+    ]
+
+    expanded = module._expand_customer_lock_followup(reply, messages)
+
+    assert "Werbewiderspruch" not in expanded
+    if reply == "Nienburg":
+        assert expanded == "Nienburg"
+    else:
+        assert "allgemeine Kundensperre" in expanded
 
 
 def test_visible_workflow_pseudo_call_is_replaced_with_download_metadata():

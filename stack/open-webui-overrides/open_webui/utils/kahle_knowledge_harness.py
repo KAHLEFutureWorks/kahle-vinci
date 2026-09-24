@@ -50,6 +50,13 @@ _FUNCTIONAL_CONTACT_TOPIC_PATTERN = (
 )
 _EMAIL_LITERAL = re.compile(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
 _PHONE_LITERAL = re.compile(r"(?<!\w)(?:\+?\d[\d ()/.-]{4,}\d)(?!\w)")
+_NUMBERED_DOCUMENT_SECTION = re.compile(
+    r"^\s*(\d{1,3})(?:(?:[.)]\s+)|\s+)(.+?)\s*$"
+)
+_NUMBERED_ANSWER_SECTION = re.compile(
+    r"^\s*(?:#{1,6}\s+)?(?:[-*+]\s*)?(?:\*\*|__|`)?\s*"
+    r"(\d{1,3})(?:(?:[.)]\s+)|\s+)(.+?)\s*$"
+)
 
 
 @dataclass(frozen=True)
@@ -119,6 +126,49 @@ class EvidenceBundle:
 
 
 @dataclass(frozen=True)
+class AnswerBlueprintClaim:
+    claim_id: str
+    source_id: str
+    evidence_span: str
+    evidence_role: str
+
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class AnswerBlueprintSection:
+    section_id: str
+    heading: str
+    order: int
+    claims: tuple[AnswerBlueprintClaim, ...]
+    coverage: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "section_id": self.section_id,
+            "heading": self.heading,
+            "order": self.order,
+            "claims": [claim.to_dict() for claim in self.claims],
+            "coverage": self.coverage,
+        }
+
+
+@dataclass(frozen=True)
+class AnswerBlueprint:
+    schema_version: str
+    intent: str
+    sections: tuple[AnswerBlueprintSection, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "intent": self.intent,
+            "sections": [section.to_dict() for section in self.sections],
+        }
+
+
+@dataclass(frozen=True)
 class AnswerContract:
     evidence_only: bool = True
     citations_required: bool = True
@@ -130,6 +180,7 @@ class AnswerContract:
     preserve_feedback_link: bool = True
     allowed_contact_values: tuple[str, ...] = ()
     allowed_contact_bindings: tuple[dict[str, Any], ...] = ()
+    required_sections: tuple[str, ...] = ()
     location_mode: str = ""
     requested_location: str = ""
 
@@ -171,6 +222,7 @@ class HarnessDecision:
     resolved_context: ResolvedContext
     retrieval_plan: RetrievalPlan
     evidence_bundle: EvidenceBundle
+    answer_blueprint: AnswerBlueprint | None
     answer_contract: AnswerContract
     events: tuple[dict[str, Any], ...]
 
@@ -181,6 +233,16 @@ class HarnessDecision:
 
     def answer_prompt(self) -> str:
         """Return the model-independent contract consumed before answering."""
+        if self.user_intent.clarification_required:
+            question = self.user_intent.clarification_question.strip()
+            if question:
+                return (
+                    "KAHLE_KNOWLEDGE_CLARIFICATION\n"
+                    "Die RAG-Suche verlangt vor einer fachlichen Antwort eine Klärung. "
+                    "Stelle dem Nutzer genau diese eine Rückfrage wortgleich und ohne Zusatz:\n"
+                    f"{question}\n"
+                    "Gib keine Anleitung, keine Aussage, dass keine Evidenz vorliegt, und keine Quellen aus."
+                )
         if self.answer_contract.location_mode:
             payload = {
                 "schema_version": "kahle.location-context.v1",
@@ -210,7 +272,6 @@ class HarnessDecision:
         )
         evidence_summary = {
             "status": self.evidence_bundle.status,
-            "supported_claims": directory_claims,
             "missing_information": self.evidence_bundle.missing_information,
             "conflicts": self.evidence_bundle.conflicts,
             "source_ids": tuple(
@@ -221,6 +282,14 @@ class HarnessDecision:
             "sync_completed_at": self.evidence_bundle.sync_completed_at,
             "stale": self.evidence_bundle.stale,
         }
+        if self.answer_blueprint is not None:
+            evidence_summary["claim_transport"] = (
+                "answer_blueprint.sections[].claims"
+            )
+            if directory_claims:
+                evidence_summary["directory_claims"] = directory_claims
+        else:
+            evidence_summary["supported_claims"] = directory_claims
         payload = {
             "schema_version": "kahle.answer-contract.v1",
             "user_intent": asdict(self.user_intent),
@@ -233,9 +302,33 @@ class HarnessDecision:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        blueprint_instruction = ""
+        if self.answer_blueprint is not None:
+            blueprint = json.dumps(
+                self.answer_blueprint.to_dict(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            blueprint_instruction = (
+                "\nKAHLE_KNOWLEDGE_ANSWER_BLUEPRINT\n"
+                f"{blueprint}\n"
+                "Formuliere die sichtbare Antwort direkt in einem Lauf aus diesem Bauplan. "
+                "Erzeuge für jeden Eintrag in sections genau einen nummerierten Hauptabschnitt "
+                "in derselben Reihenfolge und mit derselben Überschrift. Überspringe keinen "
+                "Abschnitt und fasse keine Abschnitte zusammen. Erkläre pro Abschnitt alle "
+                "editorial-Claims anhand ihrer source_id. Claims mit evidence_role "
+                "auxiliary_ocr sind nur ergänzende Lesehilfe und niemals alleinige Grundlage "
+                "für eine fachliche Aussage. Bei coverage missing benenne die Evidenzlücke "
+                "direkt im zugehörigen Abschnitt, ohne Ersatzwissen zu erfinden. Diese "
+                "Vollständigkeitsanforderung hat Vorrang vor allgemeinen Vorgaben zur Kürze. "
+                "Für RAG-Inhalte ist ausschließlich sections[].claims maßgeblich: coverage "
+                "supported bestätigt vorhandene Evidenz; nur coverage missing bezeichnet "
+                "eine Evidenzlücke."
+            )
         return (
             "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
             f"{contract}\n"
+            f"{blueprint_instruction}\n"
             "Antworte nur aus der bereitgestellten Evidenz. "
             "Bei partially_supported beantworte ausschließlich die belegten Teile und "
             "benenne die fehlenden Informationen. Bei unsupported nutze kein allgemeines "
@@ -513,6 +606,66 @@ def _marketing_opt_out_query(query: str) -> bool:
 _SUPPORTED_OPT_OUT_LOCATIONS = {"Hannover": "HAN", "Wunstorf": "WUN", "Wedemark": "WED"}
 
 
+def _customer_lock_followup_query(
+    current: str, prior_user: str, prior_assistant: str,
+) -> str:
+    """Resolve the two safe choices from the customer-lock clarification."""
+    current = str(current or "").strip()
+    if not current or len(current) > 120:
+        return ""
+
+    prior_question = _fold(prior_user)
+    prior_reply = _fold(prior_assistant)
+    if not (
+        (
+            re.search(r"\bkunden?(?:sperr\w*|\s+sperr\w*)\b", prior_question)
+            or ("kunde" in prior_question and "sperr" in prior_question)
+        )
+        and "werbung und befragungen" in prior_reply
+        and "allgemeine kundensperre" in prior_reply
+        and "vaudis" in prior_reply
+    ):
+        return ""
+
+    folded = _fold(current)
+    supported_location = next(
+        (
+            location
+            for location in _SUPPORTED_OPT_OUT_LOCATIONS
+            if re.search(rf"\b{re.escape(_fold(location))}\b", folded)
+        ),
+        "",
+    )
+    marketing_choice = any(token in folded for token in (
+        "werbung", "werbesperre", "werbewiderspruch", "befragung",
+        "kontaktfreigabe", "ersteres", "erste option",
+    ))
+    general_choice = any(token in folded for token in (
+        "allgemein", "kundensperre", "komplett", "vollstandig",
+        "zweiteres", "zweite option",
+    ))
+    # An explicit general lock must never be reclassified as the scoped
+    # marketing opt-out merely because it names a supported location.
+    if general_choice:
+        return (
+            "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? Falls dafür "
+            "keine freigegebene Anleitung vorliegt: Welche freigegebene "
+            "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
+        )
+
+    if marketing_choice or supported_location:
+        location_suffix = (
+            f" am Standort {supported_location}" if supported_location else ""
+        )
+        return (
+            "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+            "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
+            f"{location_suffix} durchgeführt?"
+        )
+
+    return ""
+
+
 def _opt_out_location(query: str) -> str:
     # Prefer the latest explicit location, including names outside the company list.
     # Application names following "in" are not locations.
@@ -672,6 +825,163 @@ def _source_identifier(source: dict[str, Any]) -> str:
     return _citation_identifier(str(value)) if str(value).strip() else ""
 
 
+def _complete_document_overview_sections(evidence: EvidenceBundle) -> tuple[str, ...]:
+    """Return one complete, numbered outline explicitly declared by retrieval."""
+    grouped: dict[tuple[str, str], dict[int, str]] = {}
+    for source in evidence.sources:
+        if not source.get("document_overview"):
+            continue
+        document_id = str(source.get("document_id") or "").strip()
+        version_id = str(source.get("version_id") or "").strip()
+        heading = " ".join(str(source.get("section_heading") or "").split())
+        match = _NUMBERED_DOCUMENT_SECTION.fullmatch(heading)
+        if not document_id or not version_id or not match:
+            return ()
+        number = int(match.group(1))
+        normalized_heading = f"{number} {match.group(2).strip()}"
+        sections = grouped.setdefault((document_id, version_id), {})
+        prior = sections.get(number)
+        if prior is not None and prior != normalized_heading:
+            return ()
+        sections[number] = normalized_heading
+
+    if len(grouped) != 1:
+        return ()
+    sections = next(iter(grouped.values()))
+    numbers = sorted(sections)
+    if len(numbers) < 2 or numbers != list(range(1, len(numbers) + 1)):
+        return ()
+    return tuple(sections[number] for number in numbers)
+
+
+def _answer_blueprint(evidence: EvidenceBundle) -> AnswerBlueprint | None:
+    """Bind exact EvidenceBundle claims to one complete document outline."""
+    if evidence.status == "unsupported":
+        return None
+    required_sections = _complete_document_overview_sections(evidence)
+    if not required_sections:
+        return None
+
+    overview_sources: dict[int, dict[str, Any]] = {}
+    for source in evidence.sources:
+        if not source.get("document_overview"):
+            continue
+        heading = " ".join(str(source.get("section_heading") or "").split())
+        match = _NUMBERED_DOCUMENT_SECTION.fullmatch(heading)
+        if match:
+            overview_sources[int(match.group(1))] = source
+
+    sections: list[AnswerBlueprintSection] = []
+    for value in required_sections:
+        match = _NUMBERED_DOCUMENT_SECTION.fullmatch(value)
+        if match is None:
+            return None
+        order = int(match.group(1))
+        source = overview_sources.get(order)
+        if source is None:
+            return None
+        source_id = _source_identifier(source)
+        document_id = str(source.get("document_id") or "").strip()
+        version_id = str(source.get("version_id") or "").strip()
+        claims: list[AnswerBlueprintClaim] = []
+        for claim in evidence.supported_claims:
+            if not isinstance(claim, dict):
+                continue
+            if _citation_identifier(str(claim.get("source_id") or "")) != source_id:
+                continue
+            if str(claim.get("document_id") or "").strip() != document_id:
+                continue
+            if str(claim.get("version_id") or "").strip() != version_id:
+                continue
+            claim_id = str(claim.get("claim_id") or "").strip()
+            claim_source_id = str(claim.get("source_id") or "").strip()
+            evidence_span = str(claim.get("evidence_span") or "").strip()
+            evidence_role = str(claim.get("evidence_role") or "editorial").strip()
+            if (
+                not claim_id
+                or not claim_source_id
+                or not evidence_span
+                or evidence_role not in {"editorial", "auxiliary_ocr"}
+            ):
+                continue
+            if evidence_role == "auxiliary_ocr":
+                continue
+            claims.append(
+                AnswerBlueprintClaim(
+                    claim_id=claim_id,
+                    source_id=claim_source_id,
+                    evidence_span=evidence_span,
+                    evidence_role=evidence_role,
+                )
+            )
+        coverage = (
+            "supported"
+            if any(claim.evidence_role == "editorial" for claim in claims)
+            else "missing"
+        )
+        sections.append(
+            AnswerBlueprintSection(
+                section_id=str(order),
+                heading=match.group(2).strip(),
+                order=order,
+                claims=tuple(claims),
+                coverage=coverage,
+            )
+        )
+    return AnswerBlueprint(
+        schema_version="kahle.answer-blueprint.v1",
+        intent="document_overview",
+        sections=tuple(sections),
+    )
+
+
+def _outline_heading_key(value: str) -> tuple[int, str] | None:
+    match = _NUMBERED_DOCUMENT_SECTION.fullmatch(str(value or ""))
+    if not match:
+        return None
+    words = _normalized_heading_words(match.group(2))
+    return (int(match.group(1)), words) if words else None
+
+
+def _normalized_heading_words(value: str) -> str:
+    spaced = "".join(
+        " " if unicodedata.category(character) == "Zs" else character
+        for character in str(value or "")
+    )
+    return " ".join(re.findall(r"\w+", _fold(spaced)))
+
+
+def _numbered_answer_headings(answer: str) -> tuple[tuple[int, str], ...]:
+    headings: list[tuple[int, str]] = []
+    for line in str(answer or "").splitlines():
+        match = _NUMBERED_ANSWER_SECTION.fullmatch(line)
+        if not match:
+            continue
+        title = re.sub(r"(?:\*\*|__|`)", "", match.group(2))
+        words = _normalized_heading_words(title)
+        if words:
+            headings.append((int(match.group(1)), words))
+    return tuple(headings)
+
+
+def _missing_required_document_section_indexes(
+    answer: str, required_sections: tuple[str, ...]
+) -> tuple[int, ...]:
+    actual = _numbered_answer_headings(answer)
+    missing: list[int] = []
+    for index, required in enumerate(required_sections, start=1):
+        key = _outline_heading_key(required)
+        if key is None:
+            continue
+        number, expected_title = key
+        if not any(
+            actual_number == number and expected_title in actual_title
+            for actual_number, actual_title in actual
+        ):
+            missing.append(index)
+    return tuple(missing)
+
+
 def _decision_value(decision: HarnessDecision | dict[str, Any], name: str) -> Any:
     if isinstance(decision, HarnessDecision):
         return getattr(decision, name)
@@ -712,6 +1022,21 @@ def validate_answer(
 
     if not text:
         add("answer_missing", "Die Antwort ist leer.")
+
+    required_sections = tuple(
+        str(section or "").strip()
+        for section in contract.get("required_sections") or ()
+        if str(section or "").strip()
+    )
+    missing_sections = _missing_required_document_section_indexes(
+        text, required_sections
+    )
+    if missing_sections:
+        add(
+            "required_document_sections_missing",
+            "Die Antwort enthält nicht alle verpflichtenden Dokumentabschnitte.",
+            section_indices=list(missing_sections),
+        )
 
     if retrieval_plan.get("mode") == "model_led":
         # The serialized contract is not an independent source of authority.
@@ -1559,8 +1884,18 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
     )
     ambiguities: tuple[str, ...] = ()
     clarification_question = ""
+    customer_lock_followup = _customer_lock_followup_query(
+        original, prior_user, prior_assistant,
+    )
 
-    if (
+    if customer_lock_followup:
+        retrieval_query = customer_lock_followup
+        resolved_entities = _request_entities(retrieval_query)
+        entities = {
+            key: entities[key] or resolved_entities[key]
+            for key in entities
+        }
+    elif (
         conversation_reference
         and " oder " in _fold(prior_assistant)
         and len(_fold(original).split()) <= 4
@@ -1954,6 +2289,7 @@ _RAG_CLAIM_ALLOWED_FIELDS = frozenset(
         "source_id",
         "text",
         "evidence_span",
+        "evidence_role",
         "document_id",
         "version_id",
         "claim_type",
@@ -2046,6 +2382,11 @@ def _rag_claim_contract_error(evidence: EvidenceBundle) -> str:
             continue
         if set(claim) - (_RAG_CLAIM_ALLOWED_FIELDS | _PERSONIO_OWNED_RAG_FIELDS | {"field"}):
             return "evidence_bundle_claim_fields_invalid"
+        if (
+            "evidence_role" in claim
+            and claim.get("evidence_role") not in {"editorial", "auxiliary_ocr"}
+        ):
+            return "evidence_bundle_claim_evidence_role_invalid"
         if "field" in claim and _normalized_claim_field_name(claim["field"]) not in _PERSONIO_OWNED_RAG_FIELDS:
             return "evidence_bundle_claim_fields_invalid"
         source_id = claim.get("source_id")
@@ -2064,7 +2405,8 @@ def _rag_claim_contract_error(evidence: EvidenceBundle) -> str:
         if claim.get("claim_type") == "functional_contact" or "functional_contact" in claim:
             source = evidence.sources[source_ids.index(_citation_identifier(source_id))]
             contact = validate_functional_contact(claim.get("functional_contact"))
-            if (set(claim) != _RAG_CLAIM_ALLOWED_FIELDS or claim.get("claim_type") != "functional_contact"
+            functional_contact_fields = _RAG_CLAIM_ALLOWED_FIELDS - {"evidence_role"}
+            if (set(claim) != functional_contact_fields or claim.get("claim_type") != "functional_contact"
                     or not claim_id.startswith("R" + source_id.lstrip("#R") + "C")
                     or contact is None or source.get("chunk_kind") != "functional_contact"
                     or validate_functional_contact(source.get("functional_contact")) != contact
@@ -2608,8 +2950,10 @@ def build_decision(
         resolved_context=resolved_context,
         retrieval_plan=retrieval_plan,
         evidence_bundle=evidence,
+        answer_blueprint=_answer_blueprint(evidence),
         answer_contract=AnswerContract(
             allowed_contact_values=allowed_contact_values,
+            required_sections=_complete_document_overview_sections(evidence),
             **_opt_out_contract_scope(retrieval_query, evidence),
         ),
         events=(
@@ -2699,9 +3043,11 @@ def build_result_driven_decision(
         resolved_context=resolved_context,
         retrieval_plan=retrieval_plan,
         evidence_bundle=evidence,
+        answer_blueprint=_answer_blueprint(evidence),
         answer_contract=AnswerContract(
             allowed_contact_values=tuple(dict.fromkeys(binding["value"] for binding in _model_led_contact_bindings(evidence))),
             allowed_contact_bindings=_model_led_contact_bindings(evidence),
+            required_sections=_complete_document_overview_sections(evidence),
             **_opt_out_contract_scope(resolved_context.retrieval_query, evidence),
         ),
         events=(

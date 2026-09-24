@@ -221,6 +221,7 @@ type PortalDocument = {
   status?: string;
   valid_until?: string;
   original_url?: string;
+  markdown_url?: string;
   primary_knowledgebase?: { knowledgebase_id: string; label: string } | null;
   additional_knowledgebases: { knowledgebase_id: string; label: string }[];
 };
@@ -5365,6 +5366,16 @@ function DocumentList({
                       rel="noreferrer"
                     >
                       Original ansehen
+                    </a>
+                  )}
+                  {doc.markdown_url && (
+                    <a
+                      className="wp-original-link"
+                      href={doc.markdown_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      RAG-Markdown ansehen
                     </a>
                   )}
                 </div>

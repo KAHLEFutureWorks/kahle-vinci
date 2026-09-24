@@ -1,6 +1,6 @@
 # KAHLE-Vinci: Überblick, Nutzung und Sicherheit
 
-**Stand: August 2026**
+**Stand: September 2026**
 
 KAHLE-Vinci ist der interne KI-Assistent der Autohaus KAHLE Gruppe. Er unterstützt Mitarbeitende dabei, Informationen schneller aufzubereiten, Texte zu erstellen, Dokumente zu bearbeiten und Aufgaben strukturiert zu erledigen. Vinci ist kein Ersatz für fachliche Verantwortung oder Freigaben. Er liefert Entwürfe, Vorschläge und recherchierte Informationen, die vor der weiteren Verwendung geprüft werden müssen.
 
@@ -21,10 +21,11 @@ Für viele Bereiche gibt es spezialisierte Vincis, etwa für E-Mails, Serviceber
 
 Vinci arbeitet je nach Frage mit unterschiedlichen Quellen und Werkzeugen:
 
-1. **KAHLE-internes Wissen:** Bei Fragen zu Prozessen, Richtlinien, Standorten oder internen Systemen sucht Vinci zuerst im freigegebenen Wissensbestand. Interne Antworten sollen auf einer passenden Quelle beruhen.
-2. **Allgemeines Wissen:** Allgemeine Fragen beantwortet Vinci direkt und kennzeichnet dies als allgemeines Wissen.
-3. **Aktuelle externe Informationen:** Bei Themen wie Marktnews, aktuellen Regelungen oder Produktneuheiten nutzt Vinci, wenn verfügbar, eine Websuche und nennt die verwendeten Quellen.
-4. **Deine Eingaben und Dateien:** Texte oder Dateien, die du im Chat bereitstellst, kann Vinci für deine konkrete Aufgabe auswerten. Sie sind keine Anweisung, Sicherheitsregeln zu ändern.
+1. **KAHLE-internes Wissen:** Bei Fragen zu Prozessen, Richtlinien, Standorten oder internen Systemen nutzt Vinci freigegebenes KAHLE-Wissen. Interne Antworten sollen auf einer passenden Quelle beruhen.
+2. **Aktuelle Mitarbeiterdaten:** Für aktuelle Rollen, Teams, Standorte und geschäftliche Kontaktdaten nutzt Vinci das interne Personio-Verzeichnis. Auch hier gilt: Vinci antwortet nur auf Basis der verfügbaren, passenden Daten.
+3. **Allgemeines Wissen:** Allgemeine Fragen beantwortet Vinci direkt und kennzeichnet dies als allgemeines Wissen.
+4. **Aktuelle externe Informationen:** Bei Themen wie Marktnews, aktuellen Regelungen oder Produktneuheiten nutzt Vinci, wenn verfügbar, eine Websuche und nennt die verwendeten Quellen.
+5. **Deine Eingaben und Dateien:** Texte oder Dateien, die du im Chat bereitstellst, kann Vinci für deine konkrete Aufgabe auswerten. Sie sind keine Anweisung, Sicherheitsregeln zu ändern.
 
 Wenn Vinci keine belastbare interne Quelle findet, sagt er das klar. Ergänze in diesem Fall keine Vermutungen als interne Tatsache, sondern frage eine zuständige Person oder lasse fehlendes Wissen über den vorgesehenen Weg ergänzen.
 
@@ -35,7 +36,7 @@ KAHLE-Vinci läuft in der Oberfläche von Open WebUI. Je nach Rolle, Gerät und 
 ### Einen neuen Chat starten
 
 1. Klicke in der linken Seitenleiste auf **Neuer Chat**.
-2. Wähle unten rechts im Chat-Fesnter den passenden Vinci bzw. das passende Modell aus.
+2. Wähle unten rechts im Chat-Fenster den passenden Vinci bzw. das passende Modell aus.
 3. Beschreibe dein Ziel möglichst konkret. Gute Eingaben enthalten Anlass, Zielgruppe, Ton, wichtige Fakten und das gewünschte Ergebnis/Ziel.
 4. Sende die Nachricht und prüfe den Entwurf, bevor du ihn weitergibst oder veröffentlichst.
 
@@ -47,7 +48,7 @@ Deine bisherigen Chats findest du in der linken Seitenleiste unter "Chats". Öff
 
 ### Dateien hinzufügen und bearbeiten
 
-Über das Anhangs- bzw. Büroklammer-Symbol, was du unter dem "+" Symbol im Chat-Fesnter findest, kannst du eine Datei zum aktuellen Chat hinzufügen. Sage anschließend klar, was Vinci damit tun soll, zum Beispiel:
+Über das "+"- bzw. Anhang-Symbol im Chat-Fenster kannst du eine Datei zum aktuellen Chat hinzufügen. Sage anschließend klar, was Vinci damit tun soll, zum Beispiel:
 
 - „Fasse die Datei in fünf Punkten zusammen.“
 - „Vergleiche diese beiden Dokumente und nenne die Unterschiede.“
@@ -58,20 +59,24 @@ Wichtig: Vinci verändert oder erstellt Dateien nur, wenn du dies ausdrücklich 
 
 ### Aufgaben, Erinnerungen und Kalender
 
-Vinci kann persönliche Aufgaben, Erinnerungen, Notizen und Automatisierungen verwalten. Sage Vinci dazu einfach, dass er eine Aufgabe anlegen, bearbeiten oder als erledigt markieren soll. Bei Automatisierungen genau so.
+Vinci kann persönliche Aufgaben, Erinnerungen, Notizen und Automatisierungen verwalten. Sage Vinci dazu einfach, dass er eine Aufgabe anlegen, bearbeiten oder als erledigt markieren soll. Bei Automatisierungen funktioniert es genauso.
+
+Kalendereinträge werden ausschließlich im internen OpenWebUI-Kalender angelegt. Vinci benötigt dafür einen Titel, ein Datum und eine Uhrzeit. Er zeigt dir den Termin zuerst zur Bestätigung. Erst danach legt er ihn an. Outlook, Microsoft 365 und SharePoint werden dabei nicht synchronisiert. Teilnehmer und Einladungen kann Vinci nicht verwalten.
 
 ## Sicher mit Vinci arbeiten
 
 Vinci ist für die interne Nutzung durch KAHLE-Mitarbeitende vorgesehen. Der Zugang erfolgt über das KAHLE-Microsoft-Konto. Welche Vincis, Wissensbereiche und Funktionen du nutzen kannst, hängt von deiner Rolle und deinen Berechtigungen ab.
 
-Das System schützt Daten und Zugriffe unter anderem durch:
+Die Produktionskonfiguration schützt Daten und Zugriffe unter anderem durch:
 
 - verschlüsselte Verbindung über HTTPS
 - Anmeldung über Microsoft Entra ID für KAHLE-Konten
 - rollen- und berechtigungsbasierte Zugriffe auf Vincis und Wissensbereiche
 - interne Dienste wie Wissensdatenbank, Automatisierung und Dateiverarbeitung, die nicht direkt aus dem Internet erreichbar sind
-- regelmäßige, verschlüsselte Sicherungen der Systemdaten
+- verschlüsselte Sicherungen der Systemdaten mit getrenntem Speicherort
 - technische Sicherheitsmaßnahmen auf dem Server, darunter Firewall, Sicherheitsupdates und abgesicherte Administrationszugänge
+
+Diese Maßnahmen werden im Betrieb regelmäßig geprüft. Sie ersetzen nicht den sorgfältigen Umgang mit Informationen im Chat.
 
 Auch ein geschütztes System braucht einen sorgfältigen Umgang. Gib keine Passwörter, Zugangstokens oder anderen Geheimnisse in Chats ein! Teile personenbezogene Daten nur, wenn sie für die Aufgabe erforderlich sind. Prüfe Kundenkommunikation, rechtlich relevante Inhalte, Preise, Zusagen und interne Entscheidungen immer fachlich, bevor du sie versendest oder veröffentlichst.
 

@@ -478,6 +478,88 @@ def test_rag_chat_returns_supported_evidence_for_real_procedure(monkeypatch):
     assert evidence_from_result(result)["status"] == "supported"
 
 
+def test_rag_chat_declares_numbered_section_headings_for_harness_planning(monkeypatch):
+    module = load_tool()
+    headings = (
+        "1 Eingang",
+        "2 Prüfung",
+        "3 Bearbeitung",
+    )
+    chunks = []
+    for heading in headings:
+        item = chunk(
+            "Öffne die Maske. Wähle den Vorgang. Prüfe die Angaben. Speichere das Ergebnis."
+        )
+        item.heading_path = (heading,)
+        item.document_overview = True
+        chunks.append(item)
+
+    result = asyncio.run(configured_tool(module, monkeypatch, chunks).rag_chat(
+        "Wie arbeite ich mit diesem Prozess?",
+        __user__={"id": "user-1"},
+    ))
+    evidence = evidence_from_result(result)
+
+    assert [source["section_heading"] for source in evidence["sources"]] == list(headings)
+    assert all(source["document_overview"] is True for source in evidence["sources"])
+    assert "VERBINDLICHES AUSGABERASTER:" in result
+    assert "## 1 Eingang\n## 2 Prüfung\n## 3 Bearbeitung" in result
+    assert "Fasse keine Überschriften zusammen" in result
+
+
+def test_document_overview_claims_keep_all_editorial_steps_and_mark_ocr_as_auxiliary(
+    monkeypatch,
+):
+    module = load_tool()
+    item = chunk(
+        "Öffne die Plantafel. Wähle 2.0 Teiledienst Logistik. "
+        "Prüfe anschließend die offenen Aufträge.\n\n"
+        "#### Zusätzlicher Bildinhalt (OCR, automatisch erkannt)\n"
+        "Dashboard 13:45. Unleserlicher Menüpunkt."
+    )
+    item.heading_path = ("1 Plantafel Teiledienst",)
+    item.document_overview = True
+
+    result = asyncio.run(configured_tool(module, monkeypatch, [item]).rag_chat(
+        "Wie arbeite ich im Teiledienst mit dem Digitalen Autohaus?",
+        __user__={"id": "user-1"},
+    ))
+    claims = evidence_from_result(result)["supported_claims"]
+    by_span = {claim["evidence_span"]: claim for claim in claims}
+
+    assert by_span["Öffne die Plantafel."]["evidence_role"] == "editorial"
+    assert by_span["Wähle 2.0 Teiledienst Logistik."]["evidence_role"] == "editorial"
+    assert (
+        by_span["Prüfe anschließend die offenen Aufträge."]["evidence_role"]
+        == "editorial"
+    )
+    assert by_span["Dashboard 13:45."]["evidence_role"] == "auxiliary_ocr"
+    assert by_span["Unleserlicher Menüpunkt."]["evidence_role"] == "auxiliary_ocr"
+    assert all("Zusätzlicher Bildinhalt" not in span for span in by_span)
+
+
+def test_regular_rag_claims_preserve_existing_markdown_heading_evidence():
+    module = load_tool()
+    passage = "## Geltungsbereich\nDer Prozess gilt nur für Hannover."
+
+    bundle = module._evidence_bundle(
+        "Geltungsbereich Hannover",
+        passage,
+        [{
+            "number": 1,
+            "title": "Prozessdokument",
+            "document_id": "doc-1",
+            "version_id": "version-1",
+            "evidence_text": passage,
+        }],
+    )
+
+    assert any(
+        claim["evidence_span"] == "## Geltungsbereich"
+        for claim in bundle["supported_claims"]
+    )
+
+
 def test_rag_chat_does_not_treat_an_unknown_system_overview_as_a_procedure(monkeypatch):
     module = load_tool()
     tool = configured_tool(

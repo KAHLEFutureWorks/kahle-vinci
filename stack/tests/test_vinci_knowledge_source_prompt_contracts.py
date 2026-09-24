@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 from pathlib import Path
 
@@ -96,3 +97,36 @@ def test_future_vinci_models_receive_the_shared_internal_source_tools():
         "personio_directory",
         "rag_chat",
     ]
+
+
+def test_primary_vinci_models_receive_evidence_appropriate_answer_length_prompts():
+    registration = load_registration()
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.execute(
+        """
+        create table model (
+            id text primary key, meta text, params text, updated_at integer
+        )
+        """
+    )
+
+    assert set(registration.KAHLE_VINCI_PROMPT_PATHS) == set(
+        registration.KAHLE_VINCI_MODEL_IDS
+    )
+    for model_id, prompt_path in registration.KAHLE_VINCI_PROMPT_PATHS.items():
+        con.execute(
+            "insert into model values (?, ?, ?, ?)",
+            (model_id, "{}", json.dumps({"system": "legacy"}), 0),
+        )
+        assert registration.set_model_tools(
+            con, model_id, registration.shared_vinci_tool_ids(), now=1,
+            prompt_path=prompt_path,
+        )
+        prompt = json.loads(
+            con.execute("select params from model where id = ?", (model_id,)).fetchone()["params"]
+        )["system"]
+
+        assert "Die Antwortlänge richtet sich nach der Aufgabe und der bereitgestellten Evidenz." in prompt
+        assert "Kürze nicht auf Kosten belegter Schritte, Abschnitte oder Kriterien." in prompt
+        assert "Kurz, klar, kollegial." not in prompt

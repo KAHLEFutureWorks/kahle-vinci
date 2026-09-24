@@ -54,7 +54,8 @@ def run_contact_search(monkeypatch, initial, *, pages=None, query="Kontaktkanäl
                 item.get("key") == "functional_contact_key" for item in body.get("filter", {}).get("must", []))) - 1
             result = pages[position] if pages is not None else {"points": initial, "next_page_offset": None}
         else:
-            result = {"points": expanded if expanded is not None else initial, "next_page_offset": None}
+            expanded_points = expanded() if callable(expanded) else expanded
+            result = {"points": expanded_points if expanded_points is not None else initial, "next_page_offset": None}
         return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"result": result})
 
     def rerank(query, documents, top_n):
@@ -218,12 +219,19 @@ def load_tool_helpers(*names):
     dependencies = set()
     if set(names).intersection({"_filter_evidence_chunks", "_claim_evidence_spans"}):
         dependencies.add("_fold_evidence_text")
+    if "_rag_final_response_instruction" in names:
+        dependencies.update({"_fold_evidence_text", "_temporary_survey_location_scope"})
     nodes = [
         item
         for item in tree.body
         if isinstance(item, ast.FunctionDef) and item.name in set(names) | dependencies
     ]
-    namespace = {"re": re}
+    namespace = {
+        "re": re,
+        "_TEMPORARY_SURVEY_LOCATION_CODES": {
+            "hannover": "HAN", "wunstorf": "WUN", "wedemark": "WED",
+        },
+    }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source_path), "exec"), namespace)
     return tuple(namespace[name] for name in names)
 
@@ -273,6 +281,7 @@ def test_evidence_bundle_carries_claim_span_and_source_sidecar_metadata():
         "source_id": "#1",
         "text": sentence,
         "evidence_span": sentence,
+        "evidence_role": "editorial",
         "document_id": "doc-1",
         "version_id": "v-1",
         "claim_type": "explicit_relationship",
@@ -808,6 +817,157 @@ def test_procedure_retrieval_adds_process_summary_when_scope_was_selected(monkey
     assert any("Passe die DSE-Einstellungen" in chunk.parent_content for chunk in result)
 
 
+def test_complete_workflow_query_expands_one_selected_document_to_all_numbered_sections(monkeypatch):
+    def section(number, title, content):
+        return contact_search_point(
+            chunk_kind="text", functional_contact=None, document_id="digitales-autohaus-teiledienst",
+            parent_id=f"section-{number}", title="Digitales Autohaus Teiledienst",
+            # The production PDF uses headings such as "1 Plantafel
+            # Teiledienst" (without a dot after the chapter number).
+            heading_path=[f"{number} {title}"], chunk_order=number,
+            content=content, parent_content=content,
+        )
+
+    sections = [
+        section(1, "Plantafel Teiledienst", "Öffne die Plantafel Teiledienst Logistik."),
+        section(2, "Auftragseingang", "Übernimm den Auftrag in den Eingang."),
+        section(3, "Auftragsbearbeitung", "Öffne den Auftrag zur Bearbeitung."),
+        section(4, "Teileanforderung", "Bearbeite die Teileanforderung."),
+        section(5, "Mögliche Auftragserweiterung", "Prüfe eine mögliche Auftragserweiterung."),
+        section(6, "Bestellte Teile ausliefern", "Liefere die bestellten Teile aus."),
+    ]
+
+    result, _, _ = run_contact_search(
+        monkeypatch,
+        [sections[-1]],
+        query="Wie arbeite ich im TD (Teiledienst) mit dem DA (Digitales Autohaus)?",
+        expanded=sections,
+    )
+
+    assert [chunk.heading_path[0] for chunk in result] == [
+        "1 Plantafel Teiledienst",
+        "2 Auftragseingang",
+        "3 Auftragsbearbeitung",
+        "4 Teileanforderung",
+        "5 Mögliche Auftragserweiterung",
+        "6 Bestellte Teile ausliefern",
+    ]
+    assert all(chunk.document_overview is True for chunk in result)
+
+
+def test_complete_workflow_keeps_indexed_ocr_separate_from_editorial_text(monkeypatch):
+    def point(order, chapter, content, *, ocr=False):
+        path = [
+            "Digitales Autohaus Teiledienst",
+            "Datei: Digitales Autohaus Teiledienst.pdf (pdf)",
+            chapter,
+        ]
+        if ocr:
+            path.append("Zusätzlicher Bildinhalt (OCR, automatisch erkannt)")
+        return contact_search_point(
+            chunk_kind="text", functional_contact=None,
+            document_id="digitales-autohaus-teiledienst",
+            version_id="v1", title="Digitales Autohaus Teiledienst",
+            parent_id=f"parent-{order}", chunk_order=order,
+            heading_path=path, content=content, parent_content=content,
+        )
+
+    points = [
+        point(1, "1 Plantafel Teiledienst", "Öffne die Plantafel."),
+        point(2, "1 Plantafel Teiledienst", "Screenshot zeigt 13:45.", ocr=True),
+        point(3, "1 Plantafel Teiledienst", "Prüfe die Angaben."),
+        point(4, "2 Auftragseingang", "Prüfe den Auftragseingang."),
+    ]
+    result, _, _ = run_contact_search(
+        monkeypatch, [points[0]], expanded=points,
+        query="Wie arbeite ich im Teiledienst mit dem Digitalen Autohaus?",
+    )
+
+    assert len(result) == 2
+    assert result[0].parent_content == (
+        "Öffne die Plantafel.\n\n"
+        "#### Zusätzlicher Bildinhalt (OCR, automatisch erkannt)\n"
+        "Screenshot zeigt 13:45.\n\n"
+        "#### 1 Plantafel Teiledienst\n"
+        "Prüfe die Angaben."
+    )
+    assert result[1].parent_content == "Prüfe den Auftragseingang."
+
+
+def test_complete_workflow_recovers_full_document_after_transient_scroll_failure(monkeypatch):
+    def point(order, chapter, content, *, ocr=False):
+        path = ["Digitales Autohaus Teiledienst", chapter]
+        if ocr:
+            path.append("Zusätzlicher Bildinhalt (OCR, automatisch erkannt)")
+        return contact_search_point(
+            chunk_kind="text", functional_contact=None,
+            document_id="digitales-autohaus-teiledienst", version_id="v1",
+            title="Digitales Autohaus Teiledienst", parent_id=f"parent-{order}",
+            chunk_order=order, heading_path=path, content=content,
+            parent_content=content,
+        )
+
+    editorial = [
+        point(number * 2, f"{number} Schritt {number}", f"Redaktioneller Schritt {number}.")
+        for number in range(1, 7)
+    ]
+    ocr = [
+        point(number * 2 + 1, f"{number} Schritt {number}", f"OCR {number}.", ocr=True)
+        for number in range(1, 7)
+    ]
+    initial = [editorial[0], *ocr]
+    scroll_calls = 0
+
+    def transient_document_scroll():
+        nonlocal scroll_calls
+        scroll_calls += 1
+        return [] if scroll_calls == 1 else [*editorial, *ocr]
+
+    result, _, _ = run_contact_search(
+        monkeypatch,
+        initial,
+        expanded=transient_document_scroll,
+        query="Wie arbeite ich im Teiledienst mit dem Digitalen Autohaus?",
+    )
+
+    assert scroll_calls == 2
+    assert len(result) == 6
+    assert all(
+        f"Redaktioneller Schritt {number}." in result[number - 1].parent_content
+        for number in range(1, 7)
+    )
+
+
+def test_complete_workflow_overview_accepts_unpunctuated_chapter_headings():
+    candidates = [
+        {"payload": {
+            "heading_path": [f"{number} Hauptschritt {number}"],
+            "chunk_order": number,
+            "content": f"Inhalt {number}",
+            "parent_content": f"Inhalt {number}",
+            "chunk_kind": "text",
+        }}
+        for number in range(1, 7)
+    ]
+
+    chapters = module.structural_document_overview(
+        candidates, [(index, 0.9) for index in range(len(candidates))], result_limit=8,
+    )
+
+    assert [indices for indices, _ in chapters] == [
+        (0,), (1,), (2,), (3,), (4,), (5,),
+    ]
+
+
+def test_how_to_work_with_a_system_is_treated_as_a_complete_document_workflow():
+    assert module.document_overview_intent(
+        "Wie arbeite ich im TD (Teiledienst) mit dem DA (Digitales Autohaus)?"
+    )
+    assert not module.document_overview_intent(
+        "Wie liefere ich bestellte Teile aus?"
+    )
+
+
 def test_ambiguous_customer_lock_query_requires_purpose_clarification():
     clarification, guided = load_tool_helpers(
         "_clarification_for_query", "_guided_response_for_query",
@@ -861,6 +1021,18 @@ def test_marketing_opt_out_instruction_blocks_unrelated_vaudis_fields():
     assert "Finanzdaten" in value
     assert "Sperrliste" in value
     assert "AnswerContract" not in value
+
+
+def test_complete_workflow_query_requires_every_context_section_in_order():
+    (instruction,) = load_tool_helpers("_rag_final_response_instruction")
+
+    value = instruction(
+        "Wie arbeite ich im TD (Teiledienst) mit dem DA (Digitales Autohaus)?"
+    )
+
+    assert "jeden im Kontext belegten Hauptschritt" in value
+    assert "Reihenfolge" in value
+    assert instruction("Wie liefere ich bestellte Teile aus?") == ""
 
 
 def test_location_department_overview_instruction_excludes_unrequested_people_and_cross_site_inference():

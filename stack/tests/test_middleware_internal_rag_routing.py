@@ -698,6 +698,50 @@ def test_model_led_metrics_include_actual_tools_and_pii_free_comparison():
     }
 
 
+def test_blueprint_metrics_expose_only_section_and_claim_counts():
+    metric_fields = load_function_from_middleware(
+        "_knowledge_harness_blueprint_metric_fields"
+    )
+    payload = {
+        "evidence_bundle": {
+            "sources": [
+                {"number": 1, "document_overview": True},
+                {"number": 2, "document_overview": True},
+            ],
+            "supported_claims": [
+                {"source_id": "#1", "evidence_span": "intern"},
+            ],
+        },
+        "answer_blueprint": {
+            "sections": (
+                {"section_id": "1", "claims": [{"evidence_span": "intern"}]},
+                {"section_id": "2", "claims": []},
+            )
+        },
+        "answer_contract": {
+            "required_sections": ["1 Erster", "2 Zweiter"],
+        },
+    }
+
+    assert metric_fields(payload) == {
+        "document_overview_source_count": 2,
+        "evidence_claim_counts": [1, 0],
+        "answer_contract_required_section_count": 2,
+        "answer_blueprint_present": True,
+        "answer_blueprint_section_count": 2,
+        "answer_blueprint_supported_section_count": 1,
+        "answer_blueprint_claim_counts": [1, 0],
+    }
+    assert "intern" not in str(metric_fields(payload))
+
+
+def test_result_driven_blueprint_metrics_survive_later_contract_refreshes():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert "metadata['_kahle_answer_blueprint_metrics']" in source
+    assert "metadata.get('_kahle_answer_blueprint_metrics')" in source
+
+
 def test_german_was_weisst_du_ueber_question_uses_person_lookup_intent():
     personio_intent = load_personio_directory_intent()
 
@@ -1711,6 +1755,36 @@ def load_function_from_middleware(name: str):
         harness.classify_personio_directory_intent
     )
     return namespace[name]
+
+
+def load_model_led_contract_refresh():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_refresh_model_led_answer_contract"
+    )
+    module = ast.Module(body=[node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "Any": Any,
+        "_knowledge_routing_mode": lambda: "model_led",
+        "_knowledge_harness_permission_scope": lambda user: {"user_id": "user-1"},
+        "get_last_user_message": lambda messages: "",
+        "upsert_answer_contract_message": lambda messages, decision: list(messages),
+        "_store_ephemeral_kahle_harness_payload": lambda request, payload: None,
+        "_knowledge_harness_metadata_payload": lambda decision: {},
+        "_model_led_routing_comparison": lambda legacy, actual: {
+            "legacy_required_tools": legacy,
+            "actual_tools": actual,
+        },
+        "_high_salience_knowledge_answer_prompt": lambda decision: (
+            "exact-rag-clarification"
+        ),
+    }
+    exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
+    return namespace["_refresh_model_led_answer_contract"]
 
 
 def load_personio_directory_intent():
@@ -2829,6 +2903,42 @@ def test_model_led_contract_refresh_prefers_the_original_request_metadata():
     assert "metadata['kahle_original_user_query'] = original_user_tool_request" in source
 
 
+def test_model_led_contract_refresh_queues_a_clarification_for_the_native_answer_turn():
+    refresh = load_model_led_contract_refresh()
+    decision = SimpleNamespace(
+        to_dict=lambda: {"answer_contract": {"location_mode": ""}},
+    )
+    session = SimpleNamespace(
+        request_query=lambda: "Wie sperre ich einen Kunden in Vaudis?",
+        build_decision=lambda **kwargs: decision,
+        called_tools=lambda: ("rag_chat",),
+    )
+    metadata = {"kahle_knowledge_evidence_session": session}
+
+    refresh(
+        body={"messages": []},
+        metadata=metadata,
+        request=SimpleNamespace(state=SimpleNamespace()),
+        user=SimpleNamespace(id="user-1"),
+    )
+
+    assert metadata["_kahle_final_answer_prompt"] == "exact-rag-clarification"
+
+
+def test_native_tool_turn_places_the_queued_contract_after_tool_results():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    native_refresh = source.rindex("form_data = _refresh_model_led_answer_contract(")
+    next_completion = source.index("res = await generate_chat_completion(", native_refresh)
+    native_round = source[native_refresh:next_completion]
+
+    assert "final_answer_prompt = metadata.pop('_kahle_final_answer_prompt', '')" in native_round
+    assert native_round.index("*tool_messages,") < native_round.index(
+        "final_answer_prompt = metadata.pop('_kahle_final_answer_prompt', '')"
+    )
+    assert "add_or_update_system_message(" in native_round
+    assert "add_or_update_user_message(" in native_round
+
+
 def test_temporary_opt_out_preroutes_without_a_delivery_guard():
     source = MIDDLEWARE.read_text(encoding="utf-8")
     route_start = source.index("original_user_tool_request = get_last_user_message(")
@@ -2857,11 +2967,58 @@ def test_model_led_observation_does_not_retry_native_tool_messages():
 def test_prerouted_location_context_is_last_system_instruction_before_answering():
     source = MIDDLEWARE.read_text(encoding="utf-8")
     source_context = source.index("if successful_internal_rag:")
-    location_context = source.index("if location_answer_prompt:", source_context)
+    location_context = source.index("if final_answer_prompt:", source_context)
 
     assert source_context < location_context
-    assert "_kahle_location_answer_prompt" in source[location_context - 250:location_context]
+    assert "_kahle_final_answer_prompt" in source[location_context - 250:location_context]
     assert "add_or_update_user_message(" in source[location_context:location_context + 500]
+
+
+def test_prerouted_clarification_prompt_does_not_require_visible_sources():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    source_context = source.index("if model_context_sources and prompt:")
+    citations = source.index("# If there are citations", source_context)
+    delivery = source.index(
+        "final_answer_prompt = metadata.pop('_kahle_final_answer_prompt', '')",
+        source_context,
+    )
+    delivery_line = source[source.rfind("\n", 0, delivery) + 1:source.index("\n", delivery)]
+
+    assert source_context < delivery < citations
+    assert delivery_line.startswith("    final_answer_prompt =")
+
+
+def test_document_blueprint_receives_the_high_salience_final_answer_prompt():
+    final_prompt = load_function_from_middleware(
+        "_high_salience_knowledge_answer_prompt"
+    )
+    blueprint_decision = SimpleNamespace(
+        answer_blueprint=object(),
+        answer_contract=SimpleNamespace(location_mode=False),
+        answer_prompt=lambda: "six-section-blueprint",
+    )
+    ordinary_decision = SimpleNamespace(
+        answer_blueprint=None,
+        answer_contract=SimpleNamespace(location_mode=False),
+        answer_prompt=lambda: "ordinary-contract",
+    )
+
+    assert final_prompt(blueprint_decision) == "six-section-blueprint"
+    assert final_prompt(ordinary_decision) == ""
+
+
+def test_clarification_contract_receives_the_high_salience_final_answer_prompt():
+    final_prompt = load_function_from_middleware(
+        "_high_salience_knowledge_answer_prompt"
+    )
+    clarification_decision = SimpleNamespace(
+        answer_blueprint=None,
+        answer_contract=SimpleNamespace(location_mode=False),
+        user_intent=SimpleNamespace(clarification_required=True),
+        answer_prompt=lambda: "exact-rag-clarification",
+    )
+
+    assert final_prompt(clarification_decision) == "exact-rag-clarification"
 
 
 def test_repeated_location_prompt_normalization_keeps_one_modelled_response():

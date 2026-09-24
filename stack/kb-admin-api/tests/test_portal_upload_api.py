@@ -215,7 +215,7 @@ def test_restricted_term_upload_is_stopped_for_admin_review_with_visible_finding
         }
 
 
-def test_clean_area_upload_is_automatically_active_and_retrievable_when_switch_is_on():
+def test_clean_area_upload_exposes_indexed_markdown_only_to_read_authorized_user():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory); module = load_app(root)
         files_root = (root / "portal-files").resolve()
@@ -249,7 +249,24 @@ def test_clean_area_upload_is_automatically_active_and_retrievable_when_switch_i
         )
         assert response.status_code == 201, response.text
         assert response.json()["status"] == "active"
-        assert client.get(f"/portal/sources/{response.json()['version_id']}").status_code == 200
+        version_id = response.json()["version_id"]
+        assert client.get(f"/portal/sources/{version_id}").status_code == 200
+        markdown = client.get(f"/portal/sources/{version_id}/markdown")
+        assert markdown.status_code == 200
+        assert markdown.text.startswith("---\n")
+        assert 'title: "Reifenwechsel"' in markdown.text
+        assert markdown.text.endswith(
+            "# Reifenwechsel\n\nRäder mit dem vorgeschriebenen Drehmoment montieren.\n"
+        )
+        assert markdown.headers["content-type"].startswith("text/markdown")
+        assert markdown.headers["cache-control"] == "private, no-store"
+        assert markdown.headers["x-content-type-options"] == "nosniff"
+        documents = client.get("/portal/documents").json()["documents"]
+        assert documents[0]["markdown_url"] == f"/wissen/api/portal/sources/{version_id}/markdown"
+        module.PORTAL_GOVERNANCE.grant_access(
+            "portal", "employee", kb.knowledgebase_id, can_read=False, can_upload=True,
+        )
+        assert client.get(f"/portal/sources/{version_id}/markdown").status_code == 404
         notifications = client.get("/portal/notifications").json()["notifications"]
         assert notifications[0]["status"] == "active"
         assert notifications[0]["document_title"] == "Reifenwechsel"

@@ -450,6 +450,9 @@ def _refresh_model_led_answer_contract(
     )
     metadata['kahle_knowledge_harness_active'] = True
     metadata['kahle_answer_contract'] = payload['answer_contract']
+    final_answer_prompt = _high_salience_knowledge_answer_prompt(decision)
+    if final_answer_prompt:
+        metadata['_kahle_final_answer_prompt'] = final_answer_prompt
 
     comparison = metadata.get('kahle_knowledge_routing_comparison') or {}
     comparison = _model_led_routing_comparison(
@@ -458,6 +461,21 @@ def _refresh_model_led_answer_contract(
     metadata['kahle_knowledge_routing_comparison'] = comparison
     metadata['kahle_retrieval_tools'] = comparison['actual_tools']
     return body
+
+
+def _high_salience_knowledge_answer_prompt(decision: Any) -> str:
+    """Repeat strict answer shapes immediately before the one model response."""
+    if decision is None:
+        return ''
+    answer_contract = getattr(decision, 'answer_contract', None)
+    if not (
+        getattr(getattr(decision, 'user_intent', None), 'clarification_required', False)
+        or
+        getattr(answer_contract, 'location_mode', False)
+        or getattr(decision, 'answer_blueprint', None) is not None
+    ):
+        return ''
+    return str(decision.answer_prompt() or '')
 
 
 def _knowledge_harness_direct_answer(
@@ -561,6 +579,60 @@ def _knowledge_harness_routing_metric_fields(metadata: dict[str, Any]) -> dict[s
             comparison.get('legacy_required_tools') or (),
             comparison.get('actual_tools') or (),
         )
+    return fields
+
+
+def _knowledge_harness_blueprint_metric_fields(
+    harness_payload: dict[str, Any],
+) -> dict[str, Any]:
+    evidence = harness_payload.get('evidence_bundle') or {}
+    sources = [
+        source
+        for source in evidence.get('sources') or []
+        if isinstance(source, dict)
+    ]
+    claims = [
+        claim
+        for claim in evidence.get('supported_claims') or []
+        if isinstance(claim, dict)
+    ]
+    fields: dict[str, Any] = {}
+    if sources:
+        fields['document_overview_source_count'] = sum(
+            source.get('document_overview') is True for source in sources
+        )
+        fields['evidence_claim_counts'] = [
+            sum(
+                str(claim.get('source_id') or '').lstrip('#R')
+                == str(source.get('number') or '').lstrip('#R')
+                for claim in claims
+            )
+            for source in sources
+        ]
+    answer_contract = harness_payload.get('answer_contract') or {}
+    required_sections = answer_contract.get('required_sections') or []
+    fields['answer_contract_required_section_count'] = (
+        len(required_sections) if isinstance(required_sections, (list, tuple)) else 0
+    )
+    blueprint = harness_payload.get('answer_blueprint') or {}
+    fields['answer_blueprint_present'] = bool(blueprint)
+    sections = blueprint.get('sections') or []
+    if not isinstance(sections, (list, tuple)):
+        return fields
+    claim_counts = [
+        len(section.get('claims') or [])
+        for section in sections
+        if isinstance(section, dict)
+    ]
+    if not claim_counts:
+        return fields
+    fields.update({
+        'answer_blueprint_section_count': len(claim_counts),
+        'answer_blueprint_supported_section_count': sum(
+            count > 0 for count in claim_counts
+        ),
+        'answer_blueprint_claim_counts': claim_counts,
+    })
     return fields
 
 
@@ -5439,6 +5511,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             personio_result=retrieval['personio_result'],
                         )
                         harness_payload = harness_decision.to_dict()
+                        blueprint_metrics = (
+                            _knowledge_harness_blueprint_metric_fields(
+                                harness_payload
+                            )
+                        )
+                        if blueprint_metrics:
+                            metadata['_kahle_answer_blueprint_metrics'] = (
+                                blueprint_metrics
+                            )
                         _store_ephemeral_kahle_harness_payload(
                             request, harness_payload
                         )
@@ -5454,13 +5535,18 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             metadata['kahle_answer_contract'] = harness_payload[
                                 'answer_contract'
                             ]
-                            location_answer_prompt = harness_decision.answer_prompt()
-                            if harness_decision.answer_contract.location_mode:
-                                metadata['_kahle_location_answer_prompt'] = (
-                                    location_answer_prompt
+                            knowledge_answer_prompt = harness_decision.answer_prompt()
+                            final_answer_prompt = (
+                                _high_salience_knowledge_answer_prompt(
+                                    harness_decision
+                                )
+                            )
+                            if final_answer_prompt:
+                                metadata['_kahle_final_answer_prompt'] = (
+                                    final_answer_prompt
                                 )
                             form_data['messages'] = add_or_update_system_message(
-                                location_answer_prompt,
+                                knowledge_answer_prompt,
                                 form_data.get('messages', []) or [],
                                 append=True,
                             )
@@ -5667,18 +5753,18 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 append=True,
             )
 
-        location_answer_prompt = metadata.pop('_kahle_location_answer_prompt', '')
-        if location_answer_prompt:
-            form_data['messages'] = add_or_update_system_message(
-                location_answer_prompt,
-                form_data['messages'],
-                append=True,
-            )
-            form_data['messages'] = add_or_update_user_message(
-                location_answer_prompt,
-                form_data['messages'],
-                append=True,
-            )
+    final_answer_prompt = metadata.pop('_kahle_final_answer_prompt', '')
+    if final_answer_prompt:
+        form_data['messages'] = add_or_update_system_message(
+            final_answer_prompt,
+            form_data['messages'],
+            append=True,
+        )
+        form_data['messages'] = add_or_update_user_message(
+            final_answer_prompt,
+            form_data['messages'],
+            append=True,
+        )
 
     # If there are citations, add them to the data_items
     sources = [
@@ -8012,6 +8098,22 @@ async def streaming_chat_response_handler(response, ctx):
                                     }
                                 )
 
+                        final_answer_prompt = metadata.pop('_kahle_final_answer_prompt', '')
+                        if final_answer_prompt:
+                            new_form_data['messages'] = add_or_update_system_message(
+                                final_answer_prompt,
+                                new_form_data['messages'],
+                                append=True,
+                            )
+                            if not (
+                                ENABLE_RESPONSES_API_STATEFUL and last_response_id
+                            ):
+                                new_form_data['messages'] = add_or_update_user_message(
+                                    final_answer_prompt,
+                                    new_form_data['messages'],
+                                    append=True,
+                                )
+
                         res = await generate_chat_completion(
                             request,
                             new_form_data,
@@ -8260,6 +8362,12 @@ async def streaming_chat_response_handler(response, ctx):
                         **_knowledge_harness_routing_metric_fields(metadata),
                         'evidence_status': str(evidence_payload.get('status') or ''),
                         'source_count': len(evidence_payload.get('sources') or []),
+                        **(
+                            metadata.get('_kahle_answer_blueprint_metrics')
+                            or _knowledge_harness_blueprint_metric_fields(
+                                harness_payload
+                            )
+                        ),
                         'permission_scope_present': bool(permission_payload.get('user_id')),
                         'validation_attempts': len(validation_attempts),
                         **({'validation_mode': 'shadow'} if shadow_validation else {}),

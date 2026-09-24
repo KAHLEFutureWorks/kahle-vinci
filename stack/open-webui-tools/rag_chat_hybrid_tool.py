@@ -18,6 +18,68 @@ from pydantic import BaseModel, Field
 from functional_contact_contract import validate_functional_contact
 
 
+_NUMBERED_SECTION_HEADING = re.compile(
+    r"^\s*\d{1,3}(?:(?:[.)]\s+)|\s+).+?\s*$"
+)
+_NUMBERED_SECTION_VALUE = re.compile(
+    r"^\s*(\d{1,3})(?:(?:[.)]\s+)|\s+)(.+?)\s*$"
+)
+_MARKDOWN_HEADING = re.compile(r"^\s*#{1,6}\s+(.+?)\s*$")
+
+
+def _numbered_section_heading(heading_path):
+    for heading in reversed(tuple(heading_path or ())):
+        value = " ".join(str(heading or "").split())
+        if _NUMBERED_SECTION_HEADING.fullmatch(value):
+            return value
+    return ""
+
+
+def _complete_document_overview_headings(sources):
+    """Return one ordered outline only when retrieval supplied it completely."""
+    grouped = {}
+    for source in sources or ():
+        if not source.get("document_overview"):
+            continue
+        document_id = str(source.get("document_id") or "").strip()
+        version_id = str(source.get("version_id") or "").strip()
+        heading = " ".join(str(source.get("section_heading") or "").split())
+        match = _NUMBERED_SECTION_VALUE.fullmatch(heading)
+        if not document_id or not version_id or not match:
+            return ()
+        number = int(match.group(1))
+        normalized = f"{number} {match.group(2).strip()}"
+        sections = grouped.setdefault((document_id, version_id), {})
+        if number in sections and sections[number] != normalized:
+            return ()
+        sections[number] = normalized
+
+    if len(grouped) != 1:
+        return ()
+    sections = next(iter(grouped.values()))
+    numbers = sorted(sections)
+    if len(numbers) < 2 or numbers != list(range(1, len(numbers) + 1)):
+        return ()
+    return tuple(sections[number] for number in numbers)
+
+
+def _document_overview_output_instruction(sources):
+    """Give the model a source-derived answer skeleton without generating content."""
+    headings = _complete_document_overview_headings(sources)
+    if not headings:
+        return ""
+    outline = "\n".join(f"## {heading}" for heading in headings)
+    return (
+        "VERBINDLICHES AUSGABERASTER:\n"
+        f"{outline}\n"
+        "Nutze in der finalen Antwort jede dieser Überschriften wortgleich und in "
+        "derselben Reihenfolge. Unter jeder Überschrift steht genau ein eigener "
+        "Hauptabschnitt mit den dafür belegten Details. Fasse keine Überschriften "
+        "zusammen, bilde keine Bereichsüberschrift wie '2-6' und ersetze keinen "
+        "Dokumentabschnitt durch anders benannte Teilaufgaben."
+    )
+
+
 def _feedback_link(chat_id, message_id):
     """Bewusst einfache, von OpenWebUI stabil verarbeitete Portaladresse."""
     return (
@@ -328,17 +390,32 @@ def _rag_answer_instruction(query):
     return instruction
 
 
-def _rag_final_response_instruction(query):
+def _rag_final_response_instruction(query, sources=()):
     """Put a location boundary at the end of native tool context for the model."""
     location_mode, _location_code = _temporary_survey_location_scope(query)
     if location_mode:
-        return (
+        instruction = (
             "Unabdingbare Ausgabeform: Erkläre den vollständigen belegten Vorgang für die "
             "Standorte Hannover, Wunstorf und Wedemark. Stelle klar, dass er ausschließlich "
             "für diese drei Standorte gilt. Schließe genau einmal ab: 'Für alle anderen Standorte "
             "wende dich bitte an datenschutz@kahle.de.' Erfinde keine weiteren Standortwerte."
         )
-    return ""
+    elif re.search(r"\bwie\s+arbeit\w*\s+ich\b", _fold_evidence_text(query)):
+        instruction = (
+            "Unabdingbare Ausgabeform: Erkläre jeden im Kontext belegten Hauptschritt "
+            "in der dokumentierten Reihenfolge. Überspringe keinen dieser Schritte und "
+            "fasse getrennte Hauptschritte nicht zusammen. Wenn die Quellen nur einen "
+            "Teilprozess belegen, kennzeichne ihn als Teilprozess, statt Vollständigkeit "
+            "zu behaupten."
+        )
+    else:
+        instruction = ""
+    outline_instruction = (
+        _document_overview_output_instruction(sources) if sources else ""
+    )
+    return "\n\n".join(part for part in (
+        instruction, outline_instruction
+    ) if part)
 
 
 def _prioritize_marketing_opt_out_evidence(query, chunks):
@@ -620,6 +697,40 @@ def _claim_evidence_spans(query, passage, *, full_procedure=False):
     return selected[:8]
 
 
+def _claim_evidence_items(query, passage, *, full_procedure=False):
+    """Keep exact claim spans and distinguish editorial text from OCR."""
+    segments = []
+    lines = []
+    evidence_role = "editorial"
+
+    def flush():
+        if text := "\n".join(lines).strip():
+            segments.append((evidence_role, text))
+        lines.clear()
+
+    for line in str(passage or "").splitlines():
+        heading = _MARKDOWN_HEADING.fullmatch(line)
+        if heading:
+            flush()
+            folded = _fold_evidence_text(heading.group(1))
+            evidence_role = (
+                "auxiliary_ocr"
+                if "bildinhalt" in folded and "ocr" in folded
+                else "editorial"
+            )
+            continue
+        lines.append(line)
+    flush()
+
+    return [
+        {"evidence_span": span, "evidence_role": role}
+        for role, text in segments
+        for span in _claim_evidence_spans(
+            query, text, full_procedure=full_procedure
+        )
+    ]
+
+
 def _evidence_bundle(query, context="", sources=None, missing_information=None):
     source_items = list(sources or [])
     missing = list(missing_information or [])
@@ -642,18 +753,31 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
                 })
             continue
         if number and passage:
-            full_procedure = _marketing_opt_out_query(query) and all(
-                term in _fold_evidence_text(source.get("title", ""))
-                for term in ("tempor", "sperr", "zufriedenheitsbefrag")
+            full_procedure = bool(source.get("document_overview")) or (
+                _marketing_opt_out_query(query) and all(
+                    term in _fold_evidence_text(source.get("title", ""))
+                    for term in ("tempor", "sperr", "zufriedenheitsbefrag")
+                )
             )
-            for claim_index, claim in enumerate(_claim_evidence_spans(
-                query, passage, full_procedure=full_procedure,
-            ), 1):
+            if source.get("document_overview"):
+                evidence_items = _claim_evidence_items(
+                    query, passage, full_procedure=full_procedure,
+                )
+            else:
+                evidence_items = [
+                    {"evidence_span": span, "evidence_role": "editorial"}
+                    for span in _claim_evidence_spans(
+                        query, passage, full_procedure=full_procedure,
+                    )
+                ]
+            for claim_index, item in enumerate(evidence_items, 1):
+                claim = item["evidence_span"]
                 claims.append({
                     "claim_id": f"R{number}C{claim_index}",
                     "source_id": f"#{number}",
                     "text": claim[:1000],
                     "evidence_span": claim[:1000],
+                    "evidence_role": item["evidence_role"],
                     "document_id": source.get("document_id"),
                     "version_id": source.get("version_id"),
                     "claim_type": (
@@ -881,7 +1005,7 @@ class Tools:
                 and getattr(chunk, "functional_contact", None) is None
             ):
                 evidence_passage = f"{heading}\n{passage}"
-            sources.append({
+            source = {
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
@@ -898,8 +1022,15 @@ class Tools:
                 "classification_confidence": float(
                     getattr(chunk, "classification_confidence", 0) or 0
                 ),
+                "document_overview": bool(getattr(chunk, "document_overview", False)),
                 "evidence_text": evidence_passage,
-            })
+            }
+            section_heading = _numbered_section_heading(
+                getattr(chunk, "heading_path", ())
+            )
+            if section_heading:
+                source["section_heading"] = section_heading
+            sources.append(source)
             if contact_error:
                 sources[-1]["contact_error"] = contact_error
             elif getattr(chunk, "functional_contact", None) is not None:
@@ -916,5 +1047,5 @@ class Tools:
             f"CONTEXT:\n{joined_context}\n"
             f"SOURCES_JSON: {json.dumps(sources, ensure_ascii=False)}\n"
             f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}\n"
-            f"FINAL_RESPONSE_INSTRUCTION: {_rag_final_response_instruction(query)}"
+            f"FINAL_RESPONSE_INSTRUCTION: {_rag_final_response_instruction(query, sources)}"
         )

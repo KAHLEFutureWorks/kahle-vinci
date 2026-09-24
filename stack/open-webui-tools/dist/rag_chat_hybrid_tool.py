@@ -198,6 +198,7 @@ class RetrievedChunk:
     chunk_kind: str = "text"
     functional_contact: dict | None = None
     contact_error: str = ""
+    document_overview: bool = False
 class SparseQueryEncoder(Protocol):
     def encode_query(self, query: str) -> dict[str, list[int] | list[float]]: ...
 class Reranker(Protocol):
@@ -854,6 +855,12 @@ def document_overview_intent(query: str) -> bool:
         "alle kapitel", "alle punkte", "vollstandiger uberblick", "zusammenfassung des dokuments",
     )):
         return True
+    if re.search(r"\bwie\s+arbeit\w*\s+ich\b", folded):
+        # A question about working in an area or with a system normally asks
+        # for the end-to-end process, not one independently reranked step.
+        # The caller still requires one focused document whose numbered
+        # chapters fit within the bounded response context.
+        return True
     words = re.findall(r"[a-z0-9_-]+", folded)
     if len(words) <= 4 and len(_title_terms(query)) >= 2:
         # A bare, uniquely focused document title means "load this document",
@@ -862,6 +869,9 @@ def document_overview_intent(query: str) -> bool:
     return len(words) <= 8 and (
         folded.startswith("was steht in ") or folded.startswith("worum geht es in ")
     )
+_NUMBERED_MAIN_CHAPTER_HEADING = re.compile(
+    r"^\s*(\d{1,3})(?:(?:[.)]\s+)|\s+)"
+)
 def structural_document_overview(
     candidates: list[dict[str, Any]], reranked: list[tuple[int, float]],
     *, result_limit: int, max_context_chars: int = 40_000,
@@ -876,7 +886,7 @@ def structural_document_overview(
         path = tuple((point.get("payload") or {}).get("heading_path") or ())
         number = None
         for heading in path:
-            match = re.match(r"^\s*(\d{1,3})[.)]\s+", str(heading))
+            match = _NUMBERED_MAIN_CHAPTER_HEADING.match(str(heading))
             if match:
                 number = int(match.group(1))
                 break
@@ -910,21 +920,42 @@ def merge_overview_chapters(
     for chapter_indices, score in chapters:
         first = candidates[chapter_indices[0]]
         payload = dict(first.get("payload") or {})
-        contents = [
-            str((candidates[index].get("payload") or {}).get("parent_content")
-                or (candidates[index].get("payload") or {}).get("content") or "").strip()
-            for index in chapter_indices
-        ]
+        contents = []
+        previous_was_ocr = False
+        for index in chapter_indices:
+            chunk_payload = candidates[index].get("payload") or {}
+            content = str(
+                chunk_payload.get("parent_content") or chunk_payload.get("content") or ""
+            ).strip()
+            if not content:
+                continue
+            heading_path = chunk_payload.get("heading_path") or ()
+            is_ocr = any(
+                "bildinhalt" in str(heading).casefold()
+                and "ocr" in str(heading).casefold()
+                for heading in heading_path
+            )
+            if is_ocr:
+                content = "#### Zusätzlicher Bildinhalt (OCR, automatisch erkannt)\n" + content
+            elif previous_was_ocr:
+                chapter_heading = next(
+                    str(heading) for heading in heading_path
+                    if _NUMBERED_MAIN_CHAPTER_HEADING.match(str(heading))
+                )
+                content = f"#### {chapter_heading}\n{content}"
+            contents.append(content)
+            previous_was_ocr = is_ocr
         chapter_content = "\n\n".join(content for content in contents if content)
         path = tuple(payload.get("heading_path") or ())
         for position, heading in enumerate(path):
-            if re.match(r"^\s*\d{1,3}[.)]\s+", str(heading)):
+            if _NUMBERED_MAIN_CHAPTER_HEADING.match(str(heading)):
                 path = path[:position + 1]
                 break
         payload.update({
             "content": chapter_content,
             "parent_content": chapter_content,
             "heading_path": list(path),
+            "document_overview": True,
         })
         merged.append({**first, "payload": payload})
         ranked.append((len(merged) - 1, score))
@@ -1164,10 +1195,12 @@ class QdrantHybridRetriever:
             if identifiers
         }
         selected_document_ids.discard("")
+        complete_document_points_loaded = False
         if selected_document_ids:
             complete_points = self._validate_points(self._document_points(selected_document_ids, acl), scope, today)
             complete_points = [point for point in complete_points if point["payload"].get("document_id") in selected_document_ids and point["payload"].get("chunk_kind") != "retrieval_hint"]
             if complete_points:
+                complete_document_points_loaded = True
                 candidates = [
                     point for point in self._parent_centered(complete_points, 256)
                     if not _metadata_only(point)
@@ -1231,6 +1264,32 @@ class QdrantHybridRetriever:
             )
             if focused_ids and document_overview_intent(query) else []
         )
+        if (
+            overview_selection
+            and selected_document_ids
+            and not complete_document_points_loaded
+        ):
+            # A transient scroll failure must not turn a complete-document
+            # request into an OCR-heavy partial overview. Retry only the same
+            # ACL-filtered active document once; no model or broader search is
+            # involved. If recovery is still incomplete, keep the original
+            # fail-closed selection path below.
+            recovered_points = self._validate_points(
+                self._document_points(selected_document_ids, acl), scope, today
+            )
+            recovered_candidates = [
+                point
+                for point in self._parent_centered(recovered_points, 256)
+                if not _metadata_only(point)
+                and point["payload"].get("document_id") in selected_document_ids
+                and point["payload"].get("chunk_kind") != "retrieval_hint"
+            ]
+            recovered_overview = structural_document_overview(
+                recovered_candidates, (), result_limit=result_limit,
+            )
+            if recovered_overview:
+                candidates = recovered_candidates
+                overview_selection = recovered_overview
         exact_opening_hours = select_exact_location_opening_hours(
             query, reranked, candidates, result_limit=result_limit,
         )
@@ -1300,6 +1359,7 @@ class QdrantHybridRetriever:
                 classification_confidence=float(payload.get("classification_confidence") or 0),
                 chunk_kind=payload.get("chunk_kind") or "text",
                 functional_contact=self._contact(point),
+                document_overview=bool(payload.get("document_overview")),
             ))
         checks = {}
         observed = {}
@@ -1488,6 +1548,60 @@ class RemoteSparseQueryEncoder:
             raise RetrievalError("sparse_encoder_unavailable") from exc
 
 
+_NUMBERED_SECTION_HEADING = re.compile(
+    r"^\s*\d{1,3}(?:(?:[.)]\s+)|\s+).+?\s*$"
+)
+_NUMBERED_SECTION_VALUE = re.compile(
+    r"^\s*(\d{1,3})(?:(?:[.)]\s+)|\s+)(.+?)\s*$"
+)
+_MARKDOWN_HEADING = re.compile(r"^\s*#{1,6}\s+(.+?)\s*$")
+def _numbered_section_heading(heading_path):
+    for heading in reversed(tuple(heading_path or ())):
+        value = " ".join(str(heading or "").split())
+        if _NUMBERED_SECTION_HEADING.fullmatch(value):
+            return value
+    return ""
+def _complete_document_overview_headings(sources):
+    """Return one ordered outline only when retrieval supplied it completely."""
+    grouped = {}
+    for source in sources or ():
+        if not source.get("document_overview"):
+            continue
+        document_id = str(source.get("document_id") or "").strip()
+        version_id = str(source.get("version_id") or "").strip()
+        heading = " ".join(str(source.get("section_heading") or "").split())
+        match = _NUMBERED_SECTION_VALUE.fullmatch(heading)
+        if not document_id or not version_id or not match:
+            return ()
+        number = int(match.group(1))
+        normalized = f"{number} {match.group(2).strip()}"
+        sections = grouped.setdefault((document_id, version_id), {})
+        if number in sections and sections[number] != normalized:
+            return ()
+        sections[number] = normalized
+
+    if len(grouped) != 1:
+        return ()
+    sections = next(iter(grouped.values()))
+    numbers = sorted(sections)
+    if len(numbers) < 2 or numbers != list(range(1, len(numbers) + 1)):
+        return ()
+    return tuple(sections[number] for number in numbers)
+def _document_overview_output_instruction(sources):
+    """Give the model a source-derived answer skeleton without generating content."""
+    headings = _complete_document_overview_headings(sources)
+    if not headings:
+        return ""
+    outline = "\n".join(f"## {heading}" for heading in headings)
+    return (
+        "VERBINDLICHES AUSGABERASTER:\n"
+        f"{outline}\n"
+        "Nutze in der finalen Antwort jede dieser Überschriften wortgleich und in "
+        "derselben Reihenfolge. Unter jeder Überschrift steht genau ein eigener "
+        "Hauptabschnitt mit den dafür belegten Details. Fasse keine Überschriften "
+        "zusammen, bilde keine Bereichsüberschrift wie '2-6' und ersetze keinen "
+        "Dokumentabschnitt durch anders benannte Teilaufgaben."
+    )
 def _feedback_link(chat_id, message_id):
     """Bewusst einfache, von OpenWebUI stabil verarbeitete Portaladresse."""
     return (
@@ -1776,17 +1890,32 @@ def _rag_answer_instruction(query):
             "auf andere Standorte. "
         )
     return instruction
-def _rag_final_response_instruction(query):
+def _rag_final_response_instruction(query, sources=()):
     """Put a location boundary at the end of native tool context for the model."""
     location_mode, _location_code = _temporary_survey_location_scope(query)
     if location_mode:
-        return (
+        instruction = (
             "Unabdingbare Ausgabeform: Erkläre den vollständigen belegten Vorgang für die "
             "Standorte Hannover, Wunstorf und Wedemark. Stelle klar, dass er ausschließlich "
             "für diese drei Standorte gilt. Schließe genau einmal ab: 'Für alle anderen Standorte "
             "wende dich bitte an datenschutz@kahle.de.' Erfinde keine weiteren Standortwerte."
         )
-    return ""
+    elif re.search(r"\bwie\s+arbeit\w*\s+ich\b", _fold_evidence_text(query)):
+        instruction = (
+            "Unabdingbare Ausgabeform: Erkläre jeden im Kontext belegten Hauptschritt "
+            "in der dokumentierten Reihenfolge. Überspringe keinen dieser Schritte und "
+            "fasse getrennte Hauptschritte nicht zusammen. Wenn die Quellen nur einen "
+            "Teilprozess belegen, kennzeichne ihn als Teilprozess, statt Vollständigkeit "
+            "zu behaupten."
+        )
+    else:
+        instruction = ""
+    outline_instruction = (
+        _document_overview_output_instruction(sources) if sources else ""
+    )
+    return "\n\n".join(part for part in (
+        instruction, outline_instruction
+    ) if part)
 def _prioritize_marketing_opt_out_evidence(query, chunks):
     """Put supported scope, contact and list passages before the procedure body."""
     if not _marketing_opt_out_query(query):
@@ -2040,6 +2169,38 @@ def _claim_evidence_spans(query, passage, *, full_procedure=False):
             if exact_block and exact_block not in selected:
                 selected.append(exact_block)
     return selected[:8]
+def _claim_evidence_items(query, passage, *, full_procedure=False):
+    """Keep exact claim spans and distinguish editorial text from OCR."""
+    segments = []
+    lines = []
+    evidence_role = "editorial"
+
+    def flush():
+        if text := "\n".join(lines).strip():
+            segments.append((evidence_role, text))
+        lines.clear()
+
+    for line in str(passage or "").splitlines():
+        heading = _MARKDOWN_HEADING.fullmatch(line)
+        if heading:
+            flush()
+            folded = _fold_evidence_text(heading.group(1))
+            evidence_role = (
+                "auxiliary_ocr"
+                if "bildinhalt" in folded and "ocr" in folded
+                else "editorial"
+            )
+            continue
+        lines.append(line)
+    flush()
+
+    return [
+        {"evidence_span": span, "evidence_role": role}
+        for role, text in segments
+        for span in _claim_evidence_spans(
+            query, text, full_procedure=full_procedure
+        )
+    ]
 def _evidence_bundle(query, context="", sources=None, missing_information=None):
     source_items = list(sources or [])
     missing = list(missing_information or [])
@@ -2062,18 +2223,31 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
                 })
             continue
         if number and passage:
-            full_procedure = _marketing_opt_out_query(query) and all(
-                term in _fold_evidence_text(source.get("title", ""))
-                for term in ("tempor", "sperr", "zufriedenheitsbefrag")
+            full_procedure = bool(source.get("document_overview")) or (
+                _marketing_opt_out_query(query) and all(
+                    term in _fold_evidence_text(source.get("title", ""))
+                    for term in ("tempor", "sperr", "zufriedenheitsbefrag")
+                )
             )
-            for claim_index, claim in enumerate(_claim_evidence_spans(
-                query, passage, full_procedure=full_procedure,
-            ), 1):
+            if source.get("document_overview"):
+                evidence_items = _claim_evidence_items(
+                    query, passage, full_procedure=full_procedure,
+                )
+            else:
+                evidence_items = [
+                    {"evidence_span": span, "evidence_role": "editorial"}
+                    for span in _claim_evidence_spans(
+                        query, passage, full_procedure=full_procedure,
+                    )
+                ]
+            for claim_index, item in enumerate(evidence_items, 1):
+                claim = item["evidence_span"]
                 claims.append({
                     "claim_id": f"R{number}C{claim_index}",
                     "source_id": f"#{number}",
                     "text": claim[:1000],
                     "evidence_span": claim[:1000],
+                    "evidence_role": item["evidence_role"],
                     "document_id": source.get("document_id"),
                     "version_id": source.get("version_id"),
                     "claim_type": (
@@ -2295,7 +2469,7 @@ class Tools:
                 and getattr(chunk, "functional_contact", None) is None
             ):
                 evidence_passage = f"{heading}\n{passage}"
-            sources.append({
+            source = {
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,
                 "source_url": chunk.source_url, "conflict": chunk.conflict,
@@ -2312,8 +2486,15 @@ class Tools:
                 "classification_confidence": float(
                     getattr(chunk, "classification_confidence", 0) or 0
                 ),
+                "document_overview": bool(getattr(chunk, "document_overview", False)),
                 "evidence_text": evidence_passage,
-            })
+            }
+            section_heading = _numbered_section_heading(
+                getattr(chunk, "heading_path", ())
+            )
+            if section_heading:
+                source["section_heading"] = section_heading
+            sources.append(source)
             if contact_error:
                 sources[-1]["contact_error"] = contact_error
             elif getattr(chunk, "functional_contact", None) is not None:
@@ -2330,5 +2511,5 @@ class Tools:
             f"CONTEXT:\n{joined_context}\n"
             f"SOURCES_JSON: {json.dumps(sources, ensure_ascii=False)}\n"
             f"FEEDBACK_LINK: {_feedback_link(__chat_id__, __message_id__)}\n"
-            f"FINAL_RESPONSE_INSTRUCTION: {_rag_final_response_instruction(query)}"
+            f"FINAL_RESPONSE_INSTRUCTION: {_rag_final_response_instruction(query, sources)}"
         )

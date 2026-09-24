@@ -2125,14 +2125,6 @@ def _expand_customer_lock_followup(
     ):
         return current
     if any(token in folded for token in (
-        "werbung", "werbesperre", "werbewiderspruch", "befragung",
-        "kontaktfreigabe", "ersteres", "erste option",
-    )):
-        return (
-            "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
-            "in Vaudis über die DSE-Kontaktfreigaben?"
-        )
-    if any(token in folded for token in (
         "allgemein", "kundensperre", "komplett", "vollstandig",
         "zweiteres", "zweite option",
     )):
@@ -2140,6 +2132,28 @@ def _expand_customer_lock_followup(
             "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? Falls dafür "
             "keine freigegebene Anleitung vorliegt: Welche freigegebene "
             "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
+        )
+    if any(token in folded for token in (
+        "werbung", "werbesperre", "werbewiderspruch", "befragung",
+        "kontaktfreigabe", "ersteres", "erste option",
+    )):
+        return (
+            "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
+            "in Vaudis über die DSE-Kontaktfreigaben?"
+        )
+    supported_location = next(
+        (
+            location
+            for location in ("Hannover", "Wunstorf", "Wedemark")
+            if re.search(rf"\b{fold(location)}\b", folded)
+        ),
+        "",
+    )
+    if supported_location:
+        return (
+            "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+            "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
+            f"am Standort {supported_location} durchgeführt?"
         )
     return current
 

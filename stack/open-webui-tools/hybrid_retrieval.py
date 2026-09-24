@@ -60,6 +60,7 @@ class RetrievedChunk:
     chunk_kind: str = "text"
     functional_contact: dict | None = None
     contact_error: str = ""
+    document_overview: bool = False
 
 
 class SparseQueryEncoder(Protocol):
@@ -792,6 +793,12 @@ def document_overview_intent(query: str) -> bool:
         "alle kapitel", "alle punkte", "vollstandiger uberblick", "zusammenfassung des dokuments",
     )):
         return True
+    if re.search(r"\bwie\s+arbeit\w*\s+ich\b", folded):
+        # A question about working in an area or with a system normally asks
+        # for the end-to-end process, not one independently reranked step.
+        # The caller still requires one focused document whose numbered
+        # chapters fit within the bounded response context.
+        return True
     words = re.findall(r"[a-z0-9_-]+", folded)
     if len(words) <= 4 and len(_title_terms(query)) >= 2:
         # A bare, uniquely focused document title means "load this document",
@@ -800,6 +807,11 @@ def document_overview_intent(query: str) -> bool:
     return len(words) <= 8 and (
         folded.startswith("was steht in ") or folded.startswith("worum geht es in ")
     )
+
+
+_NUMBERED_MAIN_CHAPTER_HEADING = re.compile(
+    r"^\s*(\d{1,3})(?:(?:[.)]\s+)|\s+)"
+)
 
 
 def structural_document_overview(
@@ -816,7 +828,7 @@ def structural_document_overview(
         path = tuple((point.get("payload") or {}).get("heading_path") or ())
         number = None
         for heading in path:
-            match = re.match(r"^\s*(\d{1,3})[.)]\s+", str(heading))
+            match = _NUMBERED_MAIN_CHAPTER_HEADING.match(str(heading))
             if match:
                 number = int(match.group(1))
                 break
@@ -852,21 +864,42 @@ def merge_overview_chapters(
     for chapter_indices, score in chapters:
         first = candidates[chapter_indices[0]]
         payload = dict(first.get("payload") or {})
-        contents = [
-            str((candidates[index].get("payload") or {}).get("parent_content")
-                or (candidates[index].get("payload") or {}).get("content") or "").strip()
-            for index in chapter_indices
-        ]
+        contents = []
+        previous_was_ocr = False
+        for index in chapter_indices:
+            chunk_payload = candidates[index].get("payload") or {}
+            content = str(
+                chunk_payload.get("parent_content") or chunk_payload.get("content") or ""
+            ).strip()
+            if not content:
+                continue
+            heading_path = chunk_payload.get("heading_path") or ()
+            is_ocr = any(
+                "bildinhalt" in str(heading).casefold()
+                and "ocr" in str(heading).casefold()
+                for heading in heading_path
+            )
+            if is_ocr:
+                content = "#### Zusätzlicher Bildinhalt (OCR, automatisch erkannt)\n" + content
+            elif previous_was_ocr:
+                chapter_heading = next(
+                    str(heading) for heading in heading_path
+                    if _NUMBERED_MAIN_CHAPTER_HEADING.match(str(heading))
+                )
+                content = f"#### {chapter_heading}\n{content}"
+            contents.append(content)
+            previous_was_ocr = is_ocr
         chapter_content = "\n\n".join(content for content in contents if content)
         path = tuple(payload.get("heading_path") or ())
         for position, heading in enumerate(path):
-            if re.match(r"^\s*\d{1,3}[.)]\s+", str(heading)):
+            if _NUMBERED_MAIN_CHAPTER_HEADING.match(str(heading)):
                 path = path[:position + 1]
                 break
         payload.update({
             "content": chapter_content,
             "parent_content": chapter_content,
             "heading_path": list(path),
+            "document_overview": True,
         })
         merged.append({**first, "payload": payload})
         ranked.append((len(merged) - 1, score))
@@ -1112,10 +1145,12 @@ class QdrantHybridRetriever:
             if identifiers
         }
         selected_document_ids.discard("")
+        complete_document_points_loaded = False
         if selected_document_ids:
             complete_points = self._validate_points(self._document_points(selected_document_ids, acl), scope, today)
             complete_points = [point for point in complete_points if point["payload"].get("document_id") in selected_document_ids and point["payload"].get("chunk_kind") != "retrieval_hint"]
             if complete_points:
+                complete_document_points_loaded = True
                 candidates = [
                     point for point in self._parent_centered(complete_points, 256)
                     if not _metadata_only(point)
@@ -1179,6 +1214,32 @@ class QdrantHybridRetriever:
             )
             if focused_ids and document_overview_intent(query) else []
         )
+        if (
+            overview_selection
+            and selected_document_ids
+            and not complete_document_points_loaded
+        ):
+            # A transient scroll failure must not turn a complete-document
+            # request into an OCR-heavy partial overview. Retry only the same
+            # ACL-filtered active document once; no model or broader search is
+            # involved. If recovery is still incomplete, keep the original
+            # fail-closed selection path below.
+            recovered_points = self._validate_points(
+                self._document_points(selected_document_ids, acl), scope, today
+            )
+            recovered_candidates = [
+                point
+                for point in self._parent_centered(recovered_points, 256)
+                if not _metadata_only(point)
+                and point["payload"].get("document_id") in selected_document_ids
+                and point["payload"].get("chunk_kind") != "retrieval_hint"
+            ]
+            recovered_overview = structural_document_overview(
+                recovered_candidates, (), result_limit=result_limit,
+            )
+            if recovered_overview:
+                candidates = recovered_candidates
+                overview_selection = recovered_overview
         exact_opening_hours = select_exact_location_opening_hours(
             query, reranked, candidates, result_limit=result_limit,
         )
@@ -1248,6 +1309,7 @@ class QdrantHybridRetriever:
                 classification_confidence=float(payload.get("classification_confidence") or 0),
                 chunk_kind=payload.get("chunk_kind") or "text",
                 functional_contact=self._contact(point),
+                document_overview=bool(payload.get("document_overview")),
             ))
         checks = {}
         observed = {}
