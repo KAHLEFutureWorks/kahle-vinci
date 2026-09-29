@@ -1270,7 +1270,7 @@ git commit -m "test(eval): record offline harness routing baseline"
 
 - [ ] **Step 1: Bestehende Tests als Sicherheitsnetz laufen lassen**
 
-Run: `cd eval/rag && PYTHONPATH="$PWD:$PWD/../../stack/kb-sync" ../../.venv-verify/Scripts/python.exe -m pytest tests -q -p no:cacheprovider; cd ../..`
+Run: `cd eval/rag && W=$(cd ../.. && pwd -W) && PYTHONPATH="$W/eval/rag;$W/stack/kb-sync" ../../.venv-verify/Scripts/python.exe -m pytest tests -q -p no:cacheprovider; cd ../..`
 Expected: alle bestehenden Tests PASS
 
 - [ ] **Step 2: Refactoring ohne Verhaltensänderung**
@@ -1318,7 +1318,7 @@ In `eval/rag/run_runtime_eval.py` den Teil von `ask()` ab `started = self.sessio
 
 - [ ] **Step 3: Tests erneut laufen lassen**
 
-Run: `cd eval/rag && PYTHONPATH="$PWD:$PWD/../../stack/kb-sync" ../../.venv-verify/Scripts/python.exe -m pytest tests -q -p no:cacheprovider; cd ../..`
+Run: `cd eval/rag && W=$(cd ../.. && pwd -W) && PYTHONPATH="$W/eval/rag;$W/stack/kb-sync" ../../.venv-verify/Scripts/python.exe -m pytest tests -q -p no:cacheprovider; cd ../..`
 Expected: gleiche Anzahl PASS wie in Step 1
 
 - [ ] **Step 4: Commit**
