@@ -678,10 +678,6 @@ def _opt_out_location(query: str) -> str:
         name for name in _SUPPORTED_OPT_OUT_LOCATIONS
         if _fold(name) == _fold(value)
     ), "")
-    folded = _fold(query)
-    matches = [(match.start(), location) for location in _REQUEST_LOCATIONS
-               for match in re.finditer(r"\b" + re.escape(_fold(location)) + r"\b", folded)]
-    return max(matches)[1] if matches else ""
 
 
 def _opt_out_contract_scope(query: str, evidence: EvidenceBundle) -> dict[str, str]:
