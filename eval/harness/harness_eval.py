@@ -18,6 +18,23 @@ import yaml
 SCHEMA_VERSION = "kahle.harness-eval.v1"
 CORPUS_SCHEMA_VERSION = "kahle.harness-routing-cases.v1"
 KNOWLEDGE_TOOLS = frozenset({"personio_directory", "rag_chat"})
+# Only codes that signal a false statement or a missing proof count as
+# blocking. Heuristic validator codes produce false alarms (analysis K4).
+BLOCKING_VIOLATION_CODES = frozenset(
+    {
+        "answer_missing",
+        "unknown_source_id",
+        "citation_missing",
+        "unbound_contact_literal",
+        "unbound_link_target",
+        "contact_link_mismatch",
+        "required_document_sections_missing",
+    }
+)
+_ABSTENTION = re.compile(
+    r"(?i)\b(?:keine\s+(?:verlässliche|verlaessliche|passende)\s+freigegebene"
+    r"|kein(?:e)?\s+intern(?:es|en)?\s+(?:wissen|informationen?))"
+)
 _CASE_ID = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 _BOOLEAN_FLAGS = ("expected_procedural", "expect_abstention")
 
@@ -157,3 +174,92 @@ def summarize_routing(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
         for model, entry in sorted(models.items())
     }
+
+
+def actual_knowledge_tools(message: dict[str, Any]) -> frozenset[str]:
+    names = {
+        str(item.get("name") or "")
+        for item in message.get("output") or ()
+        if isinstance(item, dict) and item.get("type") == "function_call"
+    }
+    metrics = message.get("kahle_harness_metrics") or {}
+    comparison = metrics.get("routing_comparison") or {}
+    names.update(str(tool) for tool in comparison.get("actual_tools") or ())
+    return frozenset(names) & KNOWLEDGE_TOOLS
+
+
+def answer_text(message: dict[str, Any]) -> str:
+    content = str(message.get("content") or "").strip()
+    if content:
+        return content
+    parts = [
+        str(part.get("text") or "")
+        for item in message.get("output") or ()
+        if isinstance(item, dict) and item.get("type") == "message"
+        for part in item.get("content") or ()
+        if isinstance(part, dict) and part.get("type") == "output_text"
+    ]
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _last_validation_attempt(message: dict[str, Any]) -> dict[str, Any]:
+    attempts = (message.get("kahle_answer_validation") or {}).get("attempts") or []
+    last = attempts[-1] if attempts else {}
+    return last if isinstance(last, dict) else {}
+
+
+def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
+    text = answer_text(message)
+    attempt = _last_validation_attempt(message)
+    codes = {
+        str(violation.get("code") or "")
+        for violation in attempt.get("violations") or ()
+        if isinstance(violation, dict)
+    }
+    abstained = bool(_ABSTENTION.search(text))
+    latency = (message.get("kahle_harness_metrics") or {}).get("latency_ms")
+    return {
+        "blocking_violations": sorted(codes & BLOCKING_VIOLATION_CODES),
+        "validation_status": str(attempt.get("status") or "not_run"),
+        "abstained": abstained,
+        "abstention_correct": (
+            None if case.expect_abstention is None else abstained == case.expect_abstention
+        ),
+        "answer_present": bool(text),
+        "latency_ms": (
+            int(latency) if isinstance(latency, (int, float)) and latency >= 0 else None
+        ),
+    }
+
+
+def summarize_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["model"]), []).append(row)
+    summary: dict[str, Any] = {}
+    for model, items in sorted(grouped.items()):
+        checked = [row for row in items if row.get("abstention_correct") is not None]
+        latencies = [row["latency_ms"] for row in items if isinstance(row.get("latency_ms"), int)]
+        walls = [row["wall_ms"] for row in items if isinstance(row.get("wall_ms"), int)]
+        codes = Counter(
+            code for row in items for code in row.get("blocking_violations") or ()
+        )
+        summary[model] = {
+            "total": len(items),
+            "answer_present_rate": _rate(
+                sum(bool(row.get("answer_present")) for row in items), len(items)
+            ),
+            "blocking_violation_rate": _rate(
+                sum(bool(row.get("blocking_violations")) for row in items), len(items)
+            ),
+            "blocking_violation_codes": dict(sorted(codes.items())),
+            "abstention_checked": len(checked),
+            "abstention_accuracy": _rate(
+                sum(bool(row["abstention_correct"]) for row in checked), len(checked)
+            ),
+            "latency_p50_ms": nearest_rank(latencies, 0.5),
+            "latency_p95_ms": nearest_rank(latencies, 0.95),
+            "wall_p50_ms": nearest_rank(walls, 0.5),
+            "wall_p95_ms": nearest_rank(walls, 0.95),
+        }
+    return summary

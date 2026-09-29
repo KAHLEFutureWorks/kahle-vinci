@@ -1,6 +1,18 @@
+import json
+
 import pytest
 
-from harness_eval import load_cases, nearest_rank, routing_outcome, summarize_routing
+from harness_eval import (
+    RoutingCase,
+    actual_knowledge_tools,
+    answer_text,
+    load_cases,
+    nearest_rank,
+    routing_outcome,
+    score_answer,
+    summarize_answers,
+    summarize_routing,
+)
 
 
 def test_harness_module_is_importable_from_eval_paths():
@@ -124,3 +136,97 @@ def test_summarize_routing_groups_by_model_and_category():
     assert summary["m1"]["procedural_checked"] == 2
     assert summary["m1"]["procedural_accuracy"] == 0.5
     assert summary["m2"]["accuracy"] == 0.0
+
+
+def _message(text="", violations=(), status="accepted", latency=1200, tools=(), actual=()):
+    return {
+        "content": text,
+        "output": [
+            *({"type": "function_call", "name": name} for name in tools),
+            {"type": "message", "content": [{"type": "output_text", "text": text}]},
+        ],
+        "kahle_answer_validation": {
+            "attempts": [{"status": status, "violations": [{"code": code} for code in violations]}]
+        },
+        "kahle_harness_metrics": {
+            "latency_ms": latency,
+            "routing_comparison": {"actual_tools": list(actual)},
+        },
+    }
+
+
+def _case(expect_abstention=None):
+    return RoutingCase(
+        case_id="some_case",
+        category="procedure",
+        question="Frage?",
+        expected_tools=frozenset({"rag_chat"}),
+        expect_abstention=expect_abstention,
+    )
+
+
+def test_actual_knowledge_tools_combines_calls_and_metrics():
+    message = _message(tools=("rag_chat", "safe_webcaller"), actual=("personio_directory",))
+
+    assert actual_knowledge_tools(message) == frozenset({"rag_chat", "personio_directory"})
+
+
+def test_answer_text_falls_back_to_output_items():
+    message = _message(text="Belegte Antwort [R1].")
+    message["content"] = ""
+
+    assert answer_text(message) == "Belegte Antwort [R1]."
+
+
+def test_score_answer_keeps_only_blocking_codes_and_no_text():
+    message = _message(
+        text="Dazu habe ich keine verlässliche freigegebene Information.",
+        violations=("unsupported_technical_approval", "unknown_source_id"),
+        status="retry_required",
+    )
+
+    score = score_answer(_case(expect_abstention=True), message)
+
+    assert score == {
+        "blocking_violations": ["unknown_source_id"],
+        "validation_status": "retry_required",
+        "abstained": True,
+        "abstention_correct": True,
+        "answer_present": True,
+        "latency_ms": 1200,
+    }
+    assert "verlässliche" not in json.dumps(score, ensure_ascii=False)
+
+
+def test_score_answer_without_validation_or_expectation():
+    message = {"content": "Antwort", "output": []}
+
+    score = score_answer(_case(), message)
+
+    assert score["validation_status"] == "not_run"
+    assert score["blocking_violations"] == []
+    assert score["abstention_correct"] is None
+    assert score["latency_ms"] is None
+
+
+def test_summarize_answers_rates_and_latency():
+    rows = [
+        {"model": "m", "answer_present": True, "blocking_violations": ["citation_missing"],
+         "abstention_correct": True, "latency_ms": 100, "wall_ms": 1000},
+        {"model": "m", "answer_present": True, "blocking_violations": [],
+         "abstention_correct": False, "latency_ms": 300, "wall_ms": 3000},
+        {"model": "m", "answer_present": False, "blocking_violations": [],
+         "abstention_correct": None, "latency_ms": None, "wall_ms": 2000},
+    ]
+
+    summary = summarize_answers(rows)["m"]
+
+    assert summary["total"] == 3
+    assert summary["answer_present_rate"] == 0.6667
+    assert summary["blocking_violation_rate"] == 0.3333
+    assert summary["blocking_violation_codes"] == {"citation_missing": 1}
+    assert summary["abstention_checked"] == 2
+    assert summary["abstention_accuracy"] == 0.5
+    assert summary["latency_p50_ms"] == 100
+    assert summary["latency_p95_ms"] == 300
+    assert summary["wall_p50_ms"] == 2000
