@@ -1321,9 +1321,9 @@ def _is_procedural(query: str) -> bool:
     return bool(
         re.search(
             r"\bwie\s+(?:"
-            r"kann|muss|soll|darf|gehe|verfahre|funktioniert|laeuft|"
-            r"bedien|nutz|verwend|richt|beantrag|aender|pfleg|meld|"
-            r"fuehr|oeffn|waehl|trag|gib|erfass|speicher|bestaetig|"
+            r"kann|muss|soll|darf|gehe|verfahre|funktioniert|lae?uft|"
+            r"bedien|nutz|verwend|richt|beantrag|ae?nder|pfleg|meld|"
+            r"fue?hr|oe?ffn|wae?hl|trag|gib|erfass|speicher|bestae?tig|"
             r"erstell|plan|buch|sperr"
             r")\w*\b",
             intent_text,
@@ -2178,14 +2178,14 @@ def _supported_claims(context: str) -> tuple[str, ...]:
 def _procedure_is_supported(context: str) -> bool:
     folded = _fold(context)
     action_patterns = (
-        r"\bo?ffn\w*",
+        r"\b(?:oe|o)?ffn\w*",
         r"\bnavigier\w*",
         r"\bklick\w*",
-        r"\bwaehl\w*",
+        r"\bwae?hl\w*",
         r"\b(?:eingeb\w*|gib)\b",
         r"\berfass\w*",
         r"\bspeicher\w*",
-        r"\bbestaetig\w*",
+        r"\bbestae?tig\w*",
         r"\berstell\w*",
     )
     return sum(bool(re.search(pattern, folded)) for pattern in action_patterns) >= 3
