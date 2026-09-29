@@ -1,13 +1,12 @@
 import pytest
 
-from harness_eval import load_cases
+from harness_eval import load_cases, nearest_rank, routing_outcome, summarize_routing
 
 
 def test_harness_module_is_importable_from_eval_paths():
     import kahle_knowledge_harness
 
     assert kahle_knowledge_harness.SCHEMA_VERSION == "kahle.knowledge-harness.v1"
-
 
 
 def _write(tmp_path, body):
@@ -80,3 +79,48 @@ def test_load_cases_rejects_duplicates_and_unknown_schema(tmp_path):
         load_cases(_write(tmp_path, duplicate))
     with pytest.raises(ValueError, match="schema_version"):
         load_cases(_write(tmp_path, "schema_version: other\ncases: []\n"))
+
+
+@pytest.mark.parametrize(
+    "expected, actual, outcome",
+    [
+        ({"rag_chat"}, {"rag_chat"}, "correct"),
+        (set(), set(), "correct"),
+        (set(), {"web_search"}, "correct"),
+        ({"personio_directory", "rag_chat"}, {"rag_chat"}, "missing_source"),
+        ({"rag_chat"}, set(), "missing_source"),
+        ({"rag_chat"}, {"personio_directory", "rag_chat"}, "extra_source"),
+        (set(), {"rag_chat"}, "extra_source"),
+        ({"rag_chat"}, {"personio_directory"}, "wrong_source"),
+    ],
+)
+def test_routing_outcome_compares_only_knowledge_tools(expected, actual, outcome):
+    assert routing_outcome(expected, actual) == outcome
+
+
+def test_nearest_rank_percentiles():
+    assert nearest_rank([], 0.5) is None
+    assert nearest_rank([400, 100, 300, 200], 0.5) == 200
+    assert nearest_rank([400, 100, 300, 200], 0.95) == 400
+
+
+def test_summarize_routing_groups_by_model_and_category():
+    rows = [
+        {"model": "m1", "category": "procedure", "outcome": "correct", "procedural_match": True},
+        {"model": "m1", "category": "procedure", "outcome": "correct", "procedural_match": False},
+        {"model": "m1", "category": "responsibility", "outcome": "wrong_source"},
+        {"model": "m2", "category": "procedure", "outcome": "error"},
+    ]
+
+    summary = summarize_routing(rows)
+
+    assert summary["m1"]["total"] == 3
+    assert summary["m1"]["correct"] == 2
+    assert summary["m1"]["accuracy"] == 0.6667
+    assert summary["m1"]["outcomes"] == {"correct": 2, "wrong_source": 1}
+    assert summary["m1"]["by_category"]["responsibility"] == {
+        "total": 1, "correct": 0, "accuracy": 0.0,
+    }
+    assert summary["m1"]["procedural_checked"] == 2
+    assert summary["m1"]["procedural_accuracy"] == 0.5
+    assert summary["m2"]["accuracy"] == 0.0

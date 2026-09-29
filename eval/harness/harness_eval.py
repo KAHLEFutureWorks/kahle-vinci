@@ -6,10 +6,12 @@ latencies only. Questions and answer texts never leave this module.
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -88,3 +90,70 @@ def load_cases(path: Path) -> list[RoutingCase]:
     if duplicates:
         raise ValueError(f"Doppelte Fall-IDs: {duplicates}")
     return cases
+
+
+def routing_outcome(expected: Iterable[str], actual: Iterable[str]) -> str:
+    expected_set = frozenset(expected) & KNOWLEDGE_TOOLS
+    actual_set = frozenset(actual) & KNOWLEDGE_TOOLS
+    if actual_set == expected_set:
+        return "correct"
+    if actual_set < expected_set:
+        return "missing_source"
+    if actual_set > expected_set:
+        return "extra_source"
+    return "wrong_source"
+
+
+def nearest_rank(values: list[int], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, math.ceil(percentile * len(ordered)))
+    return ordered[rank - 1]
+
+
+def _rate(part: int, total: int) -> float:
+    return round(part / total, 4) if total else 0.0
+
+
+def summarize_routing(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    models: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        entry = models.setdefault(
+            str(row["model"]),
+            {
+                "total": 0,
+                "correct": 0,
+                "outcomes": Counter(),
+                "categories": {},
+                "procedural_checked": 0,
+                "procedural_correct": 0,
+            },
+        )
+        correct = row["outcome"] == "correct"
+        entry["total"] += 1
+        entry["correct"] += int(correct)
+        entry["outcomes"][str(row["outcome"])] += 1
+        category = entry["categories"].setdefault(str(row["category"]), [0, 0])
+        category[0] += 1
+        category[1] += int(correct)
+        if row.get("procedural_match") is not None:
+            entry["procedural_checked"] += 1
+            entry["procedural_correct"] += int(bool(row["procedural_match"]))
+    return {
+        model: {
+            "total": entry["total"],
+            "correct": entry["correct"],
+            "accuracy": _rate(entry["correct"], entry["total"]),
+            "outcomes": dict(sorted(entry["outcomes"].items())),
+            "by_category": {
+                name: {"total": total, "correct": correct, "accuracy": _rate(correct, total)}
+                for name, (total, correct) in sorted(entry["categories"].items())
+            },
+            "procedural_checked": entry["procedural_checked"],
+            "procedural_accuracy": _rate(
+                entry["procedural_correct"], entry["procedural_checked"]
+            ),
+        }
+        for model, entry in sorted(models.items())
+    }
