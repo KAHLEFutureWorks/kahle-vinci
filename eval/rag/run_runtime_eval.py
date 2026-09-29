@@ -146,7 +146,14 @@ class OpenWebUIRuntimeClient:
         }
         if state:
             body["chat_id"] = state.chat_id
+        return self._start_and_wait(body, assistant_message_id, state)
 
+    def _start_and_wait(
+        self,
+        body: dict[str, Any],
+        assistant_message_id: str,
+        state: ConversationState | None,
+    ) -> tuple[dict, ConversationState]:
         started = self.session.post(
             f"{self.base_url}/api/chat/completions", json=body, timeout=self.timeout_seconds
         )
