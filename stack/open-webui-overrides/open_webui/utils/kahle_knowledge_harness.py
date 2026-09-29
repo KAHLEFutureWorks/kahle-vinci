@@ -1304,6 +1304,13 @@ def summarize_harness_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# ``_fold`` drops "ß", so "heißt" arrives as "heit".
+_FIRST_PERSON_HOW_TO = re.compile(
+    r"\bwie\s+(?!(?:bin|ist|sind|war|waren|heit|heisst|heisse|viele?|lange|alt|oft)\b)"
+    r"\w+\s+(?:ich|man|wir)\b"
+)
+
+
 def _is_procedural(query: str) -> bool:
     folded = _fold(query)
     intent_text = re.sub(
@@ -1328,6 +1335,7 @@ def _is_procedural(query: str) -> bool:
             r")\w*\b",
             intent_text,
         )
+        or _FIRST_PERSON_HOW_TO.search(intent_text)
     )
 
 

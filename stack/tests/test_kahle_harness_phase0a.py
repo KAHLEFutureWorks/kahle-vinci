@@ -42,3 +42,31 @@ def test_procedural_detection_is_independent_of_umlaut_spelling(umlaut, ascii_fo
 )
 def test_procedure_support_counts_umlaut_and_ascii_action_verbs(context):
     assert load_harness()._procedure_is_supported(context) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Wie lege ich einen Neukunden in Vaudis an?",
+        "Wie storniere ich eine Rechnung?",
+        "Wie reserviere ich einen Leihwagen für einen Werkstattkunden?",
+        "Wie hinterlege ich einen Werbewiderspruch in Vaudis?",
+        "Wie macht man eine Garantieanfrage?",
+    ],
+)
+def test_first_person_how_to_questions_are_procedural(query):
+    assert load_harness()._is_procedural(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Wie heißt der Serviceleiter in Wunstorf?",
+        "Wie viele Serviceberater gibt es in Nienburg?",
+        "Wie bin ich bei KAHLE versichert?",
+        "Wie ist das Wetter heute?",
+        "Was bedeutet TD?",
+    ],
+)
+def test_non_procedural_how_questions_stay_non_procedural(query):
+    assert load_harness()._is_procedural(query) is False
