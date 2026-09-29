@@ -173,3 +173,11 @@ def test_main_writes_rows_and_summary_per_model(tmp_path, monkeypatch):
     assert len(rows) == 4
     assert all(client.deleted == ["chat-0"] for client in FakeClient.instances)
     assert "Antwort" not in rows_path.read_text(encoding="utf-8")
+
+
+def test_default_models_are_the_registered_vinci_model_ids():
+    assert runtime_harness_eval.DEFAULT_MODELS == (
+        "vinci-2-clone-clone-clone",
+        "kahle-vinci-thinking",
+        "kahle-vinci-max-thinking",
+    )

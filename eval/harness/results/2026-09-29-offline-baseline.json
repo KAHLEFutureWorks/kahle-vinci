@@ -1,16 +1,16 @@
 {
   "schema_version": "kahle.harness-eval.v1",
   "mode": "offline_planner",
-  "generated_at": "2026-09-29T10:21:11+00:00",
+  "generated_at": "2026-09-29T10:42:33+00:00",
   "case_count": 99,
   "summary": {
     "legacy-planner": {
       "total": 99,
-      "correct": 84,
-      "accuracy": 0.8485,
+      "correct": 86,
+      "accuracy": 0.8687,
       "outcomes": {
-        "correct": 84,
-        "extra_source": 8,
+        "correct": 86,
+        "extra_source": 6,
         "missing_source": 1,
         "wrong_source": 6
       },
@@ -26,9 +26,9 @@
           "accuracy": 0.6667
         },
         "functional_contact": {
-          "total": 6,
+          "total": 4,
           "correct": 4,
-          "accuracy": 0.6667
+          "accuracy": 1.0
         },
         "internal_knowledge": {
           "total": 6,
@@ -51,8 +51,8 @@
           "accuracy": 1.0
         },
         "organization_contact": {
-          "total": 6,
-          "correct": 6,
+          "total": 8,
+          "correct": 8,
           "accuracy": 1.0
         },
         "person_process": {
@@ -841,15 +841,16 @@
     {
       "model": "legacy-planner",
       "case_id": "functional_sick_note",
-      "category": "functional_contact",
+      "category": "organization_contact",
       "expected_tools": [
+        "personio_directory",
         "rag_chat"
       ],
       "actual_tools": [
         "personio_directory",
         "rag_chat"
       ],
-      "outcome": "extra_source",
+      "outcome": "correct",
       "findings": []
     },
     {
@@ -894,15 +895,16 @@
     {
       "model": "legacy-planner",
       "case_id": "functional_applications_submit",
-      "category": "functional_contact",
+      "category": "organization_contact",
       "expected_tools": [
+        "personio_directory",
         "rag_chat"
       ],
       "actual_tools": [
         "personio_directory",
         "rag_chat"
       ],
-      "outcome": "extra_source",
+      "outcome": "correct",
       "findings": []
     },
     {

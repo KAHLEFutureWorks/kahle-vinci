@@ -209,8 +209,10 @@ neuer Vertrag mit unterschiedlicher Evidenzbasis im Kontext.
 - **U3: Pauschale Enthaltung per Stichwort.** Fragen mit „Mahnung“ oder
   „Kundenbeschwerde“ bekommen immer `unsupported`, unabhängig von der Evidenz
   (`_functional_responsibility_evidence`).
-- **U4: Fest verdrahtete Modell-ID** `vinci-2-clone-clone-clone` in
-  `_is_general_vinci_model`.
+- **U4 (korrigiert 29.09.):** `vinci-2-clone-clone-clone` ist die registrierte
+  Modell-ID von KAHLE-Vinci (`scripts/openwebui/register-kahle-workflow-tool.py`),
+  keine Altlast. Offen bleibt nur, dass die ID an vier Stellen dupliziert ist
+  (Middleware, Evidenzsitzung, `owui_productivity.py`, Registrierungsskript).
 - **U5: Drei parallele Klassifikatoren** für dieselbe Frage, jeder mit eigenen
   Wortlisten:
   - Harness `_is_procedural`

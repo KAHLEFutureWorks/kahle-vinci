@@ -61,13 +61,13 @@ cases:
   - {id: responsibility_work_instruction_approval, category: responsibility, question: "Wer ist für die Freigabe von Arbeitsanweisungen verantwortlich?", expected_tools: [rag_chat], findings: [K2]}
   - {id: responsibility_vehicle_prep, category: responsibility, question: "Welche Rolle ist für die Fahrzeugaufbereitung verantwortlich?", expected_tools: [rag_chat], findings: [K2]}
   - {id: responsibility_data_access, category: responsibility, question: "Wer ist zuständig, wenn ein Kunde eine Datenauskunft verlangt?", expected_tools: [rag_chat], findings: [K2]}
-  # --- RAG: Funktionspostfächer und Kontaktwege ---
+  # --- RAG: Funktionspostfächer; Funktionsthemen-Kontakte sind gemischt (ADR-008) ---
   - {id: functional_applications_mailbox, category: functional_contact, question: "Wie lautet das Funktionspostfach für Bewerbungen?", expected_tools: [rag_chat]}
-  - {id: functional_sick_note, category: functional_contact, question: "Wohin schicke ich eine Krankmeldung?", expected_tools: [rag_chat]}
+  - {id: functional_sick_note, category: organization_contact, question: "Wohin schicke ich eine Krankmeldung?", expected_tools: [personio_directory, rag_chat]}
   - {id: functional_privacy_central, category: functional_contact, question: "Gibt es eine zentrale E-Mail-Adresse für Datenschutzanfragen?", expected_tools: [rag_chat]}
   - {id: functional_it_contact_page, category: functional_contact, question: "Wo finde ich die Kontaktseite der IT?", expected_tools: [rag_chat]}
   - {id: functional_it_ticket, category: functional_contact, question: "Wie melde ich ein IT-Problem, gibt es ein Ticketsystem?", expected_tools: [rag_chat]}
-  - {id: functional_applications_submit, category: functional_contact, question: "An wen reiche ich Bewerbungen ein?", expected_tools: [rag_chat]}
+  - {id: functional_applications_submit, category: organization_contact, question: "An wen reiche ich Bewerbungen ein?", expected_tools: [personio_directory, rag_chat]}
   # --- Beide: Abteilungskontakte ---
   - {id: org_contact_accounting, category: organization_contact, question: "Wie erreiche ich die Buchhaltung?", expected_tools: [personio_directory, rag_chat]}
   - {id: org_contact_hr_extension, category: organization_contact, question: "Was ist die Durchwahl der Personalabteilung?", expected_tools: [personio_directory, rag_chat]}

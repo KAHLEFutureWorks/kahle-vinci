@@ -32,7 +32,7 @@ from harness_eval import (  # noqa: E402
 )
 from run_runtime_eval import OpenWebUIRuntimeClient  # noqa: E402
 
-DEFAULT_MODELS = ("kahle-vinci", "kahle-vinci-thinking", "kahle-vinci-max-thinking")
+DEFAULT_MODELS = ("vinci-2-clone-clone-clone", "kahle-vinci-thinking", "kahle-vinci-max-thinking")
 DEFAULT_CASES = Path(__file__).with_name("routing_cases.yml")
 
 
