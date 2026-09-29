@@ -1338,6 +1338,110 @@ def test_filename_from_unicode_escape_request_is_readable_ascii():
     assert "pesto_erklaerung" in double_escaped
 
 
+def test_previous_answer_json_string_is_decoded_for_word_for_word_export():
+    module = load_module()
+    answer = "# Kostenübersicht CATCH CRM\n\n| Position | Betrag |\n| --- | ---: |\n| Modul | 511,00 € |"
+    messages = [{"role": "assistant", "content": json.dumps(answer, ensure_ascii=True)}, {"role": "assistant", "content": ""}]
+    assert module._latest_previous_assistant(messages, 1) == answer
+
+
+def test_guard_does_not_use_clarification_in_place_of_previous_result():
+    module = load_module()
+    messages = [
+        {"role": "assistant", "content": "# Alte Tabelle\n\n| A | B |\n|---|---|\n|1|2|"},
+        {"role": "assistant", "content": "Um eine präzise Recherche durchzuführen, benötige ich weitere Details. Bitte präzisiere deine Anfrage."},
+        {"role": "assistant", "content": ""},
+    ]
+    assert module._latest_previous_assistant(messages, 2) == ""
+
+
+def test_export_uses_answer_heading_for_pdf_title_and_filename():
+    module = load_module()
+    content = "# Kostenübersicht CATCH CRM\n\n| Position | Betrag |\n| --- | ---: |\n| Modul | 511,00 € |"
+    captured = {}
+    original_post = module.requests.post
+    old_key = os.environ.get("OWUI_FILE_PROXY_API_KEY")
+
+    class Response:
+        status_code = 200
+        def json(self):
+            return {"download_url": "http://localhost/files/download?token=test", "filename": captured["payload"]["filename"], "sha256": "abc", "size_bytes": 100}
+
+    try:
+        os.environ["OWUI_FILE_PROXY_API_KEY"] = "test"
+        module.requests.post = lambda url, json, headers, timeout: (captured.update(payload=json) or Response())
+        message = {"role": "assistant", "content": ""}
+        module._write_file_response(message, content, "pdf", "Bitte gib mir das Ergebnis als PDF aus")
+        assert captured["payload"]["content"] == content
+        assert captured["payload"]["title"] == "Kostenübersicht CATCH CRM"
+        assert captured["payload"]["filename"] == "kostenuebersicht_catch_crm.pdf"
+    finally:
+        module.requests.post = original_post
+        if old_key is None:
+            os.environ.pop("OWUI_FILE_PROXY_API_KEY", None)
+        else:
+            os.environ["OWUI_FILE_PROXY_API_KEY"] = old_key
+
+
+def test_guard_title_uses_bold_heading_without_upload_name():
+    module = load_module()
+    content = "**Kostenübersicht CATCH CRM (Stand September 2026)** – aus Pasted_Text_1790604286468.txt\n\n| Position | Betrag |"
+    assert module._export_title_from_content(content) == "Kostenübersicht CATCH CRM (Stand September 2026)"
+
+
+def test_blocked_web_notice_cannot_be_saved_as_pdf():
+    module = load_module()
+    content = "# Kostenübersicht CATCH CRM\n\n## Kernaussagen\n\nIch kann die Websuche nicht ausführen, weil sensible Daten erkannt wurden."
+    original_post = module.requests.post
+    old_key = os.environ.get("OWUI_FILE_PROXY_API_KEY")
+    try:
+        os.environ["OWUI_FILE_PROXY_API_KEY"] = "test"
+        module.requests.post = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("blocked content reached file proxy"))
+        result = module._create_file(content, "pdf", "kostenuebersicht.pdf")
+        assert result["ok"] is False
+        assert result["error"] == "blocked_export_source"
+    finally:
+        module.requests.post = original_post
+        if old_key is None:
+            os.environ.pop("OWUI_FILE_PROXY_API_KEY", None)
+        else:
+            os.environ["OWUI_FILE_PROXY_API_KEY"] = old_key
+
+
+def test_missing_previous_result_does_not_synthesize_pdf():
+    module = load_module()
+    original_create = module._create_file
+    original_synthesize = module._synthesize_requested_file_content
+    try:
+        module._create_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no file"))
+        module._synthesize_requested_file_content = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no synthesis"))
+        body = {"messages": [
+            {"role": "user", "content": "Kannst du mir das Ergebnis bitte als PDF ausgeben?"},
+            {"role": "assistant", "content": "Ich werde die PDF erstellen."},
+        ]}
+        result = module.Filter().outlet(body)
+        assert "Kein vorheriger Ergebnistext" in result["messages"][-1]["content"]
+        assert "Download-Link" not in result["messages"][-1]["content"]
+    finally:
+        module._create_file = original_create
+        module._synthesize_requested_file_content = original_synthesize
+
+
+def test_other_chat_reference_does_not_export_local_answer():
+    module = load_module()
+    original_create = module._create_file
+    try:
+        module._create_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("wrong answer"))
+        body = {"messages": [
+            {"role": "assistant", "content": "# Andere Antwort\n\nAnderer Inhalt"},
+            {"role": "user", "content": "Erstelle die Kostenübersicht als PDF wie im vorherigen Chat dargestellt"},
+            {"role": "assistant", "content": "Ich werde die PDF erstellen."},
+        ]}
+        result = module.Filter().outlet(body)
+        assert "anderen Chat" in result["messages"][-1]["content"]
+        assert "Download-Link" not in result["messages"][-1]["content"]
+    finally:
+        module._create_file = original_create
 def test_visible_workflow_pseudo_call_with_powerpoint_request_does_not_create_pptx():
     module = load_module()
     original_create = module._create_file

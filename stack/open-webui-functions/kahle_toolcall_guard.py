@@ -291,7 +291,19 @@ def _latest_previous_assistant(messages: list[dict[str, Any]], current_index: in
         if item.get("role") != "assistant":
             continue
         content = str(item.get("content") or "").strip()
+        if content.startswith('"'):
+            try:
+                decoded = json.loads(content)
+                if isinstance(decoded, str):
+                    content = decoded.strip()
+            except (ValueError, TypeError):
+                pass
         content = _strip_pseudo_toolcall(content)
+        lower = content.lower()
+        if _blocked_export_source(content) or any(
+            marker in lower for marker in ("benötige ich weitere details", "benoetige ich weitere details", "bitte präzisiere", "bitte praezisiere")
+        ):
+            return ""
         if (
             content
             and not PSEUDO_TOOLCALL_RE.search(content)
@@ -349,9 +361,29 @@ def _slugify(value: str, default: str = "kahle_vinci_ergebnis") -> str:
     return (text[:80].strip("_") or default)
 
 
-def _filename_from_request(request_text: str, fmt: str) -> str:
+def _export_title_from_content(content: str) -> str:
+    for raw in (content or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        heading = re.match(r"^#{1,6}\s+(.+)$", line)
+        if heading:
+            return heading.group(1).strip()
+        bold_heading = re.match(r"^\*\*(.{8,120}?)\*\*(?:\s|$)", line)
+        if bold_heading:
+            return bold_heading.group(1).strip()
+        if 8 <= len(line) <= 120 and not line.startswith(("|", "-", "*", ">")) and not line.endswith((".", ":")):
+            return line
+        break
+    return "KAHLE-Vinci Ergebnis"
+
+
+def _filename_from_request(request_text: str, fmt: str, source_content: str = "") -> str:
     ext = "md" if fmt == "md" else fmt
-    return f"{_slugify(request_text)}.{ext}"
+    title = _extract_requested_title(request_text, "") or _export_title_from_content(source_content)
+    if title == "KAHLE-Vinci Ergebnis":
+        title = request_text
+    return f"{_slugify(title)}.{ext}"
 
 
 def _download_format(result: dict[str, Any]) -> str:
@@ -1252,7 +1284,16 @@ def _is_substantive_file_content(content: str) -> bool:
     lower = text.lower()
     if lower.startswith(("ich werde", "ich kann", "bitte einen moment", "einen moment bitte")):
         return False
+    if _blocked_export_source(text):
+        return False
     return True
+
+
+def _blocked_export_source(content: str) -> bool:
+    return bool(re.search(
+        r"(?im)^\s*(?:ich kann die websuche nicht ausf|ausgabe wurde aus sicherheitsgr)",
+        content or "",
+    ))
 
 
 def _write_file_response(message: dict[str, Any], source_content: str, output_format: str, request_text: str, messages: list[dict[str, Any]] | None = None) -> bool:
@@ -1270,7 +1311,7 @@ def _write_file_response(message: dict[str, Any], source_content: str, output_fo
         else:
             result = {"ok": False, "error": "Kein belastbarer interner Kontext für das interaktive Formular gefunden"}
     else:
-        result = _create_file(source_content, output_format, _filename_from_request(request_text, output_format))
+        result = _create_file(source_content, output_format, _filename_from_request(request_text, output_format, source_content))
     if result.get("download_url"):
         _set_message_content(message, _download_format(result))
     else:
@@ -1763,6 +1804,8 @@ def _synthesize_requested_file_content(request_text: str) -> str:
 
 
 def _create_file(content: str, output_format: str, filename: str) -> dict[str, Any]:
+    if _blocked_export_source(content):
+        return {"ok": False, "error": "blocked_export_source"}
     if requests is None:
         return {"ok": False, "error": "Python package requests is not available"}
 
@@ -1782,7 +1825,7 @@ def _create_file(content: str, output_format: str, filename: str) -> dict[str, A
 
     payload: dict[str, Any] = {"filename": filename, "content": content}
     if output_format in {"pdf", "docx"}:
-        payload["title"] = "KAHLE-Vinci Ergebnis"
+        payload["title"] = _export_title_from_content(content)
 
     try:
         response = requests.post(
@@ -2265,6 +2308,14 @@ class Filter:
                 _set_message_content(message, _download_format(file_saved_payload))
                 continue
 
+            if (
+                index == len(messages) - 1
+                and _infer_requested_file_format(request_text) in {"pdf", "docx", "md"}
+                and re.search(r"\b(?:vorherigen|vorherigem|letzten)\s+chat\b", request_text, re.IGNORECASE)
+            ):
+                _set_message_content(message, "Tool-Fehler: Auf Inhalte aus einem anderen Chat kann ich hier nicht eindeutig zugreifen. Bitte füge die Antwort im aktuellen Chat ein.")
+                continue
+
             safe_web_source_result = _extract_safe_webcaller_source_result(message)
             if safe_web_source_result and (
                 _message_contains_pseudo_toolcall(message)
@@ -2445,6 +2496,9 @@ class Filter:
                 if not source_content:
                     source_content = _strip_file_creation_promises(content)
                 if not _is_substantive_file_content(source_content):
+                    if _is_previous_result_file_request(request_text):
+                        _set_message_content(message, "Tool-Fehler: Kein vorheriger Ergebnistext gefunden, aus dem eine Datei erstellt werden kann.")
+                        continue
                     source_content = _synthesize_requested_file_content(request_text)
                 if not _is_substantive_file_content(source_content):
                     _set_message_content(message, "Tool-Fehler: Der Dokumentinhalt konnte nicht erzeugt werden.")

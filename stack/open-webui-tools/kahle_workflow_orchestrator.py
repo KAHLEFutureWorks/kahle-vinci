@@ -46,7 +46,7 @@ def _coerce_message_text(value: Any) -> str:
         return ""
     if isinstance(value, str):
         text = value.strip()
-        if text and text[0] in "[{":
+        if text and text[0] in '[{"':
             try:
                 return _coerce_message_text(json.loads(text))
             except Exception:
@@ -88,6 +88,8 @@ def _looks_like_non_result_assistant(text: str) -> bool:
         return True
     if _looks_like_generated_file_claim(lower):
         return True
+    if lower.startswith(("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr")):
+        return True
     if any(
         marker in lower
         for marker in (
@@ -102,7 +104,7 @@ def _looks_like_non_result_assistant(text: str) -> bool:
     return False
 
 
-def _latest_chat_message(chat_id: str | None, role: str, *, require_result: bool = False) -> str:
+def _latest_chat_message(chat_id: str | None, role: str, *, require_result: bool = False, skip: int = 0) -> str:
     chat_id = (chat_id or "").strip()
     if not chat_id:
         return ""
@@ -129,11 +131,20 @@ def _latest_chat_message(chat_id: str | None, role: str, *, require_result: bool
             con.close()
         except Exception:
             pass
+    skipped = 0
     for row in rows or []:
         text = _coerce_message_text(row["content"])
         if not text:
             continue
         if require_result and role == "assistant" and _looks_like_non_result_assistant(text):
+            lower = text.lower()
+            if lower.startswith(("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr")) or any(
+                marker in lower for marker in ("benötige ich weitere details", "benoetige ich weitere details", "bitte präzisiere", "bitte praezisiere")
+            ):
+                return ""
+            continue
+        if skipped < skip:
+            skipped += 1
             continue
         return text
     return ""
@@ -141,6 +152,12 @@ def _latest_chat_message(chat_id: str | None, role: str, *, require_result: bool
 
 def _looks_like_previous_result_request(text: str) -> bool:
     lower = (text or "").lower()
+    asks_new_research = re.search(r"\b(recherchiere|suche|finde)\b", lower)
+    negates_research = re.search(r"\b(?:recherchiere|suche|finde)\s+nicht\b|\bohne\s+(?:neue\s+)?recherche\b", lower)
+    if asks_new_research and not negates_research:
+        return False
+    if re.search(r"\b(?:vorherigen|vorherigem|letzten)\s+chat\b", lower) and re.search(r"\b(pdf|docx|word|datei)\b", lower):
+        return True
     if any(
         marker in lower
         for marker in (
@@ -159,8 +176,12 @@ def _looks_like_previous_result_request(text: str) -> bool:
         )
     ):
         return True
-    if re.search(r"\b(recherchiere|suche|finde|erstelle)\b", lower):
+    if re.search(r"\b(erstelle)\b", lower) and not re.search(r"\b(das|dieses|diese|daraus)\b", lower):
         return False
+    if re.search(r"\b(das|dieses|diese|tabellen?)\b", lower) and re.search(
+        r"\b(pdf|docx|word|markdown|datei)\b", lower
+    ) and re.search(r"\b(nochmal|erneut|als|ausgeben|erstellen|speichern)\b", lower):
+        return True
     return bool(
         re.search(r"\b(ergebnis|antwort|recherche)\b", lower)
         and re.search(r"\b(pdf|docx|word|powerpoint|pptx|markdown|datei|download)\b", lower)
@@ -509,6 +530,28 @@ def suggest_output_filename(auftrag: str, output_format: str) -> str:
     return f"{stem}.{ext}"
 
 
+def _previous_result_title(content: str, request_context: str = "") -> str:
+    for raw in (content or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        heading = re.match(r"^#{1,6}\s+(.+)$", line)
+        if heading:
+            return heading.group(1).strip()
+        bold_heading = re.match(r"^\*\*(.{8,120}?)\*\*(?:\s|$)", line)
+        if bold_heading:
+            return bold_heading.group(1).strip()
+        if 8 <= len(line) <= 120 and not line.startswith(("|", "-", "*", ">")) and not line.endswith((".", ":")):
+            return line
+        break
+    context = re.sub(r"(?i)^bitte\s+", "", request_context.strip())
+    context = re.sub(r"(?i)^(?:liste|zähl|zaehl)\s+mir\s+auf,?\s*", "", context)
+    context = context.strip(" .?!")
+    if 8 <= len(context) <= 120:
+        return context[0].upper() + context[1:]
+    return "KAHLE-Vinci Ergebnis"
+
+
 def build_web_search_query(auftrag: str) -> str:
     """Build a focused external web query for the safe-search workflow."""
     original = str(auftrag or "").strip()
@@ -608,7 +651,10 @@ def parse_web_result(raw: str) -> dict[str, Any]:
     sources = data.get("sources") if isinstance(data.get("sources"), list) else []
     top_links = data.get("topLinks") if isinstance(data.get("topLinks"), list) else []
     ok = bool(data.get("ok", False))
-    if not ok and (str(summary).strip() or sources or top_links) and not data.get("error") and not data.get("blocked"):
+    blocked_notice = str(summary).strip().lower().startswith(("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr"))
+    if blocked_notice:
+        ok = False
+    if not ok and not blocked_notice and (str(summary).strip() or sources or top_links) and not data.get("error") and not data.get("blocked"):
         ok = True
     return {
         "ok": ok,
@@ -1033,6 +1079,13 @@ class Tools:
                 "hint": "Das Modell hat das Workflow-Tool ohne Parameter aufgerufen. Starte den Toolcall erneut mit der aktuellen Nutzeraufgabe im Feld 'auftrag'.",
             })
 
+        current_user_request = _latest_chat_message(__chat_id__, "user")
+        if _looks_like_previous_result_request(current_user_request):
+            user_download_format = resolve_explicit_download_format(current_user_request, "auto")
+            if user_download_format != "none":
+                auftrag = current_user_request
+                output_format = user_download_format
+
         download_format = resolve_explicit_download_format(auftrag, output_format)
         if _looks_like_interactive_form_request(auftrag, download_format):
             rag_query=f"{auftrag} zentrale Inhalte Regeln Pflichten Ausnahmen Prozesse Prüfkriterien"
@@ -1079,14 +1132,23 @@ class Tools:
                 "answer_instruction": "Wenn generated_file.download_url vorhanden ist: Gib ausschliesslich Download-Link und Metadaten aus. Wenn nicht: Gib generated_file.error kurz aus.",
             })
         if download_format != "none" and _looks_like_previous_result_request(auftrag):
+            if re.search(r"\b(?:vorherigen|vorherigem|letzten)\s+chat\b", auftrag, re.IGNORECASE):
+                return _json({
+                    "workflow": "kahle_workflow_execute", "auftrag": auftrag,
+                    "intent": "previous_result_file", "status": "blocked",
+                    "error": "previous_chat_unavailable",
+                    "answer_instruction": "Auf Inhalte aus einem anderen Chat kann ich hier nicht eindeutig zugreifen. Bitte fuege die Antwort im aktuellen Chat ein.",
+                })
             previous_answer = _latest_chat_message(__chat_id__, "assistant", require_result=True)
             if previous_answer:
-                out_name = str(filename or "").strip() or suggest_output_filename(auftrag, download_format)
+                source_request = _latest_chat_message(__chat_id__, "user", skip=1)
+                document_title = _previous_result_title(previous_answer, source_request)
+                out_name = str(filename or "").strip() or suggest_output_filename(document_title, download_format)
                 file_result = create_downloadable_file(
                     previous_answer,
                     download_format,
                     out_name,
-                    title="KAHLE-Vinci Ergebnis",
+                    title=document_title,
                 )
                 return _json(
                     {
@@ -1105,6 +1167,12 @@ class Tools:
                         ),
                     }
                 )
+            return _json({
+                "workflow": "kahle_workflow_execute", "auftrag": auftrag,
+                "intent": "previous_result_file", "status": "blocked",
+                "error": "previous_result_unavailable",
+                "answer_instruction": "Die vorherige Antwort ist nicht eindeutig verfügbar. Bitte gib an, welche Antwort exportiert werden soll.",
+            })
 
         if _looks_like_direct_document_request(auftrag, download_format):
             direct_title = _requested_document_title(auftrag, fallback="KAHLE-Vinci Dokument")

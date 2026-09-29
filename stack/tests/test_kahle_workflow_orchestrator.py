@@ -120,6 +120,30 @@ def test_previous_result_request_is_detected_for_common_pdf_followup():
     assert module._looks_like_previous_result_request("Bitte gib mir das Ergebnis als PDF aus") is True
     assert module._looks_like_previous_result_request("Danke, gib mir das Ergebnis jetzt bitte zusaetzlich als PDF aus.") is True
     assert module._looks_like_previous_result_request("Kannst du die Recherche als PDF speichern?") is True
+    assert module._looks_like_previous_result_request("Kannst du mir das als schöne PDF erstellen?") is True
+    assert module._looks_like_previous_result_request("Bitte versuche mir die Tabellen nochmal als PDF auszugeben") is True
+    assert module._looks_like_previous_result_request("Erstelle die Kostenübersicht als PDF wie im vorherigen Chat dargestellt") is True
+    assert module._looks_like_previous_result_request("Bitte recherchiere nicht erneut; gib mir das Ergebnis als PDF") is True
+
+
+def test_json_encoded_previous_answer_is_decoded_without_rewriting_content():
+    module = load_module()
+    answer = "# Kostenübersicht CATCH CRM\n\n| Position | Betrag |\n| --- | ---: |\n| Modul | 511,00 € |"
+    assert module._coerce_message_text(json.dumps(answer, ensure_ascii=True)) == answer
+    assert module._coerce_message_text(r"Der Code enthält wörtlich \n und \u202f.") == r"Der Code enthält wörtlich \n und \u202f."
+
+
+def test_export_title_uses_bold_heading_without_uploaded_source_suffix():
+    module = load_module()
+    content = "**Kostenübersicht CATCH CRM (Stand September 2026)** – aus Pasted_Text_1790604286468.txt\n\n| Position | Betrag |"
+    assert module._previous_result_title(content) == "Kostenübersicht CATCH CRM (Stand September 2026)"
+
+
+def test_blocked_web_notice_is_not_exportable_research_or_previous_answer():
+    module = load_module()
+    notice = "Ich kann die Websuche nicht ausführen, weil sensible Daten/Identifier erkannt wurden."
+    assert module.parse_web_result(json.dumps({"ok": True, "summary": notice, "sources": []}))["ok"] is False
+    assert module._looks_like_non_result_assistant(notice) is True
 
 
 def test_powerpoint_output_is_not_offered_as_document_generation_format():
@@ -434,9 +458,10 @@ def test_workflow_creates_pdf_from_previous_assistant_result_followup():
             "insert into chat_message values (?, 'user', ?, 20, 20)",
             ("chat-2", "Bitte gib mir das Ergebnis als PDF aus."),
         )
+        answer = "# Kostenübersicht CATCH CRM\n\n| Position | Betrag |\n| --- | ---: |\n| Modul | 511,00 € |"
         con.execute(
             "insert into chat_message values (?, 'assistant', ?, 10, 10)",
-            ("chat-2", "# Recherche\n\nCUPRA Tindaya ist ein Konzeptfahrzeug."),
+            ("chat-2", json.dumps(answer, ensure_ascii=True)),
         )
         con.commit()
         con.close()
@@ -450,6 +475,8 @@ def test_workflow_creates_pdf_from_previous_assistant_result_followup():
             def fake_create(content, output_format, filename, title=""):
                 captured["content"] = content
                 captured["output_format"] = output_format
+                captured["filename"] = filename
+                captured["title"] = title
                 return {
                     "output_kind": "file_saved",
                     "filename": filename,
@@ -468,8 +495,95 @@ def test_workflow_creates_pdf_from_previous_assistant_result_followup():
             )
             payload = json.loads(raw)
             assert payload["intent"] == "previous_result_file"
-            assert "CUPRA Tindaya ist ein Konzeptfahrzeug" in captured["content"]
+            assert captured["content"] == answer
+            assert captured["title"] == "Kostenübersicht CATCH CRM"
+            assert captured["filename"] == "kostenuebersicht_catch_crm.pdf"
             assert payload["download_url"].endswith("token=test")
+        finally:
+            module.create_downloadable_file = original_create
+            if old is None:
+                os.environ.pop("OWUI_DB_PATH", None)
+            else:
+                os.environ["OWUI_DB_PATH"] = old
+
+
+def test_previous_result_export_without_answer_does_not_research_or_create_file():
+    module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "webui.db"
+        con = sqlite3.connect(db_path)
+        con.execute("create table chat_message (chat_id text, role text, content text, created_at integer, updated_at integer)")
+        con.commit()
+        con.close()
+        old = os.environ.get("OWUI_DB_PATH")
+        os.environ["OWUI_DB_PATH"] = str(db_path)
+        original_create = module.create_downloadable_file
+        try:
+            module.create_downloadable_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no file"))
+            tools = module.Tools()
+            tools._run_internal_rag = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no RAG"))
+            tools._run_external_websearch = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no web"))
+            result = json.loads(asyncio.run(tools.kahle_workflow_execute(
+                "Kannst du mir das als schöne PDF erstellen?", output_format="pdf", __chat_id__="empty-chat"
+            )))
+            assert result["status"] == "blocked"
+            assert result["error"] == "previous_result_unavailable"
+            assert not result.get("download_url")
+        finally:
+            module.create_downloadable_file = original_create
+            if old is None:
+                os.environ.pop("OWUI_DB_PATH", None)
+            else:
+                os.environ["OWUI_DB_PATH"] = old
+
+
+def test_blocked_latest_answer_does_not_export_older_unrelated_answer():
+    module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "webui.db"
+        con = sqlite3.connect(db_path)
+        con.execute("create table chat_message (chat_id text, role text, content text, created_at integer, updated_at integer)")
+        con.execute("insert into chat_message values (?, 'assistant', ?, 10, 10)", ("chat-blocked", "# Alte Tabelle\n\n| A | B |\n|---|---|\n|1|2|"))
+        con.execute("insert into chat_message values (?, 'assistant', ?, 20, 20)", ("chat-blocked", "Ich kann die Websuche nicht ausführen, weil sensible Daten erkannt wurden."))
+        con.commit()
+        con.close()
+        old = os.environ.get("OWUI_DB_PATH")
+        os.environ["OWUI_DB_PATH"] = str(db_path)
+        original_create = module.create_downloadable_file
+        try:
+            module.create_downloadable_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("old answer must not be exported"))
+            result = json.loads(asyncio.run(module.Tools().kahle_workflow_execute(
+                "Bitte gib mir das Ergebnis als PDF aus.", output_format="pdf", __chat_id__="chat-blocked"
+            )))
+            assert result["status"] == "blocked"
+            assert result["error"] == "previous_result_unavailable"
+        finally:
+            module.create_downloadable_file = original_create
+            if old is None:
+                os.environ.pop("OWUI_DB_PATH", None)
+            else:
+                os.environ["OWUI_DB_PATH"] = old
+
+
+def test_previous_chat_reference_does_not_export_current_chat_answer():
+    module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "webui.db"
+        con = sqlite3.connect(db_path)
+        con.execute("create table chat_message (chat_id text, role text, content text, created_at integer, updated_at integer)")
+        con.execute("insert into chat_message values (?, 'assistant', ?, 10, 10)", ("current-chat", "# Andere Antwort\n\nAnderer Inhalt"))
+        con.commit()
+        con.close()
+        old = os.environ.get("OWUI_DB_PATH")
+        os.environ["OWUI_DB_PATH"] = str(db_path)
+        original_create = module.create_downloadable_file
+        try:
+            module.create_downloadable_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("wrong chat answer"))
+            result = json.loads(asyncio.run(module.Tools().kahle_workflow_execute(
+                "Erstelle die Kostenübersicht als PDF wie im vorherigen Chat dargestellt", output_format="pdf", __chat_id__="current-chat"
+            )))
+            assert result["status"] == "blocked"
+            assert result["error"] == "previous_chat_unavailable"
         finally:
             module.create_downloadable_file = original_create
             if old is None:
@@ -540,6 +654,105 @@ def test_workflow_skips_current_empty_assistant_when_creating_previous_result_do
                 os.environ["OWUI_DB_PATH"] = old
 
 
+def test_workflow_uses_original_followup_when_model_rewrites_word_export_as_research():
+    module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "webui.db"
+        con = sqlite3.connect(db_path)
+        con.execute(
+            "create table chat_message (chat_id text, role text, content text, created_at integer, updated_at integer)"
+        )
+        answer = "## Kundensperre in Vaudis\n\nSchritt 1: Sperre setzen.\n\nSchritt 2: Dokumentieren."
+        con.execute(
+            "insert into chat_message values (?, 'assistant', ?, 10, 10)",
+            ("word-chat", json.dumps(answer, ensure_ascii=True)),
+        )
+        con.execute(
+            "insert into chat_message values (?, 'user', ?, 20, 20)",
+            ("word-chat", json.dumps("Bitte gib mir das einmal als Word aus")),
+        )
+        con.commit()
+        con.close()
+
+        old = os.environ.get("OWUI_DB_PATH")
+        os.environ["OWUI_DB_PATH"] = str(db_path)
+        original_create = module.create_downloadable_file
+        try:
+            captured = {}
+
+            def fake_create(content, output_format, filename, title=""):
+                captured.update(content=content, output_format=output_format, filename=filename, title=title)
+                return {"download_url": "http://localhost:8091/files/download?token=test", "filename": filename}
+
+            module.create_downloadable_file = fake_create
+            rewritten = (
+                "Erstelle eine DOCX-Datei mit dem vollständigen Prozess zur temporären "
+                "Kundensperre in Vaudis. Alle Schritte aus der vorherigen Antwort übernehmen."
+            )
+            result = json.loads(asyncio.run(module.Tools().kahle_workflow_execute(
+                rewritten, output_format="docx", __chat_id__="word-chat"
+            )))
+            assert result["intent"] == "previous_result_file"
+            assert captured["content"] == answer
+            assert captured["output_format"] == "docx"
+            assert captured["title"] == "Kundensperre in Vaudis"
+        finally:
+            module.create_downloadable_file = original_create
+            if old is None:
+                os.environ.pop("OWUI_DB_PATH", None)
+            else:
+                os.environ["OWUI_DB_PATH"] = old
+
+
+def test_previous_result_without_heading_uses_original_question_for_document_name():
+    module = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "webui.db"
+        con = sqlite3.connect(db_path)
+        con.execute(
+            "create table chat_message (chat_id text, role text, content text, created_at integer, updated_at integer)"
+        )
+        con.execute(
+            "insert into chat_message values (?, 'user', ?, 10, 10)",
+            ("capabilities-chat", "Bitte Liste mir auf, was du für mich machen kannst"),
+        )
+        answer = "Ich kann dir bei einer Vielzahl von Aufgaben helfen.\n\n1. Informationen bereitstellen."
+        con.execute(
+            "insert into chat_message values (?, 'assistant', ?, 20, 20)",
+            ("capabilities-chat", answer),
+        )
+        con.execute(
+            "insert into chat_message values (?, 'user', ?, 30, 30)",
+            ("capabilities-chat", "Bitte gib mir das Ergebnis einmal als PDF aus"),
+        )
+        con.commit()
+        con.close()
+        old = os.environ.get("OWUI_DB_PATH")
+        os.environ["OWUI_DB_PATH"] = str(db_path)
+        original_create = module.create_downloadable_file
+        try:
+            captured = {}
+
+            def fake_create(content, output_format, filename, title=""):
+                captured.update(content=content, filename=filename, title=title)
+                return {"download_url": "http://localhost:8091/files/download?token=test", "filename": filename}
+
+            module.create_downloadable_file = fake_create
+            result = json.loads(asyncio.run(module.Tools().kahle_workflow_execute(
+                "Bitte gib mir das Ergebnis einmal als PDF aus", __chat_id__="capabilities-chat"
+            )))
+            assert result["intent"] == "previous_result_file"
+            assert captured["content"] == answer
+            assert captured["title"] == "Was du für mich machen kannst"
+            assert captured["filename"] == "was_du_fuer_mich_machen_kannst.pdf"
+        finally:
+            module.create_downloadable_file = original_create
+            if old is None:
+                os.environ.pop("OWUI_DB_PATH", None)
+            else:
+                os.environ["OWUI_DB_PATH"] = old
+
+
 def test_workflow_does_not_create_previous_result_file_from_clarification_only():
     module = load_module()
 
@@ -578,7 +791,9 @@ def test_workflow_does_not_create_previous_result_file_from_clarification_only()
                 )
             )
             payload = json.loads(raw)
-            assert payload["intent"] != "previous_result_file"
+            assert payload["intent"] == "previous_result_file"
+            assert payload["status"] == "blocked"
+            assert payload["error"] == "previous_result_unavailable"
             assert payload.get("download_url") is None
         finally:
             module.create_downloadable_file = original_create
