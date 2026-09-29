@@ -36,6 +36,7 @@ KNOWN_ALIASES = {
 
 _PERSON_NAME_WORD = (
     r"(?!(?:der|die|das|den|dem|ein|eine|einen|einem|einer|"
+    r"f(?:ü|ue|u)r|bei|mit|von|im|in|an|am|auf|zu|zum|zur|(?:ü|ue|u)ber|"
     r"ansprechpartner|kontakt(?:daten)?|rolle|position|abteilung|team|standort|"
     r"onboarding|prozess|verkaufer|serviceberater|servicekraft|mitarbeiter)\b)[\w.-]+"
 )
@@ -1390,9 +1391,20 @@ def classify_personio_directory_intent(query: str) -> str:
     return "directory_search"
 
 
+def _documented_responsibility_question(folded_query: str) -> bool:
+    """Responsibilities and role duties are documented process knowledge."""
+    return bool(re.search(
+        r"\b(?:zustandig\w*|verantwortlich\w*|kummer\w*\s+sich|"
+        r"welche\s+aufgaben|aufgaben\s+(?:hat|haben))\b",
+        folded_query,
+    ))
+
+
 def _directory_information_need(query: str) -> bool:
     folded = _fold(query)
     if _functional_responsibility_question(folded):
+        return False
+    if _documented_responsibility_question(folded) and not _has_named_person_reference(query):
         return False
     if _explicit_functional_contact_question(folded) and not _explicit_current_staff_request(folded):
         return False
@@ -1488,6 +1500,8 @@ def _rag_information_need(query: str) -> bool:
         folded,
     ):
         return False
+    if _documented_responsibility_question(folded):
+        return True
     relation = bool(
         re.search(r"\bmit\b.+\bzu\s+tun\b", folded)
         or re.search(r"\bhang\w*\b.*\bzusammen\b", folded)

@@ -70,3 +70,36 @@ def test_first_person_how_to_questions_are_procedural(query):
 )
 def test_non_procedural_how_questions_stay_non_procedural(query):
     assert load_harness()._is_procedural(query) is False
+
+
+def _tools(harness, query):
+    return harness.plan_retrieval(query, query, [], "test-model", {"user_id": "u"}).required_tools
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Wer ist für Garantieanträge zuständig?",
+        "Welche Aufgaben hat ein Serviceberater?",
+        "Wer kümmert sich um Leasingrückläufer?",
+        "Wer ist für die Freigabe von Arbeitsanweisungen verantwortlich?",
+    ],
+)
+def test_documented_responsibility_questions_use_rag_only(query):
+    assert _tools(load_harness(), query) == ("rag_chat",)
+
+
+@pytest.mark.parametrize(
+    "query, tools",
+    [
+        ("Wer ist Max Mustermann?", ("personio_directory",)),
+        ("Wer ist die Führungskraft von Anna Beispiel?", ("personio_directory",)),
+        ("Wer sind die Serviceberater in Wunstorf?", ("personio_directory",)),
+        (
+            "Welche Rolle hat Anna Beispiel und welche Aufgaben gehören laut Arbeitsanweisung dazu?",
+            ("personio_directory", "rag_chat"),
+        ),
+    ],
+)
+def test_person_questions_keep_their_directory_route(query, tools):
+    assert _tools(load_harness(), query) == tools
