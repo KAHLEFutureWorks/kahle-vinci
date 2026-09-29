@@ -1999,7 +1999,7 @@ def _extract_sources(text: str, context: str) -> tuple[dict[str, Any], ...]:
 
     fallback = []
     for number, title in re.findall(
-        r"(?im)^\[(?:#\s*|Quelle\s+)(\d+)\]\s*([^\n]*)$", context
+        r"(?im)^\[(?:#\s*|Quelle\s+)?(\d+)\]\s*([^\n]*)$", context
     ):
         fallback.append({"source_id": f"#{number}", "title": title.strip()})
     return tuple(fallback)
@@ -2034,7 +2034,7 @@ def rag_result_from_sources(sources: list[dict[str, Any]]) -> str:
             if not passage:
                 continue
             source_number += 1
-            context_blocks.append(f"[Quelle {source_number}] {title}\n{passage}")
+            context_blocks.append(f"[{source_number}] {title}\n{passage}")
             metadata = (
                 metadata_items[index]
                 if isinstance(metadata_items, list)
@@ -2127,7 +2127,7 @@ def _declared_evidence_bundle(
 
 def _supported_claims(context: str) -> tuple[str, ...]:
     claims = []
-    for block in re.split(r"(?im)(?=^\[(?:#\s*|Quelle\s+)\d+\])", context):
+    for block in re.split(r"(?im)(?=^\[(?:#\s*|Quelle\s+)?\d+\])", context):
         lines = [line.strip() for line in block.splitlines() if line.strip()]
         if len(lines) > 1:
             text = " ".join(lines[1:])

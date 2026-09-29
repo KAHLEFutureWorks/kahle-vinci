@@ -2816,7 +2816,7 @@ def test_rag_result_from_native_sources_reconstructs_evidence_context():
 
     assert "FOUND: true" in result
     assert "CONTEXT:" in result
-    assert "[Quelle 1] Freigegebener Prozess" in result
+    assert "[1] Freigegebener Prozess" in result
     assert "datenschutz@kahle.de" in result
     assert "SOURCES_JSON:" in result
 

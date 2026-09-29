@@ -89,3 +89,27 @@ def test_rag_context_uses_native_gapless_markers(monkeypatch):
     assert [source["number"] for source in sources] == [1, 2]
     assert [source["number"] for source in evidence_from_result(result)["sources"]] == [1, 2]
     assert "[1]" in result.split("INSTRUCTION: ", 1)[1].splitlines()[0]
+
+
+NATIVE_RESULT = (
+    "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
+    "[1] Dokument A | Abschnitt A\nErster Beleg.\n\n"
+    "[2] Dokument B | Abschnitt B\nZweiter Beleg.\n"
+    "FEEDBACK_LINK: /wissen/?feedback=1"
+)
+
+
+def test_harness_parses_native_numbered_context_blocks():
+    evidence = load_harness()._evidence_bundle(NATIVE_RESULT, procedural=False)
+
+    assert [source["source_id"] for source in evidence.sources] == ["#1", "#2"]
+    assert evidence.supported_claims == ("Erster Beleg.", "Zweiter Beleg.")
+
+
+def test_reconstructed_rag_result_uses_native_markers():
+    text = load_harness().rag_result_from_sources([
+        {"source": {"name": "Dokument A"}, "document": ["Erster Beleg."], "metadata": [{}]},
+    ])
+
+    assert "[1] Dokument A\nErster Beleg." in text
+    assert "[Quelle" not in text
