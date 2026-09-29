@@ -97,6 +97,7 @@ worktrees/
 /release/
 /kb-portal-data/
 eval/rag/results/rag-runtime-eval-*.jsonl
+eval/harness/results/*.jsonl
 /*-AKTUALISIERT.py
 /OWUI-File-Proxy-KURZE-DOWNLOADLINKS.py
 *.tsbuildinfo
