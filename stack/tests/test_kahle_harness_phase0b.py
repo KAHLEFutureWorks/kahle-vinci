@@ -169,3 +169,59 @@ def test_rag_citation_sources_come_first_and_are_emitted_in_the_native_tool_path
         r"_extract_kahle_rag_citation_sources\(tool_result\)",
         source,
     )
+
+
+CITATION_RULE = (
+    "Zitiere Dokumentbelege mit ihrer Nummer in eckigen Klammern, z. B. [1] oder [1, 2]; "
+    "Personio-Belege als [P1]."
+)
+
+
+@pytest.mark.parametrize("prompt_path", PROMPTS, ids=lambda path: path.name)
+def test_prompts_state_the_native_citation_rule(prompt_path):
+    assert CITATION_RULE in prompt_path.read_text(encoding="utf-8")
+
+
+def test_answer_contract_states_the_native_citation_rule():
+    harness = load_harness()
+    decision = harness.build_decision(
+        query="Wie plane ich einen Termin im WPS?",
+        resolved_query="Wie plane ich einen Termin im WPS?",
+        messages=[],
+        model_id="test-model",
+        permission_scope={"user_id": "u"},
+        rag_result=NATIVE_RESULT,
+    )
+
+    assert CITATION_RULE in decision.answer_prompt()
+
+
+def test_middleware_continuation_hint_uses_native_markers():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert "Quellenmarke [#]" not in source
+    assert "passenden Quellennummer, z. B. [1]" in source
+
+
+def _plain_decision():
+    return {
+        "evidence_bundle": {"status": "supported", "supported_claims": [], "sources": [{"number": 1}]},
+        "answer_contract": {},
+        "retrieval_plan": {"permission_scope": {"user_id": "u"}},
+        "resolved_context": {"retrieval_query": "Frage"},
+    }
+
+
+@pytest.mark.parametrize("marker", ["[Quelle 1]", "[#1]", "[R1]"])
+def test_legacy_citation_markers_are_advisory(marker):
+    result = load_harness().validate_answer(f"Belegte Aussage {marker}.", _plain_decision())
+
+    assert ("noncanonical_citation", "advisory") in [
+        (item["code"], item["severity"]) for item in result.violations
+    ]
+
+
+def test_native_citation_marker_is_accepted_without_findings():
+    result = load_harness().validate_answer("Belegte Aussage [1].", _plain_decision())
+
+    assert result.violations == ()

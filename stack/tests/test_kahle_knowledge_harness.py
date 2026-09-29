@@ -1856,8 +1856,14 @@ def test_endvalidator_accepts_only_known_personio_and_rag_citations():
 
     assert harness.validate_answer("Aktuelle Daten [P1], VSX-Bezug [R1].", decision).status == "accepted"
     unknown = harness.validate_answer("Aktuelle Daten [P9], VSX-Bezug [R9].", decision)
-    assert {item["code"] for item in unknown.violations} == {"unknown_source_id"}
-    assert unknown.violations[0]["source_ids"] == ["P9", "R9"]
+    # [R9] is also a legacy marker, recorded as advisory next to the blocking finding.
+    assert {item["code"] for item in unknown.violations} == {
+        "unknown_source_id", "noncanonical_citation",
+    }
+    unknown_source = next(
+        item for item in unknown.violations if item["code"] == "unknown_source_id"
+    )
+    assert unknown_source["source_ids"] == ["P9", "R9"]
 
 
 def test_process_question_does_not_enter_employee_directory_intent():

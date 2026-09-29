@@ -231,8 +231,8 @@ def _validation_decision():
 @pytest.mark.parametrize(
     "answer",
     [
-        "Die Rechnung liegt im Archiv [#1]. Eine Suche ist dort möglich.",
-        "Die Rechnung liegt im Archiv [#1]. Ohne Freigabe darfst du sie nicht löschen.",
+        "Die Rechnung liegt im Archiv [1]. Eine Suche ist dort möglich.",
+        "Die Rechnung liegt im Archiv [1]. Ohne Freigabe darfst du sie nicht löschen.",
     ],
 )
 def test_ordinary_wording_is_not_flagged_as_an_approval(answer):
@@ -245,9 +245,9 @@ def test_ordinary_wording_is_not_flagged_as_an_approval(answer):
 @pytest.mark.parametrize(
     "answer, code",
     [
-        ("Die Rechnung liegt im Archiv [#1]. Das ist technisch möglich.", "unsupported_technical_approval"),
-        ("Die Rechnung liegt im Archiv [#1]. Eine Datenschutzprüfung ist nicht erforderlich.", "unsupported_privacy_approval"),
-        ("Die Rechnung liegt im Archiv [#1]. Es bestehen keine datenschutzrechtlichen Bedenken.", "unsupported_privacy_approval"),
+        ("Die Rechnung liegt im Archiv [1]. Das ist technisch möglich.", "unsupported_technical_approval"),
+        ("Die Rechnung liegt im Archiv [1]. Eine Datenschutzprüfung ist nicht erforderlich.", "unsupported_privacy_approval"),
+        ("Die Rechnung liegt im Archiv [1]. Es bestehen keine datenschutzrechtlichen Bedenken.", "unsupported_privacy_approval"),
     ],
 )
 def test_heuristic_findings_are_advisory_and_do_not_require_retry(answer, code):
@@ -258,7 +258,7 @@ def test_heuristic_findings_are_advisory_and_do_not_require_retry(answer, code):
 
 
 def test_unknown_source_is_blocking_and_requires_retry():
-    result = load_harness().validate_answer("Die Rechnung liegt im Archiv [#7].", _validation_decision())
+    result = load_harness().validate_answer("Die Rechnung liegt im Archiv [7].", _validation_decision())
 
     assert result.status == "retry_required"
     assert {"code": "unknown_source_id", "severity": "blocking"}.items() <= result.violations[0].items()

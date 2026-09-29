@@ -348,6 +348,8 @@ class HarnessDecision:
             "Bei partially_supported beantworte ausschließlich die belegten Teile und "
             "benenne die fehlenden Informationen. Bei unsupported nutze kein allgemeines "
             "Modellwissen. Jede konkrete interne Aussage benötigt eine vorhandene Quellen-ID. "
+            "Zitiere Dokumentbelege mit ihrer Nummer in eckigen Klammern, z. B. [1] oder [1, 2]; "
+            "Personio-Belege als [P1]. "
             "Ergänze keine Beispiele, möglichen Eingabefelder, Alternativen, Ansprechpartner, "
             "Support-Verweise oder Handlungsempfehlungen, sofern diese nicht ausdrücklich in "
             "der Evidenz stehen. Wenn eine Anleitung fehlt, sage nur, welcher belegte Teil "
@@ -1106,6 +1108,12 @@ def validate_answer(
         add(
             "feedback_link_placeholder",
             "Die Antwort enthält einen Platzhalter statt des kanonischen Feedback-Links.",
+        )
+
+    if re.search(r"\[(?:Quelle\s*|#\s*)\d+\]|\[R\d+\]", text, re.IGNORECASE):
+        add(
+            "noncanonical_citation",
+            "Die Antwort verwendet ein altes Zitierformat statt [N] bzw. [P1].",
         )
 
     permission_scope = _mapping(retrieval_plan.get("permission_scope"))

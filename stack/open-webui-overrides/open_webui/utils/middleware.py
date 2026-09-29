@@ -5648,7 +5648,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 'Das gefundene Ergebnis steht vollstaendig im obigen <source>-Kontext. '
                 'Beantworte die urspruengliche Nutzerfrage JETZT direkt und ausschliesslich aus diesem Kontext. '
                 'Behaupte NICHT, es gebe kein internes Wissen oder keine Informationen. '
-                'Kennzeichne jede interne Tatsachenaussage mit der passenden Quellenmarke [#]. '
+                'Kennzeichne jede interne Tatsachenaussage mit der passenden Quellennummer, z. B. [1]. '
                 'Rufe KEIN weiteres Tool auf und gib KEINE Tool-Aufruf-Syntax aus.',
                 form_data['messages'],
                 append=True,
