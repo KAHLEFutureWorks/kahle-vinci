@@ -1,10 +1,14 @@
 import json
 
+import pytest
+
+import runtime_harness_eval
 from harness_eval import RoutingCase
 from runtime_harness_eval import (
     HarnessRuntimeClient,
     base_model_id,
     error_row,
+    main,
     model_tool_ids,
     run_case,
 )
@@ -106,3 +110,66 @@ def test_error_row_keeps_only_error_type():
     assert row["outcome"] == "error"
     assert row["error"] == "RuntimeError"
     assert "secret" not in json.dumps(row)
+
+
+class FakeClient:
+    instances = []
+
+    def __init__(self, base_url, api_key, model, timeout_seconds, poll_seconds):
+        self.model = model
+        self.deleted = []
+        FakeClient.instances.append(self)
+
+    def model_info(self):
+        return {"id": self.model, "info": {"base_model_id": f"base/{self.model}", "meta": {"toolIds": ["rag_chat"]}}}
+
+    def ask_messages(self, messages, tool_ids):
+        if "Kennung" in messages[-1]["content"]:
+            raise TimeoutError("upstream")
+        return {"content": "Antwort [R1].", "output": [{"type": "function_call", "name": "rag_chat"}]}, f"chat-{len(self.deleted)}"
+
+    def delete_chat(self, chat_id):
+        self.deleted.append(chat_id)
+
+
+def _cases_file(tmp_path):
+    path = tmp_path / "cases.yml"
+    path.write_text(
+        "schema_version: kahle.harness-routing-cases.v1\ncases:\n"
+        "  - {id: rag_case, category: procedure, question: 'Wie lege ich X an?', expected_tools: [rag_chat]}\n"
+        "  - {id: broken_case, category: unanswerable, question: 'Kennung ZX?', expected_tools: [rag_chat], expect_abstention: true}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_main_requires_api_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENWEBUI_API_KEY", raising=False)
+
+    with pytest.raises(SystemExit, match="OPENWEBUI_API_KEY"):
+        main(["--cases", str(_cases_file(tmp_path)), "--output-dir", str(tmp_path)])
+
+
+def test_main_writes_rows_and_summary_per_model(tmp_path, monkeypatch):
+    FakeClient.instances = []
+    monkeypatch.setenv("OPENWEBUI_API_KEY", "key")
+    monkeypatch.setattr(runtime_harness_eval, "HarnessRuntimeClient", FakeClient)
+
+    exit_code = main([
+        "--cases", str(_cases_file(tmp_path)),
+        "--output-dir", str(tmp_path),
+        "--models", "kahle-vinci,kahle-vinci-thinking",
+    ])
+
+    assert exit_code == 0
+    summary_path = next(tmp_path.glob("harness-runtime-eval-*.json"))
+    rows_path = next(tmp_path.glob("harness-runtime-eval-*.jsonl"))
+    report = json.loads(summary_path.read_text(encoding="utf-8"))
+    rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
+    assert report["mode"] == "runtime"
+    assert report["models"]["kahle-vinci"] == {"base_model_id": "base/kahle-vinci", "tool_ids": ["rag_chat"]}
+    assert report["routing"]["kahle-vinci"]["outcomes"] == {"correct": 1, "error": 1}
+    assert report["answers"]["kahle-vinci"]["total"] == 1
+    assert len(rows) == 4
+    assert all(client.deleted == ["chat-0"] for client in FakeClient.instances)
+    assert "Antwort" not in rows_path.read_text(encoding="utf-8")
