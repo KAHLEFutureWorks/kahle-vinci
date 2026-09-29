@@ -2013,6 +2013,71 @@ def _extract_sources(text: str, context: str) -> tuple[dict[str, Any], ...]:
     return tuple(fallback)
 
 
+def rag_result_source_count(rag_result: str) -> int:
+    """Number of numbered passages a rag_chat result exposes to the model."""
+    raw = _extract_marker(str(rag_result or ""), "SOURCES_JSON")
+    try:
+        sources = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        return 0
+    return sum(
+        1 for source in sources
+        if isinstance(source, dict) and isinstance(source.get("number"), int)
+    )
+
+
+def renumber_rag_result(rag_result: str, offset: int) -> str:
+    """Shift passage numbers so several rag_chat calls never share a [N]."""
+    text = str(rag_result or "")
+    if offset <= 0:
+        return text
+
+    def shift_number(match: re.Match) -> str:
+        return f"{match.group(1)}{int(match.group(2)) + offset}"
+
+    def shift_source(source: Any) -> Any:
+        if not isinstance(source, dict):
+            return source
+        shifted = dict(source)
+        if isinstance(shifted.get("number"), int):
+            shifted["number"] += offset
+        for key in ("id", "source_id"):
+            if isinstance(shifted.get(key), str):
+                shifted[key] = re.sub(r"^([#R]?)(\d+)$", shift_number, shifted[key])
+        return shifted
+
+    def shift_claim(claim: Any) -> Any:
+        shifted = shift_source(claim)
+        if isinstance(shifted, dict) and isinstance(shifted.get("claim_id"), str):
+            shifted["claim_id"] = re.sub(r"^(R)(\d+)(?=C)", shift_number, shifted["claim_id"])
+        return shifted
+
+    lines = []
+    in_context = False
+    for line in text.split("\n"):
+        if line.startswith("SOURCES_JSON: "):
+            in_context = False
+            sources = json.loads(line[len("SOURCES_JSON: "):])
+            line = "SOURCES_JSON: " + json.dumps(
+                [shift_source(source) for source in sources], ensure_ascii=False
+            )
+        elif line.startswith("EVIDENCE_BUNDLE_JSON: "):
+            bundle = json.loads(line[len("EVIDENCE_BUNDLE_JSON: "):])
+            bundle["sources"] = [shift_source(item) for item in bundle.get("sources") or ()]
+            bundle["supported_claims"] = [
+                shift_claim(item) for item in bundle.get("supported_claims") or ()
+            ]
+            line = "EVIDENCE_BUNDLE_JSON: " + json.dumps(
+                bundle, ensure_ascii=False, separators=(",", ":")
+            )
+        elif re.match(r"^[A-Z_]+:", line):
+            in_context = line.startswith("CONTEXT:")
+        elif in_context:
+            line = re.sub(r"^(\[)(\d+)(?=\] )", shift_number, line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def rag_result_from_sources(sources: list[dict[str, Any]]) -> str:
     """Return or reconstruct the rag_chat result carried by native source events."""
     for source in sources or []:

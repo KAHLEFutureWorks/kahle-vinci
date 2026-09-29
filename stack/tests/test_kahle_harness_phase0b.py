@@ -225,3 +225,47 @@ def test_native_citation_marker_is_accepted_without_findings():
     result = load_harness().validate_answer("Belegte Aussage [1].", _plain_decision())
 
     assert result.violations == ()
+
+
+def _bundle_result(numbers):
+    sources = [{"number": n, "title": f"D{n}", "source_url": f"/wissen/api/portal/sources/d{n}"} for n in numbers]
+    bundle = {
+        "schema_version": "kahle.evidence-bundle.v1",
+        "status": "supported",
+        "supported_claims": [
+            {"claim_id": f"R{n}C1", "source_id": f"#{n}", "text": f"Beleg {n}.", "evidence_span": f"Beleg {n}."}
+            for n in numbers
+        ],
+        "missing_information": [],
+        "conflicts": [],
+        "sources": [{"number": n, "document_id": f"d{n}"} for n in numbers],
+    }
+    context = "\n\n".join(f"[{n}] D{n} | A\nBeleg {n}." for n in numbers)
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        f"EVIDENCE_BUNDLE_JSON: {json.dumps(bundle)}\n"
+        "INSTRUCTION: Belege mit [1].\n"
+        f"CONTEXT:\n{context}\n"
+        f"SOURCES_JSON: {json.dumps(sources)}\n"
+        "FEEDBACK_LINK: /wissen/?feedback=1"
+    )
+
+
+def test_renumber_rag_result_shifts_markers_sources_and_claims():
+    harness = load_harness()
+    shifted = harness.renumber_rag_result(_bundle_result([1, 2]), 3)
+
+    assert harness.rag_result_source_count(_bundle_result([1, 2])) == 2
+    assert "[4] D1 | A" in shifted and "[5] D2 | A" in shifted
+    assert "INSTRUCTION: Belege mit [1]." in shifted
+    bundle = json.loads(shifted.split("EVIDENCE_BUNDLE_JSON: ", 1)[1].splitlines()[0])
+    assert [s["number"] for s in bundle["sources"]] == [4, 5]
+    assert [(c["claim_id"], c["source_id"]) for c in bundle["supported_claims"]] == [("R4C1", "#4"), ("R5C1", "#5")]
+    sources = json.loads(shifted.split("SOURCES_JSON: ", 1)[1].splitlines()[0])
+    assert [s["number"] for s in sources] == [4, 5]
+
+
+def test_renumber_with_zero_offset_is_identity():
+    result = _bundle_result([1])
+
+    assert load_harness().renumber_rag_result(result, 0) == result
