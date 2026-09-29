@@ -1,0 +1,157 @@
+schema_version: kahle.harness-routing-cases.v1
+# Erwartete Quellen nach ADR-008. Testnamen, keine realen Mitarbeiterdaten.
+# findings verweisen auf docs/research/2026-09-29-vinci-harness-analyse.md.
+cases:
+  # --- Personio: einzelne Person ---
+  - {id: person_profile_mustermann, category: personio_person, question: "Wer ist Max Mustermann?", expected_tools: [personio_directory]}
+  - {id: person_phone_mustermann, category: personio_person, question: "Welche Telefonnummer hat Max Mustermann?", expected_tools: [personio_directory]}
+  - {id: person_reach_beispiel, category: personio_person, question: "Wie erreiche ich Anna Beispiel?", expected_tools: [personio_directory]}
+  - {id: person_job_beispiel, category: personio_person, question: "Was macht Anna Beispiel bei uns?", expected_tools: [personio_directory]}
+  - {id: person_position_mustermann, category: personio_person, question: "Welche Position hat Max Mustermann?", expected_tools: [personio_directory]}
+  - {id: person_location_beispiel, category: personio_person, question: "Wo arbeitet Anna Beispiel?", expected_tools: [personio_directory]}
+  - {id: person_contact_mustermann, category: personio_person, question: "Kontaktdaten von Max Mustermann bitte", expected_tools: [personio_directory]}
+  - {id: person_info_beispiel, category: personio_person, question: "Infos über Anna Beispiel", expected_tools: [personio_directory]}
+  # --- Personio: Rollen- und Standortlisten ---
+  - {id: list_serviceberater_wunstorf, category: personio_list, question: "Wer sind die Serviceberater in Wunstorf?", expected_tools: [personio_directory]}
+  - {id: list_teiledienst_hannover, category: personio_list, question: "Welche Mitarbeiter arbeiten im Teiledienst in Hannover?", expected_tools: [personio_directory]}
+  - {id: list_serviceassistenz_nominal, category: personio_list, question: "Serviceassistenzen Neustadt", expected_tools: [personio_directory]}
+  - {id: list_verkaeufer_stadthagen, category: personio_list, question: "Liste mir alle Verkäufer in Stadthagen auf", expected_tools: [personio_directory]}
+  - {id: list_buchhaltung_people, category: personio_list, question: "Wer arbeitet in der Buchhaltung?", expected_tools: [personio_directory]}
+  - {id: list_marketing_people, category: personio_list, question: "Welche Kollegen sind im Marketing?", expected_tools: [personio_directory]}
+  - {id: list_automobilverkaeufer_walsrode, category: personio_list, question: "Gib mir die Automobilverkäufer in Walsrode", expected_tools: [personio_directory]}
+  - {id: list_count_serviceberater_nienburg, category: personio_list, question: "Wie viele Serviceberater gibt es in Nienburg?", expected_tools: [personio_directory]}
+  # --- Personio: Führungskräfte ---
+  - {id: supervisor_von_mustermann, category: supervisor, question: "Wer ist die Führungskraft von Max Mustermann?", expected_tools: [personio_directory]}
+  - {id: supervisor_vorgesetzter_beispiel, category: supervisor, question: "Wer ist der Vorgesetzte von Anna Beispiel?", expected_tools: [personio_directory]}
+  - {id: supervisor_genitive_mustermann, category: supervisor, question: "Wer ist Max Mustermanns Führungskraft?", expected_tools: [personio_directory]}
+  - {id: supervisor_typo, category: supervisor, question: "Wer ist die Fürhungskraft von Anna Beispiel?", expected_tools: [personio_directory]}
+  - {id: supervisor_team_lead_beispiel, category: supervisor, question: "Wer leitet das Team von Anna Beispiel?", expected_tools: [personio_directory]}
+  - {id: supervisor_role_group, category: supervisor, question: "Wer ist der Chef der Serviceberater in Wunstorf?", expected_tools: [personio_directory]}
+  # --- Personio: Onboarding-Personen ---
+  - {id: onboarding_people_now, category: onboarding_people, question: "Wer ist gerade im Onboarding?", expected_tools: [personio_directory]}
+  - {id: onboarding_people_month, category: onboarding_people, question: "Welche neuen Mitarbeiter kommen diesen Monat ins Onboarding?", expected_tools: [personio_directory]}
+  - {id: onboarding_people_hannover, category: onboarding_people, question: "Welche Mitarbeiter sind aktuell im Onboarding in Hannover?", expected_tools: [personio_directory]}
+  # --- RAG: Onboarding-Prozess ---
+  - {id: onboarding_process_flow, category: onboarding_process, question: "Wie läuft der Onboarding-Prozess für neue Mitarbeiter ab?", expected_tools: [rag_chat], expected_procedural: true}
+  - {id: onboarding_process_workshop, category: onboarding_process, question: "Was gehört zur Einarbeitung in der Werkstatt?", expected_tools: [rag_chat]}
+  # --- RAG: Anleitungen mit Umlaut-/ASCII-Paaren (K1) ---
+  - {id: procedure_address_umlaut, category: procedure, question: "Wie ändere ich eine Kundenadresse in Vaudis?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_address_ascii, category: procedure, question: "Wie aendere ich eine Kundenadresse in Vaudis?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_order_umlaut, category: procedure, question: "Wie öffne ich einen Werkstattauftrag in WPS?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_order_ascii, category: procedure, question: "Wie oeffne ich einen Werkstattauftrag in WPS?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_dialog_umlaut, category: procedure, question: "Wie läuft die Dialogannahme ab?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_dialog_ascii, category: procedure, question: "Wie laeuft die Dialogannahme ab?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_hu_umlaut, category: procedure, question: "Wie führe ich eine HU-Anmeldung durch?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_hu_ascii, category: procedure, question: "Wie fuehre ich eine HU-Anmeldung durch?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_slot_umlaut, category: procedure, question: "Wie wähle ich im WPS einen freien Termin aus?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  - {id: procedure_slot_ascii, category: procedure, question: "Wie waehle ich im WPS einen freien Termin aus?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
+  # --- RAG: Anleitungen außerhalb der geschlossenen Verbliste (K3) ---
+  - {id: procedure_new_customer, category: procedure, question: "Wie lege ich einen Neukunden in Vaudis an?", expected_tools: [rag_chat], findings: [K3], expected_procedural: true}
+  - {id: procedure_cancel_invoice, category: procedure, question: "Wie storniere ich eine Rechnung?", expected_tools: [rag_chat], findings: [K3], expected_procedural: true}
+  - {id: procedure_courtesy_car, category: procedure, question: "Wie reserviere ich einen Leihwagen für einen Werkstattkunden?", expected_tools: [rag_chat], findings: [K3], expected_procedural: true}
+  - {id: procedure_test_drive_imperative, category: procedure, question: "Anleitung: Probefahrt in EVA erfassen", expected_tools: [rag_chat], expected_procedural: true}
+  - {id: procedure_warranty_steps, category: procedure, question: "Welche Schritte sind für eine Garantieanfrage nötig?", expected_tools: [rag_chat], expected_procedural: true}
+  - {id: procedure_calendar_plan, category: procedure, question: "Wie plane ich einen Termin im Werkstattkalender?", expected_tools: [rag_chat], expected_procedural: true}
+  # --- RAG: Zuständigkeiten (K2) ---
+  - {id: responsibility_warranty, category: responsibility, question: "Wer ist für Garantieanträge zuständig?", expected_tools: [rag_chat], findings: [K2]}
+  - {id: responsibility_role_tasks, category: responsibility, question: "Welche Aufgaben hat ein Serviceberater?", expected_tools: [rag_chat], findings: [K2]}
+  - {id: responsibility_lease_returns, category: responsibility, question: "Wer kümmert sich um Leasingrückläufer?", expected_tools: [rag_chat], findings: [K2]}
+  - {id: responsibility_dunning, category: responsibility, question: "Wer ist für Mahnungen zuständig?", expected_tools: [rag_chat], findings: [K2, U3]}
+  - {id: responsibility_complaints, category: responsibility, question: "Welche Abteilung bearbeitet Kundenbeschwerden?", expected_tools: [rag_chat], findings: [K2, U3]}
+  - {id: responsibility_work_instruction_approval, category: responsibility, question: "Wer ist für die Freigabe von Arbeitsanweisungen verantwortlich?", expected_tools: [rag_chat], findings: [K2]}
+  - {id: responsibility_vehicle_prep, category: responsibility, question: "Welche Rolle ist für die Fahrzeugaufbereitung verantwortlich?", expected_tools: [rag_chat], findings: [K2]}
+  - {id: responsibility_data_access, category: responsibility, question: "Wer ist zuständig, wenn ein Kunde eine Datenauskunft verlangt?", expected_tools: [rag_chat], findings: [K2]}
+  # --- RAG: Funktionspostfächer und Kontaktwege ---
+  - {id: functional_applications_mailbox, category: functional_contact, question: "Wie lautet das Funktionspostfach für Bewerbungen?", expected_tools: [rag_chat]}
+  - {id: functional_sick_note, category: functional_contact, question: "Wohin schicke ich eine Krankmeldung?", expected_tools: [rag_chat]}
+  - {id: functional_privacy_central, category: functional_contact, question: "Gibt es eine zentrale E-Mail-Adresse für Datenschutzanfragen?", expected_tools: [rag_chat]}
+  - {id: functional_it_contact_page, category: functional_contact, question: "Wo finde ich die Kontaktseite der IT?", expected_tools: [rag_chat]}
+  - {id: functional_it_ticket, category: functional_contact, question: "Wie melde ich ein IT-Problem, gibt es ein Ticketsystem?", expected_tools: [rag_chat]}
+  - {id: functional_applications_submit, category: functional_contact, question: "An wen reiche ich Bewerbungen ein?", expected_tools: [rag_chat]}
+  # --- Beide: Abteilungskontakte ---
+  - {id: org_contact_accounting, category: organization_contact, question: "Wie erreiche ich die Buchhaltung?", expected_tools: [personio_directory, rag_chat]}
+  - {id: org_contact_hr_extension, category: organization_contact, question: "Was ist die Durchwahl der Personalabteilung?", expected_tools: [personio_directory, rag_chat]}
+  - {id: org_contact_marketing, category: organization_contact, question: "Wer ist Ansprechpartner im Marketing und wie erreiche ich das Team?", expected_tools: [personio_directory, rag_chat]}
+  - {id: org_contact_it_nominal, category: organization_contact, question: "Kontaktdaten der IT", expected_tools: [personio_directory, rag_chat]}
+  - {id: org_contact_parts_wunstorf, category: organization_contact, question: "Wie komme ich mit dem Teiledienst in Wunstorf in Kontakt?", expected_tools: [personio_directory, rag_chat]}
+  - {id: org_contact_dispatch_mail, category: organization_contact, question: "Welche E-Mail-Adresse hat die Disposition?", expected_tools: [personio_directory, rag_chat]}
+  # --- Beide: Person und dokumentierter Prozess ---
+  - {id: person_process_project, category: person_process, question: "Was hat Max Mustermann mit dem Projekt Digitales Autohaus zu tun?", expected_tools: [personio_directory, rag_chat]}
+  - {id: person_process_role_duties, category: person_process, question: "Welche Rolle hat Anna Beispiel und welche Aufgaben gehören laut Arbeitsanweisung dazu?", expected_tools: [personio_directory, rag_chat]}
+  - {id: person_process_handover, category: person_process, question: "Ist Anna Beispiel noch im Verkauf, und wie läuft dort die Übergabe an den Service?", expected_tools: [personio_directory, rag_chat]}
+  - {id: person_process_relation, category: person_process, question: "Wie hängen Max Mustermann und das Vaudis-Projekt zusammen?", expected_tools: [personio_directory, rag_chat]}
+  # --- RAG: Abkürzungen ---
+  - {id: abbreviation_td, category: abbreviation, question: "Was bedeutet TD?", expected_tools: [rag_chat]}
+  - {id: abbreviation_da, category: abbreviation, question: "Wofür steht DA bei KAHLE?", expected_tools: [rag_chat]}
+  - {id: abbreviation_vk, category: abbreviation, question: "Was ist die Abkürzung VK?", expected_tools: [rag_chat]}
+  - {id: abbreviation_wps, category: abbreviation, question: "Was bedeutet WPS?", expected_tools: [rag_chat]}
+  # --- RAG: allgemeines internes Wissen ---
+  - {id: internal_service_systems, category: internal_knowledge, question: "Welche Systeme nutzt KAHLE im Service?", expected_tools: [rag_chat]}
+  - {id: internal_wps_locations, category: internal_knowledge, question: "An welchen Standorten wird WPS eingesetzt?", expected_tools: [rag_chat]}
+  - {id: internal_opening_hours, category: internal_knowledge, question: "Welche Öffnungszeiten hat der Service in Hannover?", expected_tools: [rag_chat]}
+  - {id: internal_dialog_notes, category: internal_knowledge, question: "Was ist bei der Dialogannahme zu beachten?", expected_tools: [rag_chat]}
+  - {id: internal_ai_policy, category: internal_knowledge, question: "Gibt es eine Richtlinie zur Nutzung von KI?", expected_tools: [rag_chat]}
+  - {id: internal_complaint_notes, category: internal_knowledge, question: "Was muss ich bei einer Reklamation beachten?", expected_tools: [rag_chat]}
+  # --- RAG: Geltungsbereich nach Standort (U1) ---
+  - {id: scope_opt_out_vaudis, category: scope_location, question: "Wie hinterlege ich einen Werbewiderspruch in Vaudis?", expected_tools: [rag_chat], findings: [U1], expected_procedural: true}
+  - {id: scope_survey_opt_out, category: scope_location, question: "Ein Kunde möchte keine Zufriedenheitsbefragungen mehr erhalten, was muss ich tun?", expected_tools: [rag_chat], findings: [U1]}
+  - {id: scope_opt_out_walsrode, category: scope_location, question: "Wie sperre ich einen Kunden für Werbung am Standort Walsrode?", expected_tools: [rag_chat], findings: [U1], expected_procedural: true}
+  - {id: scope_dse_wunstorf, category: scope_location, question: "Wie deaktiviere ich die DSE-Kontaktfreigaben in Wunstorf?", expected_tools: [rag_chat], findings: [U1]}
+  # --- Kein Wissens-Tool ---
+  - {id: none_customer_mail, category: no_knowledge_tool, question: "Schreibe mir eine E-Mail an einen Kunden wegen einer Terminverschiebung.", expected_tools: []}
+  - {id: none_rephrase, category: no_knowledge_tool, question: "Formuliere diesen Satz freundlicher: Das Auto ist noch nicht fertig.", expected_tools: []}
+  - {id: none_translate, category: no_knowledge_tool, question: "Übersetze Fahrzeugannahme ins Englische.", expected_tools: []}
+  - {id: none_general_capital, category: no_knowledge_tool, question: "Was ist die Hauptstadt von Frankreich?", expected_tools: []}
+  - {id: none_today, category: no_knowledge_tool, question: "Welcher Tag ist heute?", expected_tools: []}
+  - {id: none_reminder, category: no_knowledge_tool, question: "Erinnere mich morgen um 9 Uhr an den Rückruf.", expected_tools: []}
+  - {id: none_my_tasks, category: no_knowledge_tool, question: "Zeig mir meine offenen Aufgaben.", expected_tools: []}
+  - {id: none_script_help, category: no_knowledge_tool, question: 'Warum funktioniert dieses Skript nicht? robocopy C:\quelle D:\ziel /MIR', expected_tools: []}
+  - {id: none_general_leasing, category: no_knowledge_tool, question: "Erkläre mir allgemein den Unterschied zwischen Leasing und Finanzierung.", expected_tools: []}
+  - {id: none_web_news, category: no_knowledge_tool, question: "Recherchiere aktuelle News zum VW ID.7.", expected_tools: []}
+  # --- Folgefragen mit Verlauf ---
+  - id: followup_supervisor_reference
+    category: followup
+    history:
+      - {role: user, content: "Wer ist Max Mustermann?"}
+      - {role: assistant, content: "Max Mustermann ist laut Personio Serviceberater in Wunstorf [P1]."}
+    question: "Und wer ist seine Führungskraft?"
+    expected_tools: [personio_directory]
+  - id: followup_procedure_other_system
+    category: followup
+    history:
+      - {role: user, content: "Wie ändere ich eine Kundenadresse in Vaudis?"}
+      - {role: assistant, content: "Öffne den Kundenstamm und ändere die Adresse [R1]."}
+    question: "Und in WPS?"
+    expected_tools: [rag_chat]
+  - id: followup_scope_location_reply
+    category: followup
+    history:
+      - {role: user, content: "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"}
+      - {role: assistant, content: "Für welchen Standort möchtest du den Werbewiderspruch hinterlegen?"}
+    question: "Hannover"
+    expected_tools: [rag_chat]
+    findings: [U1]
+  - id: followup_people_contact
+    category: followup
+    history:
+      - {role: user, content: "Wer arbeitet im Teiledienst in Hannover?"}
+      - {role: assistant, content: "Laut Personio arbeitet dort Anna Beispiel [P1]."}
+    question: "Und wie erreiche ich sie?"
+    expected_tools: [personio_directory]
+  - id: followup_system_procedure
+    category: followup
+    history:
+      - {role: user, content: "Welche Systeme nutzt KAHLE im Service?"}
+      - {role: assistant, content: "Im Service werden WPS und Vaudis genutzt [R1]."}
+    question: "Wie plane ich darin einen Termin?"
+    expected_tools: [rag_chat]
+  - id: followup_rewrite_text
+    category: followup
+    history:
+      - {role: user, content: "Schreib mir einen kurzen Intranet-Text zum Tag der offenen Tür."}
+      - {role: assistant, content: "Am Samstag öffnen wir unsere Türen für alle Kolleginnen und Kollegen."}
+    question: "Mach ihn kürzer."
+    expected_tools: []
+  # --- Nicht beantwortbar: Enthaltung erwartet ---
+  - {id: unanswerable_unknown_identifier, category: unanswerable, question: "Welche interne Regel gilt für die Kennung ZX-999-NICHT-VORHANDEN?", expected_tools: [rag_chat], expect_abstention: true}
+  - {id: unanswerable_unknown_person, category: unanswerable, question: "Wer ist Zyx Nichtvorhandenmann?", expected_tools: [personio_directory], expect_abstention: true}
