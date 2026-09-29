@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -185,7 +186,7 @@ def test_opt_out_rag_context_without_location_has_the_shared_process(monkeypatch
     assert "datenschutz@kahle.de" in context
     assert "DSE-Einstellungen" in context
     assert "KD-Sperrprozess-Liste" in context
-    assert context.count("[Quelle ") >= 1
+    assert re.search(r"(?m)^\[\d+\] ", context)
 
 
 def test_opt_out_rag_context_for_other_location_has_scope_and_contact(monkeypatch):

@@ -1862,7 +1862,8 @@ def _rag_answer_instruction(query):
         value,
     )
     instruction = (
-        "Antworte nur aus CONTEXT. Belege jede konkrete interne Aussage mit [Quelle N]. "
+        "Antworte nur aus CONTEXT. Belege jede konkrete interne Aussage mit ihrer "
+        "Quellennummer in eckigen Klammern, z. B. [1] oder [1, 2]. "
         "Bei Konflikt nicht stillschweigend entscheiden. "
     )
     if marketing_scope:
@@ -2446,7 +2447,7 @@ class Tools:
             _temporary_survey_location_scope(query)
         )
         scope_context_added = False
-        for index, chunk in enumerate(chunks, 1):
+        for chunk in chunks:
             heading = " > ".join(chunk.heading_path)
             contact_error = getattr(chunk, "contact_error", "")
             passage = "" if contact_error else chunk.parent_content
@@ -2454,12 +2455,14 @@ class Tools:
                 passage = _context_passage_for_temporary_survey(chunk, query)
             if not passage and not contact_error:
                 continue
+            # Gapless numbering: OpenWebUI maps [N] to the N-th citation source.
+            index = len(sources) + 1
             context_identity = (
                 str(getattr(chunk, "document_id", "") or ""),
                 passage.strip(),
             )
             if passage and context_identity not in seen_context_passages:
-                context.append(f"[Quelle {index}] {chunk.title} | {heading}\n{passage}")
+                context.append(f"[{index}] {chunk.title} | {heading}\n{passage}")
                 seen_context_passages.add(context_identity)
             evidence_passage = passage
             if (
