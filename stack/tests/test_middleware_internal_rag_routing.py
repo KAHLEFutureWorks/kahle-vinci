@@ -2391,6 +2391,7 @@ def test_canonical_rag_source_event_names_the_document_instead_of_the_tool():
             "version_id": "version-1",
             "knowledgebase_ids": ["kb-service"],
             "source": "WPS Bedienungsanleitung",
+            "name": "WPS Bedienungsanleitung",
             "url": "/wissen/api/portal/sources/version-1",
         }],
     }]
@@ -2788,9 +2789,9 @@ def test_prerouted_rag_replaces_generic_tool_source_even_without_documents():
     block = source[source.index("canonical_pre_route_events =") :]
     block = block[: block.index("if pre_routed_internal_rag:")]
 
-    assert "sources[:] = [" in block
+    # Generic rag_chat sources are dropped; RAG passages lead so [N] matches chip N.
+    assert "sources[:] = [*canonical_pre_route_events, *[" in block
     assert "if 'rag_chat' not in str(" in block
-    assert block.index("sources[:] = [") < block.index("if canonical_pre_route_events:")
 
 
 def test_model_led_contract_refresh_never_owns_direct_final_content():

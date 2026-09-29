@@ -4180,23 +4180,45 @@ def _extract_kahle_rag_sources(tool_result: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _extract_kahle_rag_citation_sources(tool_result: Any) -> list[dict[str, Any]]:
+    """Return every numbered RAG passage in marker order, trusted link or not."""
+    text = tool_result if isinstance(tool_result, str) else ''
+    match = re.search(r'SOURCES_JSON:\s*(\[.*?\])\s*(?:\n|$)', text, re.DOTALL)
+    if not match:
+        return []
+    try:
+        sources = json.loads(match.group(1))
+    except (TypeError, ValueError):
+        return []
+    numbered = [
+        source for source in sources
+        if isinstance(source, dict) and isinstance(source.get('number'), int)
+    ]
+    return sorted(numbered, key=lambda source: source['number'])
+
+
 def _canonical_kahle_rag_source_events(
     sources: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Expose retrieved documents as native OpenWebUI citation sources.
+    """Expose each numbered RAG passage as one native OpenWebUI citation source.
 
-    The tool invocation itself remains visible through its status event.  The
-    citation drawer, however, should identify the documents returned by RAG
-    instead of presenting the generic ``rag_chat/rag_chat`` tool as a source.
+    OpenWebUI maps a marker [N] to the N-th distinct source name, counted per
+    document entry. Every passage therefore needs its own name and exactly one
+    document entry, in the order of the tool's passage numbers. Only portal
+    source URLs are exposed as links.
     """
     events = []
-    seen = set()
+    used_names: set[str] = set()
     for source in sources:
         title = str(source.get('title') or 'Interne Wissensquelle').strip()
+        heading = str(source.get('section_heading') or '').strip()
+        base = f'{title} – {heading}' if heading else title
+        name, suffix = base, 2
+        while name in used_names:
+            name = f'{base} ({suffix})'
+            suffix += 1
+        used_names.add(name)
         url = str(source.get('source_url') or '').strip()
-        if not url or url in seen:
-            continue
-        seen.add(url)
         metadata = {
             key: source.get(key)
             for key in (
@@ -4204,15 +4226,19 @@ def _canonical_kahle_rag_source_events(
             )
             if source.get(key) not in (None, '', [])
         }
-        metadata.update({'source': title, 'url': url})
+        metadata.update({'source': name, 'name': name})
+        if url.startswith('/wissen/api/portal/sources/'):
+            metadata['url'] = url
         evidence_text = str(source.get('evidence_text') or '').strip()
         events.append({
-            'source': {'name': title, 'url': url},
-            'document': [evidence_text] if evidence_text else [],
+            'source': {
+                'name': name,
+                **({'url': metadata['url']} if 'url' in metadata else {}),
+            },
+            'document': [evidence_text or title],
             'metadata': [metadata],
         })
     return events
-
 
 def _append_canonical_rag_source_links(output: list[dict[str, Any]], sources: list[dict[str, Any]]) -> None:
     if not sources:
@@ -5396,17 +5422,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         pre_route_rag_result
                     )
                     canonical_pre_route_events = _canonical_kahle_rag_source_events(
-                        canonical_pre_route_sources
+                        _extract_kahle_rag_citation_sources(pre_route_rag_result)
                     )
-                    sources[:] = [
+                    # RAG passages come first so [N] matches the N-th citation chip.
+                    sources[:] = [*canonical_pre_route_events, *[
                         source
                         for source in sources
                         if 'rag_chat' not in str(
                             (source.get('source') or {}).get('name') or ''
                         ).lower()
-                    ]
-                    if canonical_pre_route_events:
-                        sources.extend(canonical_pre_route_events)
+                    ]]
                     metadata['kahle_canonical_rag_sources'] = canonical_pre_route_sources
                     metadata['kahle_canonical_rag_feedback_link'] = (
                         _extract_kahle_rag_feedback_link(pre_route_rag_result)
@@ -7742,6 +7767,12 @@ async def streaming_chat_response_handler(response, ctx):
                         )
                         if tool_function_name == 'rag_chat':
                             canonical_rag_sources.extend(_extract_kahle_rag_sources(tool_result))
+                            if citations_enabled:
+                                tool_call_sources.extend(
+                                    _canonical_kahle_rag_source_events(
+                                        _extract_kahle_rag_citation_sources(tool_result)
+                                    )
+                                )
                             canonical_rag_feedback_link = (
                                 _extract_kahle_rag_feedback_link(tool_result)
                                 or canonical_rag_feedback_link

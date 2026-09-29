@@ -113,3 +113,59 @@ def test_reconstructed_rag_result_uses_native_markers():
 
     assert "[1] Dokument A\nErster Beleg." in text
     assert "[Quelle" not in text
+
+
+import re  # noqa: E402
+
+from test_middleware_internal_rag_routing import (  # noqa: E402
+    MIDDLEWARE,
+    load_function_from_middleware,
+)
+
+
+def _frontend_source_ids(events):
+    """Mirror OpenWebUI ContentRenderer.getSourceIds for citation lookup."""
+    names = []
+    for source in events:
+        for index, _document in enumerate(source.get("document") or []):
+            metadata = (source.get("metadata") or [{}])[index] or {}
+            names.append(metadata.get("name") or source.get("source", {}).get("name"))
+    return list(dict.fromkeys(names))
+
+
+def test_every_passage_gets_its_own_citation_source_in_marker_order():
+    events_for = load_function_from_middleware("_canonical_kahle_rag_source_events")
+    sources = [
+        {"number": 1, "title": "WPS", "section_heading": "1 Termine", "source_url": "/wissen/api/portal/sources/a", "evidence_text": "A"},
+        {"number": 2, "title": "WPS", "section_heading": "1 Termine", "source_url": "/wissen/api/portal/sources/a", "evidence_text": "B"},
+        {"number": 3, "title": "Vaudis", "source_url": "https://evil.example/x", "evidence_text": ""},
+    ]
+
+    events = events_for(sources)
+    ids = _frontend_source_ids(events)
+
+    assert len(events) == 3
+    assert ids == ["WPS – 1 Termine", "WPS – 1 Termine (2)", "Vaudis"]
+    assert events[2]["document"] == ["Vaudis"]
+    assert "url" not in events[2]["metadata"][0]
+    assert events[0]["metadata"][0]["url"] == "/wissen/api/portal/sources/a"
+
+
+def test_citation_sources_keep_passages_without_trusted_links():
+    extract = load_function_from_middleware("_extract_kahle_rag_citation_sources")
+    result = 'SOURCES_JSON: [{"number": 2, "title": "B"}, {"number": 1, "title": "A", "source_url": "/wissen/api/portal/sources/a"}]\n'
+
+    assert [source["number"] for source in extract(result)] == [1, 2]
+
+
+def test_rag_citation_sources_come_first_and_are_emitted_in_the_native_tool_path():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert "sources[:] = [*canonical_pre_route_events, *[" in source
+    assert re.search(
+        r"canonical_rag_sources\.extend\(_extract_kahle_rag_sources\(tool_result\)\)"
+        r"[\s\S]{0,400}?tool_call_sources\.extend\([\s\S]{0,80}?"
+        r"_canonical_kahle_rag_source_events\([\s\S]{0,80}?"
+        r"_extract_kahle_rag_citation_sources\(tool_result\)",
+        source,
+    )
