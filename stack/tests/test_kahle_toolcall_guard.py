@@ -302,11 +302,7 @@ def test_fillable_ki_permission_request_never_uses_generic_docx_export():
 
 def test_successful_rag_source_does_not_rewrite_completed_answer():
     module = load_module()
-    original_synthesize = module._synthesize_rag_answer
     try:
-        module._synthesize_rag_answer = lambda request_text, rag_text, user_name="": (
-            "Der KAHLE-Standort Nienburg fuehrt Volkswagen und Audi Service [#1]."
-        )
         rag_text = (
             "KAHLE_RAG_RESULT\n"
             "FOUND: true\n"
@@ -346,7 +342,7 @@ def test_successful_rag_source_does_not_rewrite_completed_answer():
             "Bitte waehle einen anderen Standort aus."
         )
     finally:
-        module._synthesize_rag_answer = original_synthesize
+        pass
 
 
 def test_negative_rag_source_does_not_rewrite_completed_answer():
@@ -384,37 +380,9 @@ def test_negative_rag_source_does_not_rewrite_completed_answer():
     )
 
 
-def test_successful_but_unanswerable_rag_context_stays_fail_closed():
-    module = load_module()
-    original_synthesize = module._synthesize_rag_answer
-    try:
-        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
-            "Dazu habe ich kein internes Wissen."
-        )
-        rag_text = (
-            "KAHLE_RAG_RESULT\nFOUND: true\n"
-            "KONTEXT (zitierbar mit [#]):\n"
-            "[#1 | allgemein | Standortregeln.md | chunk 1 | score 0.71]\n"
-            "Bei zeitkritischen Informationen muss der Stand genannt werden."
-        )
-
-        answer = module._rag_answer_text(
-            "Wie sind unsere Öffnungszeiten?", rag_text
-        )
-
-        assert answer == "Dazu habe ich kein internes Wissen."
-        assert "Standortregeln" not in answer
-    finally:
-        module._synthesize_rag_answer = original_synthesize
-
-
 def test_current_raw_rag_context_is_parsed_without_outlet_regrounding():
     module = load_module()
-    original_synthesize = module._synthesize_rag_answer
     try:
-        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
-            "Dazu habe ich kein internes Wissen."
-        )
         rag_text = (
             "KAHLE_RAG_RESULT\nFOUND: true\n"
             "INSTRUCTION: Antworte nur aus CONTEXT.\n"
@@ -445,194 +413,7 @@ def test_current_raw_rag_context_is_parsed_without_outlet_regrounding():
             "Öffne den Kalender und aktiviere automatische SMS."
         )
     finally:
-        module._synthesize_rag_answer = original_synthesize
-
-
-def test_synthesized_internal_answer_without_source_marks_is_rejected():
-    module = load_module()
-    original_synthesize = module._synthesize_rag_answer
-    try:
-        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
-            "Öffne das WPS, klicke in den Kalender und sende anschließend eine SMS."
-        )
-        rag_text = (
-            "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
-            "[Quelle 1] Systemlandkarte | Überblick\n"
-            "WPS ist ein Terminplanungssystem.\nSOURCES_JSON: []"
-        )
-
-        assert module._rag_answer_text("Wie plane ich einen Termin?", rag_text) == (
-            "Dazu habe ich kein internes Wissen."
-        )
-    finally:
-        module._synthesize_rag_answer = original_synthesize
-
-
-def test_valid_rag_answer_accepts_quelle_mark_and_keeps_feedback_link():
-    module = load_module()
-    original_synthesize = module._synthesize_rag_answer
-    try:
-        module._synthesize_rag_answer = lambda *_args, **_kwargs: (
-            "Der Teiledienst in Nienburg ist Montag bis Freitag von "
-            "07:30 bis 17:00 Uhr geöffnet. [Quelle 1]"
-        )
-        rag_text = (
-            "KAHLE_RAG_RESULT\nFOUND: true\n"
-            "CONTEXT:\n"
-            "[Quelle 1] Standort Nienburg > Öffnungszeiten\n"
-            "Teiledienst: Mo-Fr 07:30-17:00.\n"
-            "SOURCES_JSON: []\n"
-            "FEEDBACK_LINK: [Wissensfehler melden]"
-            "(/wissen/?feedback=1&chat_id=chat-1&message_id=message-1)"
-        )
-
-        answer = module._rag_answer_text(
-            "Wie sind die TD Öffnungszeiten in NIE?", rag_text,
-        )
-
-        assert "Mo-Fr 07:30-17:00" in answer
-        assert "[#1]" in answer
-        assert "[Quelle 1]" not in answer
-        assert answer.endswith(
-            "[Wissensfehler melden]"
-            "(/wissen/?feedback=1&chat_id=chat-1&message_id=message-1)"
-        )
-    finally:
-        module._synthesize_rag_answer = original_synthesize
-
-
-def test_opening_hours_answer_is_deterministic_and_skips_second_model_call():
-    module = load_module()
-    original_synthesize = module._synthesize_rag_answer
-    try:
-        module._synthesize_rag_answer = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("opening hours must not use a second model call")
-        )
-        rag_text = (
-            "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
-            "[Quelle 1] MasterKontext KAHLE v1.6 > Standort Nienburg\n"
-            "- **Öffnungszeiten:** Service: Mo-Fr 07:30-18:00 · Sa 09:00-13:00 | "
-            "Teiledienst: Mo-Fr 07:30-17:00 · Samstag nicht eindeutig ausgewiesen | "
-            "Verkauf: Mo-Fr 09:00-18:00 · Sa 09:00-13:00\n"
-            "SOURCES_JSON: []\n"
-            "FEEDBACK_LINK: [Wissensfehler melden]"
-            "(/wissen/?feedback=1&chat_id=chat-1&message_id=message-1)"
-        )
-
-        answer = module._rag_answer_text(
-            "Wie sind unsere TD Öffnungszeiten in NIE?", rag_text,
-        )
-
-        assert answer.startswith(
-            "Teiledienst in Nienburg: Mo-Fr 07:30-17:00 · "
-            "Samstag nicht eindeutig ausgewiesen [#1]"
-        )
-        assert "Wissensfehler melden" in answer
-    finally:
-        module._synthesize_rag_answer = original_synthesize
-
-
-def test_opening_hours_supports_vk_shg_and_location_without_department():
-    module = load_module()
-    context = (
-        "[Quelle 2] Standort Stadthagen > Öffnungszeiten\n"
-        "Öffnungszeiten: Service: Mo-Fr 07:00-18:00 | "
-        "Teiledienst: Mo-Fr 07:30-17:30 | Verkauf: Mo-Fr 09:00-18:00"
-    )
-
-    sales = module._deterministic_opening_hours_answer(
-        "Wie sind unsere VK Öffnungszeiten in SHG?", context,
-    )
-    all_departments = module._deterministic_opening_hours_answer(
-        "Wie sind unsere Stadthagener Öffnungszeiten?", context,
-    )
-
-    assert sales == "Verkauf in Stadthagen: Mo-Fr 09:00-18:00 [#2]"
-    assert "Service: Mo-Fr 07:00-18:00 [#2]" in all_departments
-    assert "Teiledienst: Mo-Fr 07:30-17:30 [#2]" in all_departments
-    assert "Verkauf: Mo-Fr 09:00-18:00 [#2]" in all_departments
-
-
-def test_existing_grounded_rag_answer_is_kept_without_second_synthesis():
-    module = load_module()
-    original_synthesize = module._synthesize_rag_answer
-    try:
-        module._synthesize_rag_answer = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("an already grounded answer must not be synthesized again")
-        )
-        rag_text = (
-            "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n"
-            "[Quelle 1] Prozesshandbuch\nServiceprozesse reichen von der Terminierung "
-            "bis zur Zufriedenheitsabfrage.\n"
-            "[Quelle 2] Auditregel\nInterne Audits werden dokumentiert.\n"
-            "SOURCES_JSON: []\n"
-            "FEEDBACK_LINK: [Wissensfehler melden]"
-            "(/wissen/?feedback=1&chat_id=chat-3&message_id=message-3)"
-        )
-        candidate = (
-            "Ich kenne folgende Prozesse bei der KAHLE Gruppe:\n\n"
-            "1. Serviceprozesse von der Terminierung bis zur "
-            "Zufriedenheitsabfrage.\n"
-            "2. Interne Audits und deren Dokumentation."
-        )
-
-        answer = module._rag_answer_text(
-            "Welche Prozesse bei uns kennst du?", rag_text,
-            candidate_answer=candidate,
-        )
-
-        assert "Serviceprozesse" in answer
-        assert "Interne Audits" in answer
-        assert "Dazu habe ich kein internes Wissen" not in answer
-        assert "[#1]" in answer and "[#2]" in answer
-    finally:
-        module._synthesize_rag_answer = original_synthesize
-
-
-def test_partially_grounded_answer_keeps_cited_lines_and_removes_uncited_claims():
-    module = load_module()
-    answer = (
-        "Ich kenne folgende Prozesse:\n\n"
-        "1. Serviceprozesse reichen bis zur Zufriedenheitsabfrage [#1].\n"
-        "2. Im WPS werden Kunden automatisch per SMS informiert.\n"
-        "3. Interne Audits werden dokumentiert [#2]."
-    )
-
-    retained = module._retain_grounded_answer(answer)
-
-    assert "Serviceprozesse" in retained
-    assert "Interne Audits" in retained
-    assert "automatisch per SMS" not in retained
-
-
-def test_answer_without_any_source_mark_is_not_treated_as_grounded():
-    module = load_module()
-
-    assert module._retain_grounded_answer(
-        "Serviceprozesse umfassen Terminierung und Werkstattplanung."
-    ) == ""
-
-
-def test_source_chip_answer_is_grounded_against_context_line_by_line():
-    module = load_module()
-    context = (
-        "[Quelle 3] Service-Prozesskette\n"
-        "Terminierung, Werkstattplanung, Fahrzeugannahme, Diagnose und "
-        "Zufriedenheitsabfrage.\n"
-        "[Quelle 4] Auditregeln\nInterne Audits werden dokumentiert."
-    )
-    candidate = (
-        "Ich kenne folgende Prozesse:\n"
-        "- Terminierung und Werkstattplanung.\n"
-        "- Interne Audits werden dokumentiert.\n"
-        "- Kunden erhalten automatisch eine SMS nach jedem Arbeitsschritt."
-    )
-
-    retained = module._retain_context_supported_answer(candidate, context)
-
-    assert "Terminierung und Werkstattplanung [#3]" in retained
-    assert "Interne Audits werden dokumentiert [#4]" in retained
-    assert "automatisch eine SMS" not in retained
+        pass
 
 
 def test_negative_rag_result_keeps_answer_and_source_metadata_unchanged():
@@ -662,32 +443,6 @@ def test_negative_rag_result_keeps_answer_and_source_metadata_unchanged():
 
     assert result["content"] == "Eine unbelegte Antwort."
     assert result["sources"][0]["document"] == [rag_text]
-
-
-def test_wps_system_overview_does_not_answer_procedural_question():
-    module = load_module()
-    context = (
-        "[#1] KAHLE Systemlandkarte\n"
-        "WPS/DA ist ein Werkstatt- und Terminplanungssystem. "
-        "Catch ist ein CRM-System."
-    )
-
-    assert module._rag_context_supports_request(
-        "Wie plane ich einen Termin im WPS?", context
-    ) is False
-
-
-def test_real_wps_instructions_answer_procedural_question():
-    module = load_module()
-    context = (
-        "[#1] WPS Anleitung\n"
-        "Öffne im WPS die Terminplanung. Wähle den gewünschten Zeitraum aus. "
-        "Gib Kunde und Fahrzeug ein und speichere anschließend den Termin."
-    )
-
-    assert module._rag_context_supports_request(
-        "Wie plane ich einen Termin im WPS?", context
-    ) is True
 
 
 def test_every_procedural_answer_step_needs_a_source_mark():
@@ -909,7 +664,6 @@ def test_active_personio_only_harness_never_triggers_outlet_rag_refresh():
 def test_internal_followup_without_toolcall_is_not_refreshed_by_outlet():
     module = load_module()
     original_call = module._call_rag_chat_tool
-    original_synthesize = module._synthesize_rag_answer
     captured = {}
     rag_text = (
         "KAHLE_RAG_RESULT\n"
@@ -930,11 +684,6 @@ def test_internal_followup_without_toolcall_is_not_refreshed_by_outlet():
             raise AssertionError("Der Outlet-Filter darf keinen RAG-Abruf starten.")
 
         module._call_rag_chat_tool = fake_call
-        module._synthesize_rag_answer = lambda request_text, source, user_name="": (
-            "Die fünf Dimensionen sind Governance & Verantwortlichkeiten, "
-            "Tool-Landschaft & Freigaben, Datenpraktiken & Klassifizierung, "
-            "Prozesse & Human-in-the-Loop sowie Dokumentation & Incident [#1]."
-        )
         previous_rag = (
             "KAHLE_RAG_RESULT\nFOUND: true\n"
             "KONTEXT (zitierbar mit [#]):\n"
@@ -980,7 +729,6 @@ def test_internal_followup_without_toolcall_is_not_refreshed_by_outlet():
         assert "sources" not in answer
     finally:
         module._call_rag_chat_tool = original_call
-        module._synthesize_rag_answer = original_synthesize
 
 
 

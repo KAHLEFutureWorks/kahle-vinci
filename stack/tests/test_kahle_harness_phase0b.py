@@ -292,3 +292,28 @@ def test_second_rag_call_is_renumbered_and_both_calls_count_as_evidence():
     # Validate via the serialized payload: the loaders create separate module instances.
     result = harness.validate_answer("Beleg [1]. Beleg [3].", decision.to_dict())
     assert "unknown_source_id" not in [item["code"] for item in result.violations]
+
+
+GUARD = ROOT / "open-webui-functions" / "kahle_toolcall_guard.py"
+DEAD_GUARD_FUNCTIONS = (
+    "_deterministic_opening_hours_answer",
+    "_fold_rag_text",
+    "_is_procedural_request",
+    "_normalize_grounded_source_marks",
+    "_rag_answer_text",
+    "_rag_claim_terms",
+    "_rag_context_supports_request",
+    "_rag_numbered_source_blocks",
+    "_rag_terms_supported",
+    "_retain_context_supported_answer",
+    "_retain_grounded_answer",
+    "_synthesize_rag_answer",
+    "_with_rag_feedback_link",
+)
+
+
+def test_guard_has_no_unreachable_rag_rewrite_path():
+    source = GUARD.read_text(encoding="utf-8")
+
+    for name in DEAD_GUARD_FUNCTIONS:
+        assert f"def {name}(" not in source, name
