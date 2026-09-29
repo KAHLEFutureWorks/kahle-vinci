@@ -906,6 +906,8 @@ def _combined_rag_evidence(rag_results: list[str], procedural: bool) -> Evidence
 
 `merge_evidence(result_driven=True)` akzeptiert bereits ein `EvidenceBundle` über `_result_driven_rag_evidence`.
 
+> **Abweichung bei der Umsetzung (30.09.):** `_combined_rag_evidence` gibt bei genau einem Ergebnis dieses unverändert zurück, damit Einzelaufrufe bitgenau wie bisher ausgewertet werden. Im Task-4-Test prüft eine Regex die Reihenfolge der Aufrufe, statt eine exakte Einrückung zu vergleichen.
+
 - [ ] **Step 4: Run tests** → neuer Test PASS; `test_kahle_internal_knowledge.py` und die Harness-Bestandssuiten PASS. Bestandstests, die `session.record` ohne Rückgabewert nutzen, bleiben gültig.
 
 - [ ] **Step 5: Commit**

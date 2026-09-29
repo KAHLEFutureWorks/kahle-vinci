@@ -269,3 +269,26 @@ def test_renumber_with_zero_offset_is_identity():
     result = _bundle_result([1])
 
     assert load_harness().renumber_rag_result(result, 0) == result
+
+
+from test_kahle_internal_knowledge import load_internal_knowledge  # noqa: E402
+
+
+def test_second_rag_call_is_renumbered_and_both_calls_count_as_evidence():
+    internal = load_internal_knowledge()
+    harness = load_harness()
+    session = internal.KnowledgeEvidenceSession(
+        model={"id": "m"}, messages=[{"role": "user", "content": "Frage"}]
+    )
+
+    first = session.record("rag_chat", _bundle_result([1, 2]))
+    second = session.record("rag_chat", _bundle_result([1]))
+
+    assert first == _bundle_result([1, 2])
+    assert "[3] D1 | A" in second
+    decision = session.build_decision(query="Frage", permission_scope={"user_id": "u"})
+    assert [harness._source_identifier(s) for s in decision.evidence_bundle.sources] == ["1", "2", "3"]
+    assert len(decision.evidence_bundle.supported_claims) == 3
+    # Validate via the serialized payload: the loaders create separate module instances.
+    result = harness.validate_answer("Beleg [1]. Beleg [3].", decision.to_dict())
+    assert "unknown_source_id" not in [item["code"] for item in result.violations]

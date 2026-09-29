@@ -3074,6 +3074,31 @@ def build_decision(
     )
 
 
+def _combined_rag_evidence(rag_results: list[str], procedural: bool) -> EvidenceBundle:
+    """Merge the already renumbered results of several rag_chat calls."""
+    bundles = [_result_driven_rag_evidence(result, procedural) for result in rag_results]
+    if not bundles:
+        return _result_driven_rag_evidence("", procedural)
+    if len(bundles) == 1:
+        return bundles[0]
+    usable = [bundle for bundle in bundles if bundle.status != "unsupported"]
+    if not usable:
+        return bundles[-1]
+    return EvidenceBundle(
+        status=(
+            "supported"
+            if all(bundle.status == "supported" for bundle in usable)
+            else "partially_supported"
+        ),
+        supported_claims=tuple(claim for bundle in usable for claim in bundle.supported_claims),
+        missing_information=tuple(dict.fromkeys(
+            item for bundle in usable for item in bundle.missing_information
+        )),
+        conflicts=tuple(dict.fromkeys(item for bundle in bundles for item in bundle.conflicts)),
+        sources=tuple(source for bundle in bundles for source in bundle.sources),
+    )
+
+
 def build_result_driven_decision(
     *,
     called_tools: tuple[str, ...],
@@ -3095,15 +3120,25 @@ def build_result_driven_decision(
     if not actual_tools:
         return None
 
+    rag_results = (
+        [str(item or "") for item in rag_result]
+        if isinstance(rag_result, (list, tuple))
+        else [rag_result] if rag_result else []
+    )
+    joined_rag_text = "\n".join(str(item or "") for item in rag_results)
     original = str(query or "").strip()
     resolved_context = resolve_request(original, messages)
     procedural = _is_procedural(resolved_context.retrieval_query)
     if actual_tools == ("personio_directory",):
         evidence = _personio_evidence(personio_result)
     elif actual_tools == ("rag_chat",):
-        evidence = _result_driven_rag_evidence(rag_result, procedural)
+        evidence = _combined_rag_evidence(rag_results, procedural)
     else:
-        evidence = merge_evidence(rag_result, personio_result, result_driven=True)
+        evidence = merge_evidence(
+            _combined_rag_evidence(rag_results, procedural),
+            personio_result,
+            result_driven=True,
+        )
 
     retrieval_plan = RetrievalPlan(
         required_tools=actual_tools,
@@ -3114,7 +3149,7 @@ def build_result_driven_decision(
     )
     clarification = bool(
         "rag_chat" in actual_tools
-        and re.search(r"(?im)^CLARIFICATION_REQUIRED:\s*true\s*$", str(rag_result or ""))
+        and re.search(r"(?im)^CLARIFICATION_REQUIRED:\s*true\s*$", joined_rag_text)
     )
     retrieval_events = []
     for tool in actual_tools:
@@ -3146,7 +3181,7 @@ def build_result_driven_decision(
             procedural=procedural,
             clarification_required=clarification,
             clarification_question=(
-                _extract_marker(str(rag_result or ""), "ANSWER") if clarification else ""
+                _extract_marker(joined_rag_text, "ANSWER") if clarification else ""
             ),
         ),
         resolved_context=resolved_context,

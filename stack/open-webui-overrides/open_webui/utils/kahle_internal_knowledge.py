@@ -10,6 +10,8 @@ from typing import Any
 from open_webui.utils.kahle_knowledge_harness import (
     HarnessDecision,
     build_result_driven_decision,
+    rag_result_source_count,
+    renumber_rag_result,
 )
 from open_webui.utils.personio_directory_client import PersonioDirectoryClient
 
@@ -111,14 +113,25 @@ class KnowledgeEvidenceSession:
         self._model_id = str((model or {}).get("id") or "")
         self._messages = list(messages or [])
         self._calls: list[str] = []
-        self._results: dict[str, Any] = {}
+        self._results: dict[str, list[Any]] = {}
 
-    def record(self, tool_name: str, result: Any) -> None:
+    def record(self, tool_name: str, result: Any) -> Any:
+        """Record a result and return what the model must see.
+
+        Several rag_chat calls are renumbered so their [N] markers stay unique.
+        """
         name = str(tool_name or "")
         if name not in _INTERNAL_TOOL_NAMES:
-            return
+            return result
+        if name == "rag_chat" and isinstance(result, str):
+            offset = sum(
+                rag_result_source_count(previous)
+                for previous in self._results.get("rag_chat", ())
+            )
+            result = renumber_rag_result(result, offset)
         self._calls.append(name)
-        self._results[name] = result
+        self._results.setdefault(name, []).append(result)
+        return result
 
     def called_tools(self) -> tuple[str, ...]:
         return tuple(self._calls)
@@ -142,8 +155,8 @@ class KnowledgeEvidenceSession:
             messages=self._messages,
             model_id=self._model_id,
             permission_scope=permission_scope,
-            rag_result=str(self._results.get("rag_chat") or ""),
-            personio_result=self._results.get("personio_directory"),
+            rag_result=[str(item or "") for item in self._results.get("rag_chat") or ()],
+            personio_result=(self._results.get("personio_directory") or [None])[-1],
         )
 
 
@@ -194,8 +207,7 @@ def _personio_tool(
             user_role,
             candidate_query=_supervisor_candidate_query(messages, query),
         )
-        session.record("personio_directory", result)
-        return result
+        return session.record("personio_directory", result)
 
     return {
         "spec": {
@@ -233,8 +245,7 @@ def _recording_rag_tool(
         result = original(**kwargs)
         if inspect.isawaitable(result):
             result = await result
-        session.record("rag_chat", result)
-        return result
+        return session.record("rag_chat", result)
 
     # Mandatory pre-routing must rebind the platform's original tool context
     # (user, chat and metadata) without unwrapping this recorder accidentally.
