@@ -211,15 +211,25 @@ def _last_validation_attempt(message: dict[str, Any]) -> dict[str, Any]:
 def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
     text = answer_text(message)
     attempt = _last_validation_attempt(message)
-    codes = {
-        str(violation.get("code") or "")
-        for violation in attempt.get("violations") or ()
-        if isinstance(violation, dict)
-    }
+    # Recorded severity wins; older records without it fall back to the code list.
+    blocking = sorted(
+        {
+            str(violation.get("code") or "")
+            for violation in attempt.get("violations") or ()
+            if isinstance(violation, dict)
+            and (
+                violation.get("severity") == "blocking"
+                or (
+                    "severity" not in violation
+                    and violation.get("code") in BLOCKING_VIOLATION_CODES
+                )
+            )
+        }
+    )
     abstained = bool(_ABSTENTION.search(text))
     latency = (message.get("kahle_harness_metrics") or {}).get("latency_ms")
     return {
-        "blocking_violations": sorted(codes & BLOCKING_VIOLATION_CODES),
+        "blocking_violations": blocking,
         "validation_status": str(attempt.get("status") or "not_run"),
         "abstained": abstained,
         "abstention_correct": (

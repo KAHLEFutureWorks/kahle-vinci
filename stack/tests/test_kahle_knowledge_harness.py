@@ -2397,7 +2397,9 @@ def test_endvalidator_returns_structured_retry_without_rewriting_answer():
 
     result = harness.validate_answer(original, decision)
 
-    assert result.status == "retry_required"
+    # Heuristic finding: recorded as advisory, no retry.
+    assert result.status == "accepted"
+    assert all(item["severity"] == "advisory" for item in result.violations)
     assert {item["code"] for item in result.violations} == {
         "missing_information_not_disclosed",
         "unsubstantiated_referral",
@@ -2432,7 +2434,9 @@ def test_endvalidator_rejects_a_literal_feedback_link_placeholder():
         decision,
     )
 
-    assert result.status == "retry_required"
+    # Heuristic finding: recorded as advisory, no retry.
+    assert result.status == "accepted"
+    assert all(item["severity"] == "advisory" for item in result.violations)
     assert {item["code"] for item in result.violations} == {
         "feedback_link_placeholder"
     }
@@ -2560,7 +2564,9 @@ def test_validator_rejects_invented_internal_policy_even_with_valid_citation():
         decision,
     )
 
-    assert result.status == "retry_required"
+    # Heuristic finding: recorded as advisory, no retry.
+    assert result.status == "accepted"
+    assert all(item["severity"] == "advisory" for item in result.violations)
     assert "fabricated_internal_authority" in {
         item["code"] for item in result.violations
     }

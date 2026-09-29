@@ -20,6 +20,20 @@ except ModuleNotFoundError:  # Isolated offline contract tests use the generated
 
 SCHEMA_VERSION = "kahle.knowledge-harness.v1"
 
+# Codes that prove a false statement or a missing proof. All other validator
+# codes are heuristics and stay advisory.
+BLOCKING_VIOLATION_CODES = frozenset(
+    {
+        "answer_missing",
+        "unknown_source_id",
+        "citation_missing",
+        "unbound_contact_literal",
+        "unbound_link_target",
+        "contact_link_mismatch",
+        "required_document_sections_missing",
+    }
+)
+
 KNOWN_ALIASES = {
     "TD": "Teiledienst",
     "DA": "Digitales Autohaus",
@@ -948,7 +962,11 @@ def validate_answer(
     violations: list[dict[str, Any]] = []
 
     def add(code: str, message: str, **details: Any) -> None:
-        violation = {"code": code, "message": message}
+        violation = {
+            "code": code,
+            "severity": "blocking" if code in BLOCKING_VIOLATION_CODES else "advisory",
+            "message": message,
+        }
         violation.update(details)
         if violation not in violations:
             violations.append(violation)
@@ -1053,7 +1071,8 @@ def validate_answer(
         )
 
     technical_approval = re.search(
-        r"\b(?:technisch\w*\s+)?(?:problemlos|machbar|umsetzbar|realisierbar|moglich)\b",
+        r"\btechnisch\w*\s+(?:problemlos|machbar|umsetzbar|realisierbar|moglich)\b"
+        r"|\b(?:problemlos|machbar|umsetzbar|realisierbar)\b",
         folded_text,
     )
     if technical_approval and not re.search(
@@ -1066,11 +1085,11 @@ def validate_answer(
         )
 
     privacy_clearance_pattern = (
-        r"(?:\b(?:keine|nicht|ohne)\s+(?:weitere\s+)?"
-        r"(?:datenschutz(?:rechtliche)?\w*\s*)?"
-        r"(?:prufung|freigabe|bedenken|problem)\w*|"
-        r"\bdatenschutz\w*\s+(?:ist\s+)?(?:nicht|kein\w*|ohne)\s+"
-        r"(?:erforderlich|notwendig|problematisch|bedenklich))"
+        r"(?:\b(?:keine|ohne)\s+(?:weitere\s+)?(?:datenschutz(?:rechtliche)?\w*\s+)?"
+        r"(?:prufung|freigabe|bedenken)\w*\s+(?:erforderlich|notwendig|notig|noetig)"
+        r"|\bdatenschutz\w*\s+(?:ist\s+)?(?:nicht|kein\w*)\s+"
+        r"(?:erforderlich|notwendig|problematisch|bedenklich)"
+        r"|\bkeine\s+datenschutz\w*\s+bedenken)"
     )
     privacy_approval = re.search(privacy_clearance_pattern, folded_text)
     if privacy_approval and not re.search(privacy_clearance_pattern, folded_claims):
@@ -1191,7 +1210,11 @@ def validate_answer(
 
     return AnswerValidation(
         schema_version="kahle.answer-validation.v1",
-        status="retry_required" if violations else "accepted",
+        status=(
+            "retry_required"
+            if any(item["severity"] == "blocking" for item in violations)
+            else "accepted"
+        ),
         violations=tuple(violations),
     )
 

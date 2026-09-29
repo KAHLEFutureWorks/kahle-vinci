@@ -230,3 +230,15 @@ def test_summarize_answers_rates_and_latency():
     assert summary["latency_p50_ms"] == 100
     assert summary["latency_p95_ms"] == 300
     assert summary["wall_p50_ms"] == 2000
+
+
+def test_score_answer_prefers_recorded_severity():
+    message = {
+        "content": "Antwort",
+        "kahle_answer_validation": {"attempts": [{"status": "accepted", "violations": [
+            {"code": "unsupported_privacy_approval", "severity": "advisory"},
+            {"code": "future_code", "severity": "blocking"},
+        ]}]},
+    }
+
+    assert score_answer(_case(), message)["blocking_violations"] == ["future_code"]
