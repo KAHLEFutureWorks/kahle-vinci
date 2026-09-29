@@ -584,6 +584,8 @@ def test_supervisor_typo_without_personio_evidence_has_no_person_claim():
 Run: `./.venv-verify/Scripts/python.exe -m pytest stack/tests/test_kahle_harness_phase0a.py -q -p no:cacheprovider`
 Expected: FAIL für `test_leadership_ranking_has_no_supported_evidence` und `test_ambiguous_supervisor_candidates_are_unsupported`
 
+> **Abweichung bei der Umsetzung (29.09.):** „Wer sind die wichtigsten Führungskräfte?“ ohne Bereich wird nur an RAG geroutet. Der Test war dadurch schon vorher grün und prüfte die Regel nicht. Der umgesetzte Test ist deshalb parametrisiert mit „… im Verkauf?“ und „Gib mir eine Rangliste der Führungskräfte im Service“. Beide laufen über Personio (per Assertion abgesichert) und waren ohne die Regel `supported`.
+
 - [ ] **Step 3: Implement**
 
 Direkt vor `def build_decision(` einfügen:

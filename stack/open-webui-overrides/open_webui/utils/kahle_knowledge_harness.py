@@ -2903,6 +2903,59 @@ def _has_conversation_reference(messages: list[dict[str, Any]], query: str) -> b
     )
 
 
+_LEADERSHIP_RANKING = re.compile(
+    r"\b(?:wichtig\w*|rangliste|auswahl)\b.*\bfuhrungskraft\w*\b"
+)
+
+
+def _apply_directory_safety_rules(
+    query: str, evidence: EvidenceBundle
+) -> EvidenceBundle:
+    """Keep supervisor answers bound to exactly one Personio record."""
+    if _LEADERSHIP_RANKING.search(_fold(query)):
+        return EvidenceBundle(
+            status="unsupported",
+            missing_information=(
+                "Eine Rangliste oder Auswahl wichtiger Führungskräfte ist durch "
+                "Personio nicht belegt.",
+            ),
+            sync_completed_at=evidence.sync_completed_at,
+            stale=evidence.stale,
+        )
+    if classify_personio_directory_intent(query) != "supervisor_lookup":
+        return evidence
+    personio_claims = tuple(
+        claim
+        for claim in evidence.supported_claims
+        if isinstance(claim, dict)
+        and _citation_identifier(str(claim.get("source_id") or "")).startswith("P")
+    )
+    names = {
+        str(claim.get("display_name") or "").strip()
+        for claim in personio_claims
+        if str(claim.get("display_name") or "").strip()
+    }
+    if len(names) != 1:
+        return EvidenceBundle(
+            status="unsupported",
+            missing_information=(
+                "Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine "
+                "eindeutige Supervisor-Evidenz.",
+            ),
+            sync_completed_at=evidence.sync_completed_at,
+            stale=evidence.stale,
+        )
+    return replace(
+        evidence,
+        supported_claims=personio_claims,
+        sources=tuple(
+            source
+            for source in evidence.sources
+            if _source_identifier(source).startswith("P")
+        ),
+    )
+
+
 def build_decision(
     *,
     query: str,
@@ -2947,6 +3000,7 @@ def build_decision(
         )
     else:
         evidence = merge_evidence(rag_result, personio_result)
+    evidence = _apply_directory_safety_rules(retrieval_query, evidence)
     evidence, allowed_contact_values = _apply_contact_evidence_requirement(
         retrieval_query, evidence
     )

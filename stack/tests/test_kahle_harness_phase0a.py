@@ -122,3 +122,70 @@ def test_unrelated_words_are_not_supervisor_references():
 
     assert harness._has_supervisor_reference("Wie funktioniert die Fahrzeugführung?") is False
     assert harness._has_supervisor_reference("Wer macht die Fuhrparkplanung?") is False
+
+
+def _personio(*names):
+    return {
+        "status": "ok",
+        "claims": [
+            {"display_name": name, "position": "Leitung", "source_id": f"P{index}"}
+            for index, name in enumerate(names, 1)
+        ],
+        "sources": [{"id": f"P{index}", "kind": "personio_directory"} for index in range(1, len(names) + 1)],
+        "sync_completed_at": "2026-09-29T08:00:00Z",
+        "stale": False,
+    }
+
+
+def _decide(harness, query, personio=None, rag=""):
+    return harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[{"role": "user", "content": query}],
+        model_id="test-model",
+        permission_scope={"user_id": "u", "role": "user", "groups": []},
+        rag_result=rag,
+        personio_result=personio,
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # Both wordings are routed to Personio; the ranking must still stay unsupported.
+        "Wer sind die wichtigsten Führungskräfte im Verkauf?",
+        "Gib mir eine Rangliste der Führungskräfte im Service",
+    ],
+)
+def test_leadership_ranking_has_no_supported_evidence(query):
+    harness = load_harness()
+    assert "personio_directory" in _tools(harness, query)
+
+    decision = _decide(harness, query, _personio("Erika Beispiel"))
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+    assert "Erika Beispiel" not in decision.answer_prompt()
+
+
+def test_named_supervisor_with_one_personio_claim_stays_supported():
+    decision = _decide(load_harness(), "Wer ist die Führungskraft von Erika Beispiel?", _personio("Max Leitung"))
+
+    assert decision.evidence_bundle.status == "supported"
+    assert "Max Leitung" in decision.answer_prompt()
+
+
+def test_ambiguous_supervisor_candidates_are_unsupported():
+    decision = _decide(
+        load_harness(), "Wer ist die Führungskraft von Erika Beispiel?", _personio("Max Leitung", "Mia Leitung")
+    )
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert "Mia Leitung" not in decision.answer_prompt()
+
+
+def test_supervisor_typo_without_personio_evidence_has_no_person_claim():
+    decision = _decide(load_harness(), "Wer ist die Führungskrft von Erika Beispiel?")
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
