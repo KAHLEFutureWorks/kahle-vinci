@@ -261,6 +261,10 @@ $pythonSuites = @(
         WorkingDirectory = "eval/rag"; Tests = "tests"; PythonPath = @("eval/rag", "stack/kb-sync")
     },
     @{
+        Name = "Harness-Evaluation"; Path = "eval/harness/tests"; MinimumTier = "Fast"
+        WorkingDirectory = "eval/harness"; Tests = "tests"; PythonPath = @("eval/harness")
+    },
+    @{
         Name = "Academy-Provisioner"; Path = "stack/academy-provisioner/tests"; MinimumTier = "Fast"
         WorkingDirectory = "stack/academy-provisioner"; Tests = "tests"; PythonPath = @()
     },

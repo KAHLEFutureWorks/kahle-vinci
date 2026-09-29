@@ -80,6 +80,7 @@ erforderlichen allgemeinen Tier.
 | `stack/tests` | nach betroffenem Vertrag | ja | ja |
 | `stack/kb-sync/tests` | bei Index-/Retrieval-Änderungen | ja | ja |
 | `eval/rag/tests` | bei Eval-/Retrieval-Änderungen | ja | ja |
+| `eval/harness/tests` | bei Harness-, Routing- oder Eval-Änderungen | ja | ja |
 | `stack/academy-provisioner/tests` | bei Academy-Änderungen | ja | ja |
 | `stack/personio-directory/tests` | bei Personio-Änderungen | ja | ja |
 | Portal-UI-Lint | bei UI-Änderungen | ja | ja |
@@ -216,6 +217,20 @@ finally {
 
 python stack\tests\calibrate_rerank_threshold.py "<Kontrollfrage>"
 ```
+
+Harness-Eval. Der Offline-Lauf braucht kein Modell. Der Laufzeit-Lauf braucht
+den lokalen Stack, antwortende IONOS-Modelle und in `OPENWEBUI_API_KEY` das
+JWT-Sitzungstoken aus *Einstellungen → Konto* (`sk-…`-Schlüssel sind lokal
+nicht aktiviert):
+
+```powershell
+python eval\harness\offline_routing_eval.py --output eval\harness\results\<datum>-offline.json
+python eval\harness\runtime_harness_eval.py --base-url http://localhost:3004
+```
+
+Die Ergebnisse enthalten keine Fragen, Antworttexte oder Personendaten.
+Zusammenfassungen (`*.json`) dürfen eingecheckt werden, Rohzeilen (`*.jsonl`)
+nicht.
 
 API-Schlüssel werden über die dafür dokumentierten Umgebungsvariablen
 bereitgestellt. Der File-Proxy-Smoke liest seinen Schlüssel interaktiv ein,
