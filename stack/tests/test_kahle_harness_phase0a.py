@@ -103,3 +103,22 @@ def test_documented_responsibility_questions_use_rag_only(query):
 )
 def test_person_questions_keep_their_directory_route(query, tools):
     assert _tools(load_harness(), query) == tools
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Wer ist die Fürhungskraft von Anna Beispiel?",
+        "Wer ist die Führungskrfat von Anna Beispiel?",
+        "Wer ist die Führungskrft von Anna Beispiel?",
+    ],
+)
+def test_supervisor_reference_tolerates_one_typo_or_transposition(query):
+    assert load_harness()._has_supervisor_reference(query) is True
+
+
+def test_unrelated_words_are_not_supervisor_references():
+    harness = load_harness()
+
+    assert harness._has_supervisor_reference("Wie funktioniert die Fahrzeugführung?") is False
+    assert harness._has_supervisor_reference("Wer macht die Fuhrparkplanung?") is False

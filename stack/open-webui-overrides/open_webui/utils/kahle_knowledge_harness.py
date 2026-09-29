@@ -1438,9 +1438,18 @@ def _has_supervisor_reference(query: str) -> bool:
     if re.search(r"\b(?:fuhrungskraft|vorgesetzt\w*)\b", folded):
         return True
     return any(
-        token.startswith("fuhrung") and _one_character_apart(token, "fuhrungskraft")
+        token.startswith("fu") and _one_edit_apart(token, "fuhrungskraft")
         for token in folded.split()
     )
+
+
+def _one_edit_apart(left: str, right: str) -> bool:
+    """One insertion, deletion, substitution or adjacent transposition."""
+    if len(left) == len(right):
+        diffs = [index for index, (a, b) in enumerate(zip(left, right)) if a != b]
+        if len(diffs) == 2 and diffs[1] == diffs[0] + 1:
+            return left[diffs[0]] == right[diffs[1]] and left[diffs[1]] == right[diffs[0]]
+    return _one_character_apart(left, right)
 
 
 def _one_character_apart(left: str, right: str) -> bool:
