@@ -189,3 +189,27 @@ def test_supervisor_typo_without_personio_evidence_has_no_person_claim():
 
     assert decision.evidence_bundle.status == "unsupported"
     assert decision.evidence_bundle.supported_claims == ()
+
+
+MIDDLEWARE = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "middleware.py"
+
+
+def test_harness_decision_has_no_direct_answer_renderer():
+    harness = load_harness()
+
+    assert not hasattr(harness.HarnessDecision, "direct_answer")
+    assert not hasattr(harness, "_organization_contact_answer")
+
+
+def test_middleware_never_sets_final_content_from_the_knowledge_harness():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert "_knowledge_harness_direct_answer" not in source
+    active_block = source[
+        source.index("if harness_mode == 'active':"):
+        source.index(
+            "if harness_mode != 'active' and pre_routed_internal_rag",
+            source.index("if harness_mode == 'active':"),
+        )
+    ]
+    assert "kahle_direct_final_content" not in active_block

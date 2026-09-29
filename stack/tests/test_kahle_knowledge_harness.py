@@ -1392,10 +1392,9 @@ def test_personio_organization_contact_uses_only_structured_business_contacts():
         "person@example.invalid",
         "+49 511 000000",
     )
-    assert decision.direct_answer() == (
-        "Aktuelle Ansprechpersonen aus Personio:\n\n"
-        "- Erika Beispiel – person@example.invalid · +49 511 000000"
-    )
+    # Mixed area contact without RAG evidence: the Personio people remain usable.
+    assert decision.evidence_bundle.status == "partially_supported"
+    assert "person@example.invalid" in decision.answer_prompt()
 
 
 def test_mixed_organization_contact_keeps_documented_channel_and_current_people_separate():
@@ -1433,12 +1432,12 @@ def test_mixed_organization_contact_keeps_documented_channel_and_current_people_
         personio_result=personio,
     )
 
-    assert decision.direct_answer() == (
-        "Dokumentierter Kontaktweg:\n\n"
-        "Das dokumentierte Funktionspostfach ist team@example.invalid. [#1]\n\n"
-        "Aktuelle Ansprechpersonen aus Personio:\n\n"
-        "- Erika Beispiel – person@example.invalid"
+    assert decision.answer_contract.allowed_contact_values == (
+        "person@example.invalid",
+        "team@example.invalid",
     )
+    prompt = decision.answer_prompt()
+    assert "team@example.invalid" in prompt and "person@example.invalid" in prompt
 
 
 def test_general_area_contact_accepts_a_cited_non_literal_contact_path():
@@ -1466,9 +1465,10 @@ def test_general_area_contact_accepts_a_cited_non_literal_contact_path():
 
     assert decision.evidence_bundle.status == "partially_supported"
     assert decision.answer_contract.allowed_contact_values == ()
-    assert decision.direct_answer() == (
-        "Dokumentierter Kontaktweg:\n\n"
-        "Die IT ist ausschließlich über das Ticketsystem im Intranet erreichbar. [#1]"
+    # RAG claims reach the model through the tool context, not the contract.
+    assert any(
+        "Ticketsystem im Intranet" in str(claim)
+        for claim in decision.evidence_bundle.supported_claims
     )
 
 
@@ -1499,9 +1499,6 @@ def test_personio_organization_contact_requires_the_requested_contact_channel():
 
     assert decision.evidence_bundle.status == "unsupported"
     assert decision.answer_contract.allowed_contact_values == ()
-    assert decision.direct_answer() == (
-        "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
-    )
 
 
 def test_rag_organization_contact_without_literal_contact_evidence_is_unsupported():
@@ -1528,9 +1525,6 @@ def test_rag_organization_contact_without_literal_contact_evidence_is_unsupporte
     )
 
     assert decision.evidence_bundle.status == "unsupported"
-    assert decision.direct_answer() == (
-        "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
-    )
 
 
 def test_rag_contact_evidence_never_treats_a_document_date_as_a_phone_number():
@@ -1587,7 +1581,6 @@ def test_rag_organization_contact_uses_only_an_exact_cited_contact_literal():
     assert decision.answer_contract.allowed_contact_values == (
         "team@example.invalid",
     )
-    assert decision.direct_answer() == ""
 
 
 def test_previous_assistant_contact_value_is_never_treated_as_evidence():
@@ -2338,7 +2331,7 @@ def test_result_driven_decision_omits_document_outline_without_overview_evidence
     assert "KAHLE_KNOWLEDGE_DOCUMENT_OUTLINE" not in decision.answer_prompt()
 
 
-def test_unsupported_decision_provides_one_stable_pre_answer_result():
+def test_unsupported_decision_forbids_model_knowledge_in_contract():
     harness = load_harness()
     decision = harness.build_shadow_decision(
         query="Wie läuft der unbekannte Prozess?",
@@ -2355,9 +2348,8 @@ def test_unsupported_decision_provides_one_stable_pre_answer_result():
         ),
     )
 
-    assert decision.direct_answer() == (
-        "Dazu habe ich keine verlässliche freigegebene Information."
-    )
+    assert decision.evidence_bundle.status == "unsupported"
+    assert "Bei unsupported nutze kein allgemeines Modellwissen" in decision.answer_prompt()
 
 
 def _partial_wps_decision(harness, *, user_id="user-1"):

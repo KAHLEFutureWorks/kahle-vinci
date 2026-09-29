@@ -351,25 +351,6 @@ class HarnessDecision:
             "die Oberfläche ergänzt den vertrauenswürdigen Link separat."
         )
 
-    def direct_answer(self) -> str:
-        """Return a stable pre-answer result only when no synthesis is required."""
-        if self.user_intent.clarification_required:
-            return self.user_intent.clarification_question
-        if _contact_information_requested(self.resolved_context.retrieval_query):
-            if self.evidence_bundle.status == "unsupported":
-                return "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
-            if any(
-                need.kind == "organization_contact"
-                for need in self.retrieval_plan.information_needs
-            ):
-                return _organization_contact_answer(
-                    self.resolved_context.retrieval_query,
-                    self.retrieval_plan,
-                    self.evidence_bundle,
-                )
-        if self.evidence_bundle.status == "unsupported":
-            return "Dazu habe ich keine verlässliche freigegebene Information."
-        return ""
 
 def _fold(value: str) -> str:
     return (
@@ -761,55 +742,6 @@ def _apply_contact_evidence_requirement(
             (),
         )
     return evidence, allowed_values
-
-
-def _organization_contact_answer(
-    query: str, retrieval_plan: RetrievalPlan, evidence: EvidenceBundle
-) -> str:
-    channels = _requested_contact_channels(query)
-    del retrieval_plan
-    people = []
-    for claim in evidence.supported_claims:
-        if not isinstance(claim, dict):
-            continue
-        name = str(claim.get("display_name") or "").strip()
-        email = str(claim.get("business_email") or claim.get("email") or "").strip()
-        phone = str(claim.get("business_phone") or claim.get("phone") or "").strip()
-        contacts = []
-        if email and ("email" in channels or "any" in channels):
-            contacts.append(email)
-        if phone and ("phone" in channels or "any" in channels):
-            contacts.append(phone)
-        if name and contacts:
-            people.append(f"- {name} – {' · '.join(contacts)}")
-
-    documented = []
-    allowed = set(_contact_values(evidence))
-    for claim in evidence.supported_claims:
-        if not isinstance(claim, dict):
-            continue
-        text = str(claim.get("evidence_span") or claim.get("text") or "").strip()
-        source_id = str(claim.get("source_id") or "").strip()
-        if text and source_id and (
-            any(value in text for value in allowed)
-            or (text, source_id) in _cited_contact_instructions(evidence)
-        ):
-            documented.append(f"{text} [{source_id}]")
-
-    sections = []
-    if documented:
-        sections.append(
-            "Dokumentierter Kontaktweg:\n\n"
-            + "\n".join(dict.fromkeys(documented))
-        )
-    if people:
-        sections.append(
-            "Aktuelle Ansprechpersonen aus Personio:\n\n"
-            + "\n".join(dict.fromkeys(people))
-        )
-    return "\n\n".join(sections) or (
-        "Dazu habe ich keine verlässliche freigegebene Kontaktinformation."
-    )
 
 
 def _citation_identifier(value: str) -> str:

@@ -151,16 +151,10 @@ def test_pure_person_query_calls_personio_once_and_never_falls_back_to_rag():
         rag_result=result["rag_result"],
         personio_result=result["personio_result"],
     )
-    direct_answer = load_function_from_middleware(
-        "_knowledge_harness_direct_answer"
-    )
-    assert direct_answer(decision, decision.to_dict()) == (
-        "Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine "
-        "passende freigegebene Information."
-    )
+    assert decision.evidence_bundle.status == "unsupported"
 
 
-def test_supported_onboarding_directory_evidence_is_rendered_without_model_synthesis():
+def test_supported_onboarding_directory_evidence_reaches_the_answer_contract():
     query = "Wie viele Mitarbeiter sind aktuell im Onboarding?"
     personio = {
         "status": "ok",
@@ -202,14 +196,9 @@ def test_supported_onboarding_directory_evidence_is_rendered_without_model_synth
         personio_result=personio,
     )
 
-    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
-    answer = direct_answer(decision, decision.to_dict())
-
-    assert answer.startswith("Aktuell sind 2 Mitarbeiter im Onboarding:")
-    assert "Nora Neu – Serviceberaterin" in answer
-    assert "Erik Einstieg – Verkäufer" in answer
-    assert "nora.neu@kahle.de" not in answer
-    assert "personio_id" not in answer
+    assert decision.evidence_bundle.status == "supported"
+    prompt = decision.answer_prompt()
+    assert "Nora Neu" in prompt and "Erik Einstieg" in prompt
 
 
 def test_supported_person_lookup_evidence_uses_the_answer_contract_instead_of_a_fixed_renderer():
@@ -244,10 +233,6 @@ def test_supported_person_lookup_evidence_uses_the_answer_contract_instead_of_a_
         personio_result=personio,
     )
 
-    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
-    answer = direct_answer(decision, decision.to_dict())
-
-    assert answer == ""
     contract = decision.answer_prompt()
     assert "Erika Marie Beispiel" in contract
     assert "erika.beispiel@kahle.de" in contract
@@ -283,10 +268,6 @@ def test_supported_person_contact_evidence_uses_the_answer_contract_instead_of_a
         personio_result=personio,
     )
 
-    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
-    answer = direct_answer(decision, decision.to_dict())
-
-    assert answer == ""
     contract = decision.answer_prompt()
     assert "erika.beispiel@kahle.de" in contract
     assert "+49 511 123456" in contract
@@ -314,14 +295,8 @@ def test_general_leadership_ranking_is_fail_closed_even_with_directory_evidence(
         personio_result=personio,
     )
 
-    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
-    answer = direct_answer(decision, decision.to_dict())
-
-    assert answer == (
-        "Eine Rangliste oder Auswahl wichtiger Führungskräfte kann ich nicht "
-        "verlässlich bestimmen. Personio liefert dafür keine freigegebene Evidenz."
-    )
-    assert "Erika Beispiel" not in answer
+    assert decision.evidence_bundle.status == "unsupported"
+    assert "Erika Beispiel" not in decision.answer_prompt()
 
 
 def test_named_supervisor_evidence_is_not_blocked_as_a_leadership_ranking():
@@ -346,11 +321,7 @@ def test_named_supervisor_evidence_is_not_blocked_as_a_leadership_ranking():
         personio_result=personio,
     )
 
-    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
-
-    assert direct_answer(decision, decision.to_dict()) == (
-        "Die in Personio hinterlegte Führungskraft ist Max Leitung."
-    )
+    assert decision.evidence_bundle.status == "supported"
     assert "Max Leitung" in decision.answer_prompt()
 
 
@@ -767,37 +738,6 @@ def test_supervisor_typo_uses_supervisor_lookup_intent():
         personio_intent("Wer ist die Führungskrft von Erika Beispiel?")
         == "supervisor_lookup"
     )
-
-
-def test_supervisor_typo_blocks_rag_person_claim_as_defense_in_depth():
-    class UnsafeRagDecision:
-        @staticmethod
-        def direct_answer():
-            return (
-                "Erika Beispiel berichtet an eine erfundene Führungskraft. "
-                "Quelle: Personio-Mitarbeiterverzeichnis."
-            )
-
-    payload = {
-        "retrieval_plan": {"required_tools": ["rag_chat"]},
-        "evidence_bundle": {
-            "status": "supported",
-            "supported_claims": ["Erfundene aktuelle Supervisor-Aussage"],
-        },
-        "resolved_context": {
-            "retrieval_query": "Wer ist die Führungskrft von Erika Beispiel?"
-        },
-    }
-
-    direct_answer = load_function_from_middleware("_knowledge_harness_direct_answer")
-    answer = direct_answer(UnsafeRagDecision(), payload)
-
-    assert answer == (
-        "Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine "
-        "passende freigegebene Supervisor-Evidenz."
-    )
-    assert "erfundene Führungskraft" not in answer
-    assert "Quelle: Personio" not in answer
 
 
 @pytest.mark.parametrize(
@@ -3100,19 +3040,6 @@ def test_shadow_harness_preserves_location_mode_for_stream_normalization():
     assert "metadata['kahle_survey_location_mode']" in source
     assert "or metadata.get('kahle_survey_location_mode')" in source
     assert "temporary_survey_without_location" in source
-
-
-def test_model_led_preroute_supplies_evidence_but_never_owns_final_content():
-    source = MIDDLEWARE.read_text(encoding="utf-8")
-    active_block = source[
-        source.index("if harness_mode == 'active':"):
-        source.index("if harness_mode != 'active' and pre_routed_internal_rag", source.index("if harness_mode == 'active':"))
-    ]
-
-    assert "if routing_mode != 'model_led':" in active_block
-    assert active_block.index("if routing_mode != 'model_led':") < active_block.index(
-        "_knowledge_harness_direct_answer("
-    )
 
 
 def test_unrelated_file_form_and_mail_direct_final_paths_remain_present():

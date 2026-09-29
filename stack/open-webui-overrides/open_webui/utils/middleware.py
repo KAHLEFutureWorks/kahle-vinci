@@ -478,92 +478,6 @@ def _high_salience_knowledge_answer_prompt(decision: Any) -> str:
     return str(decision.answer_prompt() or '')
 
 
-def _knowledge_harness_direct_answer(
-    decision: Any, payload: dict[str, Any]
-) -> str:
-    retrieval = payload.get('retrieval_plan') or {}
-    evidence = payload.get('evidence_bundle') or {}
-    resolved_context = payload.get('resolved_context') or {}
-    query = str(resolved_context.get('retrieval_query') or '')
-    folded_query = (
-        query.casefold()
-        .replace('ä', 'a')
-        .replace('ö', 'o')
-        .replace('ü', 'u')
-        .replace('ß', 'ss')
-    )
-    if re.search(
-        r'\b(?:wichtig\w*|rangliste|auswahl)\b.*\bfuhrungskraft\w*\b',
-        folded_query,
-    ):
-        return (
-            'Eine Rangliste oder Auswahl wichtiger Führungskräfte kann ich nicht '
-            'verlässlich bestimmen. Personio liefert dafür keine freigegebene Evidenz.'
-        )
-    if (
-        _personio_directory_intent(query) == 'supervisor_lookup'
-        and (
-            tuple(retrieval.get('required_tools') or ()) != ('personio_directory',)
-            or evidence.get('status') != 'supported'
-        )
-    ):
-        return (
-            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
-            'passende freigegebene Supervisor-Evidenz.'
-        )
-    if _personio_directory_intent(query) == 'supervisor_lookup':
-        supervisor_names = [
-            str(claim.get('display_name') or '').strip()
-            for claim in evidence.get('supported_claims') or ()
-            if isinstance(claim, dict) and str(claim.get('display_name') or '').strip()
-        ]
-        if len(supervisor_names) == 1:
-            return (
-                'Die in Personio hinterlegte Führungskraft ist '
-                f'{supervisor_names[0]}.'
-            )
-        return (
-            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
-            'passende freigegebene Supervisor-Evidenz.'
-        )
-    if (
-        tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
-        and 'onboard' in folded_query
-        and evidence.get('status') == 'supported'
-    ):
-        entries = []
-        for claim in evidence.get('supported_claims') or ():
-            if not isinstance(claim, dict):
-                continue
-            name = str(claim.get('display_name') or '').strip()
-            if not name:
-                continue
-            details = [
-                str(claim.get(field) or '').strip()
-                for field in ('position', 'department', 'team', 'office')
-                if str(claim.get(field) or '').strip()
-            ]
-            entries.append(f"- {name}" + (f" – {' · '.join(details)}" if details else ''))
-        if entries:
-            return (
-                f"Aktuell sind {len(entries)} Mitarbeiter im Onboarding:\n\n"
-                + "\n".join(entries)
-            )
-        return (
-            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
-            'passende freigegebene Information.'
-        )
-    if (
-        tuple(retrieval.get('required_tools') or ()) == ('personio_directory',)
-        and evidence.get('status') == 'unsupported'
-    ):
-        return (
-            'Dazu finde ich im aktuellen Personio-Mitarbeiterverzeichnis keine '
-            'passende freigegebene Information.'
-        )
-    return str(decision.direct_answer() or '')
-
-
 def _knowledge_harness_tool_called(metadata: dict[str, Any]) -> str:
     tools = list(metadata.get('kahle_retrieval_tools') or [])
     if len(tools) > 1:
@@ -5550,12 +5464,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 form_data.get('messages', []) or [],
                                 append=True,
                             )
-                            if routing_mode != 'model_led':
-                                direct_answer = _knowledge_harness_direct_answer(
-                                    harness_decision, harness_payload
-                                )
-                                if direct_answer:
-                                    metadata['kahle_direct_final_content'] = direct_answer
                     if harness_mode != 'active' and pre_routed_internal_rag == 'clarification':
                         metadata['kahle_direct_final_content'] = (
                             _internal_rag_clarification(pre_route_sources)

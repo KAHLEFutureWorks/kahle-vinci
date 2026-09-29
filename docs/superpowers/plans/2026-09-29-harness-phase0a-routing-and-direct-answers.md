@@ -784,10 +784,15 @@ Ersatz für den `direct_answer`-Teil in `test_supported_onboarding_directory_evi
     assert "Nora Neu" in prompt and "Erik Einstieg" in prompt
 ```
 
+> **Abweichungen bei der Umsetzung (29.09.):**
+> - `test_personio_organization_contact_…`: Die Frage ist eine gemischte Bereichskontaktfrage. Ohne RAG-Ergebnis ist die Evidenz korrekt `partially_supported`. Umgesetzt wurden `status == "partially_supported"` und die Prüfung, dass `person@example.invalid` im Vertrag steht.
+> - `test_general_area_contact_…`: Der Antwortvertrag enthält nur Personio-Claims, RAG-Inhalte erreichen das Modell über den Tool-Kontext. Umgesetzt wurde die Prüfung auf den Claim im `EvidenceBundle` statt im Vertrag.
+> - Beim Löschen von `test_supervisor_typo_blocks_rag_person_claim_…` darf der `@pytest.mark.parametrize`-Dekorator des folgenden Tests nicht mitgelöscht werden.
+
 - [ ] **Step 5: Run tests**
 
 Run: `./.venv-verify/Scripts/python.exe -m pytest stack/tests/test_kahle_harness_phase0a.py -q -p no:cacheprovider`
-Expected: `36 passed`
+Expected: `37 passed` (Task 6 hat einen parametrisierten Fall mehr)
 
 Run: die vier Bestandssuiten
 Expected: `633 passed` (635 minus zwei gelöschte Tests)

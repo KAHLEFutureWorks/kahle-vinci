@@ -144,7 +144,9 @@ def test_reference_matrix_aliases_followups_and_clarifications():
     assert opening.resolved_context.aliases == {"TD": "Teiledienst", "NIE": "Nienburg"}
     assert opening.resolved_context.conversation_reference is True
     assert lock.user_intent.clarification_required is True
-    assert lock.direct_answer().startswith("Geht es um Werbewiderspruch")
+    prompt = lock.answer_prompt()
+    assert prompt.startswith("KAHLE_KNOWLEDGE_CLARIFICATION")
+    assert "Geht es um Werbewiderspruch" in prompt
 
 
 def test_reference_matrix_permission_scope_and_model_parity_are_data_not_branches():
