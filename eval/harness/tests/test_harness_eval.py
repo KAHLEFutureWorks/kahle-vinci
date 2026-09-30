@@ -194,6 +194,9 @@ def test_score_answer_keeps_only_blocking_codes_and_no_text():
         "abstention_correct": True,
         "answer_present": True,
         "latency_ms": 1200,
+        "retry_count": 0,
+        "fallback_used": False,
+        "delivery_status": "not_run",
     }
     assert "verlässliche" not in json.dumps(score, ensure_ascii=False)
 
@@ -242,3 +245,14 @@ def test_score_answer_prefers_recorded_severity():
     }
 
     assert score_answer(_case(), message)["blocking_violations"] == ["future_code"]
+
+
+def test_score_and_summary_include_correction_metrics():
+    message = _message(text="Antwort [1].")
+    message["kahle_harness_metrics"].update({"retry_count": 1, "fallback_used": False, "delivery_status": "corrected"})
+
+    score = score_answer(_case(), message)
+    summary = summarize_answers([{"model": "m", **score, "wall_ms": 10}])["m"]
+
+    assert (score["retry_count"], score["fallback_used"], score["delivery_status"]) == (1, False, "corrected")
+    assert summary["retry_rate"] == 1.0 and summary["fallback_rate"] == 0.0

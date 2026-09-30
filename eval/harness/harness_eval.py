@@ -227,7 +227,8 @@ def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
         }
     )
     abstained = bool(_ABSTENTION.search(text))
-    latency = (message.get("kahle_harness_metrics") or {}).get("latency_ms")
+    metrics = message.get("kahle_harness_metrics") or {}
+    latency = metrics.get("latency_ms")
     return {
         "blocking_violations": blocking,
         "validation_status": str(attempt.get("status") or "not_run"),
@@ -239,6 +240,9 @@ def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
         "latency_ms": (
             int(latency) if isinstance(latency, (int, float)) and latency >= 0 else None
         ),
+        "retry_count": int(metrics.get("retry_count") or 0),
+        "fallback_used": bool(metrics.get("fallback_used")),
+        "delivery_status": str(metrics.get("delivery_status") or "not_run"),
     }
 
 
@@ -266,6 +270,12 @@ def summarize_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "abstention_checked": len(checked),
             "abstention_accuracy": _rate(
                 sum(bool(row["abstention_correct"]) for row in checked), len(checked)
+            ),
+            "retry_rate": _rate(
+                sum(int(row.get("retry_count") or 0) > 0 for row in items), len(items)
+            ),
+            "fallback_rate": _rate(
+                sum(bool(row.get("fallback_used")) for row in items), len(items)
             ),
             "latency_p50_ms": nearest_rank(latencies, 0.5),
             "latency_p95_ms": nearest_rank(latencies, 0.95),
