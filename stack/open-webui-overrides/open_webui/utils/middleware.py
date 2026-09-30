@@ -8417,21 +8417,68 @@ async def streaming_chat_response_handler(response, ctx):
                             break
 
                 validation_attempts = []
+                enforcement = {'retry_count': 0, 'fallback_used': False, 'delivery_status': None}
                 harness_payload = _ephemeral_kahle_harness_payload(request)
                 shadow_validation = bool(
                     harness_payload
                     and (harness_payload.get('retrieval_plan') or {}).get('mode') == 'model_led'
                 )
-                if shadow_validation:
+                enforce_answer = bool(
+                    _answer_enforcement_mode() == 'enforce'
+                    and metadata.get('kahle_knowledge_harness_active')
+                    and harness_payload
+                )
+                if enforce_answer:
+                    await event_emitter({
+                        'type': 'status',
+                        'data': {'description': 'Antwort wird anhand der Quellen geprüft', 'done': False},
+                    })
+
+                    async def regenerate(retry_messages):
+                        response = await generate_chat_completion(
+                            request,
+                            {'model': model_id, 'messages': retry_messages,
+                             'stream': False, 'metadata': metadata},
+                            user,
+                            bypass_system_prompt=True,
+                        )
+                        return _completion_text(response)
+
+                    enforcement = await _enforce_knowledge_answer(
+                        output,
+                        harness_payload,
+                        messages=form_data.get('messages', []) or [],
+                        reference_urls=_canonical_kahle_reference_urls(canonical_rag_sources),
+                        regenerate=regenerate,
+                        timeout_seconds=_answer_retry_timeout(
+                            str((model.get('info') or {}).get('base_model_id') or model_id)
+                            if isinstance(model, dict) else str(model_id)
+                        ),
+                    )
+                    validation_attempts = enforcement['attempts']
+                    metadata['kahle_answer_validation'] = {
+                        'schema_version': 'kahle.answer-validation-run.v1',
+                        'mode': 'enforce',
+                        'attempts': validation_attempts,
+                    }
+                    await event_emitter({
+                        'type': 'status',
+                        'data': {'description': 'Antwort wird anhand der Quellen geprüft', 'done': True},
+                    })
+                    # Links are appended after the final text is fixed.
+                    shadow_validation = True
                     _append_canonical_rag_source_links(output, canonical_rag_sources)
                     _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
-                if metadata.get('kahle_knowledge_harness_active') and shadow_validation:
+                elif shadow_validation:
+                    _append_canonical_rag_source_links(output, canonical_rag_sources)
+                    _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
+                if not enforce_answer and metadata.get('kahle_knowledge_harness_active') and shadow_validation:
                     metadata['kahle_answer_validation'] = _observe_model_led_answer(
                         output, harness_payload, sources=canonical_rag_sources,
                         feedback_link=canonical_rag_feedback_link,
                     )
                     validation_attempts = metadata['kahle_answer_validation']['attempts']
-                elif metadata.get('kahle_knowledge_harness_active') and harness_payload:
+                elif not enforce_answer and metadata.get('kahle_knowledge_harness_active') and harness_payload:
                     validation = validate_knowledge_harness_answer(
                         _last_kahle_answer_text(output), harness_payload
                     )
@@ -8473,15 +8520,19 @@ async def streaming_chat_response_handler(response, ctx):
                         ),
                         'permission_scope_present': bool(permission_payload.get('user_id')),
                         'validation_attempts': len(validation_attempts),
-                        **({'validation_mode': 'shadow'} if shadow_validation else {}),
-                        'retry_count': 0,
-                        'fallback_used': False,
+                        **(
+                            {'validation_mode': 'enforce'} if enforce_answer
+                            else {'validation_mode': 'shadow'} if shadow_validation else {}
+                        ),
+                        'retry_count': enforcement['retry_count'],
+                        'fallback_used': enforcement['fallback_used'],
                         'final_validation_status': (
                             validation_attempts[-1].get('status')
                             if validation_attempts
                             else 'not_run'
                         ),
                         'delivery_status': (
+                            enforcement['delivery_status'] if enforce_answer else
                             'observed' if shadow_validation else
                             validation_attempts[-1].get('status')
                             if validation_attempts

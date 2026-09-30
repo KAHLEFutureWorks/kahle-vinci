@@ -312,3 +312,24 @@ def test_stream_holds_knowledge_answers_in_enforce_mode():
         r"hold_knowledge_answer = _answer_enforcement_mode\(\) == 'enforce'",
         source,
     )
+
+
+def test_validation_point_enforces_in_enforce_mode_and_records_metrics():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    block = source[source.index("validation_attempts = []"):source.index("if not shadow_validation:\n")]
+
+    assert "_answer_enforcement_mode() == 'enforce'" in block
+    assert "await _enforce_knowledge_answer(" in block
+    assert "timeout_seconds=_answer_retry_timeout(" in block
+    assert "'retry_count': enforcement['retry_count']" in block
+    assert "'fallback_used': enforcement['fallback_used']" in block
+    assert "enforcement['delivery_status']" in block
+    assert "Antwort wird anhand der Quellen geprüft" in block
+
+
+def test_compose_defaults_to_observe_and_local_edge_enforces():
+    base = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    local = (ROOT / "docker-compose.local-edge.yml").read_text(encoding="utf-8")
+
+    assert "KAHLE_ANSWER_ENFORCEMENT: ${KAHLE_ANSWER_ENFORCEMENT:-observe}" in base
+    assert 'KAHLE_ANSWER_ENFORCEMENT: "enforce"' in local
