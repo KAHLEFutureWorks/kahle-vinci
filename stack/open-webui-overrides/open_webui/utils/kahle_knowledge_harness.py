@@ -350,6 +350,8 @@ class HarnessDecision:
             "Modellwissen. Jede konkrete interne Aussage benötigt eine vorhandene Quellen-ID. "
             "Zitiere Dokumentbelege mit ihrer Nummer in eckigen Klammern, z. B. [1] oder [1, 2]; "
             "Personio-Belege als [P1]. "
+            "Zitiere ausschließlich Quellen-IDs aus evidence_bundle.source_ids. "
+            "Ist source_ids leer, setze kein Zitat. "
             "Ergänze keine Beispiele, möglichen Eingabefelder, Alternativen, Ansprechpartner, "
             "Support-Verweise oder Handlungsempfehlungen, sofern diese nicht ausdrücklich in "
             "der Evidenz stehen. Wenn eine Anleitung fehlt, sage nur, welcher belegte Teil "
