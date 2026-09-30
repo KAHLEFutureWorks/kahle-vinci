@@ -8,7 +8,9 @@ function ConvertFrom-JsonDocument {
     [string[]]$Lines
   )
 
-  ($Lines -join [Environment]::NewLine) | ConvertFrom-Json
+  # Windows PowerShell 5.1 emits a JSON array as one object; enumerate it so
+  # callers see the same items as on PowerShell 7.
+  ($Lines -join [Environment]::NewLine) | ConvertFrom-Json | ForEach-Object { $_ }
 }
 
 

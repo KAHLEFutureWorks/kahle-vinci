@@ -154,3 +154,17 @@ def test_multiline_docker_json_is_parsed_as_one_document():
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "open-webui"
+
+
+def test_docker_inspect_array_yields_its_first_container_on_every_powershell():
+    # Windows PowerShell 5.1 emits a JSON array as one object; the start script
+    # indexes [0] and would otherwise treat every running container as foreign.
+    result = run_powershell(
+        "$lines = @('[', '{\"Name\": \"/open-webui\", \"Config\": {\"Labels\": "
+        "{\"com.docker.compose.project\": \"stack\"}}}', ']'); "
+        "$container = @(ConvertFrom-JsonDocument -Lines $lines)[0]; "
+        "Get-ContainerComposeProject -Container $container"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "stack"
