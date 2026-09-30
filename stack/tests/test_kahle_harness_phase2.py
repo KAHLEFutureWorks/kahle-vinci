@@ -95,3 +95,86 @@ def test_abstention_answer_is_neutral_and_mentions_sources_only_if_present():
     assert with_sources.startswith("Dazu habe ich keine verlässliche freigegebene Information.")
     assert "Quellen" in with_sources
     assert "[" not in with_sources
+
+
+def test_enforcement_mode_defaults_to_observe(monkeypatch):
+    mode = load_middleware_functions("_answer_enforcement_mode")["_answer_enforcement_mode"]
+    monkeypatch.delenv("KAHLE_ANSWER_ENFORCEMENT", raising=False)
+    assert mode() == "observe"
+    monkeypatch.setenv("KAHLE_ANSWER_ENFORCEMENT", "enforce")
+    assert mode() == "enforce"
+    monkeypatch.setenv("KAHLE_ANSWER_ENFORCEMENT", "kaputt")
+    assert mode() == "observe"
+
+
+def test_retry_timeout_depends_on_base_model(monkeypatch):
+    namespace = load_middleware_functions("_answer_retry_timeout")
+    namespace["_DEFAULT_ANSWER_RETRY_TIMEOUTS"] = {"default": 45, "Qwen/": 120}
+    timeout = namespace["_answer_retry_timeout"]
+    monkeypatch.delenv("KAHLE_ANSWER_RETRY_TIMEOUTS", raising=False)
+    assert timeout("mistralai/Mistral-Small-24B-Instruct") == 45
+    assert timeout("Qwen/Qwen3.5-397B-A17B") == 120
+    monkeypatch.setenv("KAHLE_ANSWER_RETRY_TIMEOUTS", '{"default": 30, "openai/": 60}')
+    assert timeout("openai/gpt-oss-120b") == 60
+    assert timeout("Qwen/Qwen3.5-397B-A17B") == 30
+
+
+def test_default_retry_timeouts_give_qwen_more_time():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert "_DEFAULT_ANSWER_RETRY_TIMEOUTS = {'default': 45, 'Qwen/': 120}" in source
+
+
+def test_retry_messages_keep_systems_first_and_flatten_tool_results():
+    build = load_middleware_functions("_knowledge_retry_messages")["_knowledge_retry_messages"]
+    messages = [
+        {"role": "system", "content": "Systemprompt"},
+        {"role": "system", "content": "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n{}"},
+        {"role": "user", "content": "Frühere Frage"},
+        {"role": "assistant", "content": "Frühere Antwort"},
+        {"role": "user", "content": "Aktuelle Frage"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "fc_pre", "type": "function"}]},
+        {"role": "tool", "tool_call_id": "fc_pre", "content": "KAHLE_RAG_RESULT\n[2] Vorab-Beleg"},
+    ]
+    output = [
+        {"type": "function_call", "call_id": "call_1", "name": "rag_chat", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_text", "text": "KAHLE_RAG_RESULT\n[1] Beleg"}]},
+        {"type": "message", "content": [{"type": "output_text", "text": "Entwurf ohne Zitat."}]},
+    ]
+
+    result = build(messages, output, "KAHLE_KNOWLEDGE_ANSWER_RETRY\n{}")
+
+    roles = [item["role"] for item in result]
+    assert roles == ["system", "system", "user", "assistant", "user", "user", "assistant", "user"]
+    assert "rag_chat" in result[5]["content"] and "[1] Beleg" in result[5]["content"]
+    assert "[2] Vorab-Beleg" in result[5]["content"]
+    assert result[6]["content"] == "Entwurf ohne Zitat."
+    assert result[7]["content"].startswith("KAHLE_KNOWLEDGE_ANSWER_RETRY")
+    assert all("tool_calls" not in item and item["role"] != "tool" for item in result)
+
+
+@pytest.mark.parametrize(
+    "response, expected",
+    [
+        ({"choices": [{"message": {"content": "<think>x</think>\n\nAntwort [1]."}}]}, "Antwort [1]."),
+        ({"choices": [{"message": {"content": "\n\nAntwort [1]."}}]}, "Antwort [1]."),
+        ({"choices": []}, ""),
+    ],
+)
+def test_completion_text_strips_reasoning(response, expected):
+    extract = load_middleware_functions("_completion_text")["_completion_text"]
+    assert extract(response) == expected
+
+
+def test_replace_last_answer_text_only_touches_the_final_message():
+    replace_text = load_middleware_functions("_replace_last_answer_text")["_replace_last_answer_text"]
+    output = [
+        {"type": "message", "content": [{"type": "output_text", "text": "alt 1"}]},
+        {"type": "function_call", "name": "rag_chat"},
+        {"type": "message", "content": [{"type": "output_text", "text": "alt 2"}]},
+    ]
+
+    replace_text(output, "neu")
+
+    assert output[0]["content"][0]["text"] == "alt 1"
+    assert output[2]["content"][0]["text"] == "neu"

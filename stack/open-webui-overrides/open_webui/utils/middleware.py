@@ -4330,6 +4330,102 @@ def _canonical_kahle_reference_urls(sources) -> tuple[str, ...]:
         and re.fullmatch(r'/wissen/api/portal/sources/[A-Za-z0-9_-]{1,100}', source['source_url']))
 
 
+def _answer_enforcement_mode() -> str:
+    mode = str(os.getenv('KAHLE_ANSWER_ENFORCEMENT') or 'observe').strip().lower()
+    return mode if mode in {'observe', 'enforce'} else 'observe'
+
+
+_DEFAULT_ANSWER_RETRY_TIMEOUTS = {'default': 45, 'Qwen/': 120}
+
+
+def _answer_retry_timeout(base_model_id: str) -> int:
+    """Seconds for one correction call; reasoning models need longer."""
+    try:
+        configured = json.loads(os.getenv('KAHLE_ANSWER_RETRY_TIMEOUTS') or 'null')
+    except (TypeError, ValueError):
+        configured = None
+    timeouts = configured if isinstance(configured, dict) else _DEFAULT_ANSWER_RETRY_TIMEOUTS
+    model = str(base_model_id or '')
+    for prefix, seconds in timeouts.items():
+        if prefix != 'default' and model.startswith(prefix):
+            return int(seconds)
+    return int(timeouts.get('default', 45))
+
+
+def _knowledge_retry_messages(
+    messages: list[dict[str, Any]], output: list[dict[str, Any]], retry_prompt: str,
+) -> list[dict[str, Any]]:
+    """Provider-neutral correction request.
+
+    Systems stay first (Qwen rejects later system messages), tool results are
+    passed as plain text (Mistral validates tool-call ids strictly), and the
+    correction order is a user turn.
+    """
+    systems = [
+        {'role': 'system', 'content': str(item.get('content') or '')}
+        for item in messages if isinstance(item, dict) and item.get('role') == 'system'
+    ]
+    history = [
+        {'role': item['role'], 'content': item['content']}
+        for item in messages
+        if isinstance(item, dict) and item.get('role') in {'user', 'assistant'}
+        and isinstance(item.get('content'), str) and item['content'].strip()
+    ]
+    # Pre-routed evidence lives in form_data messages as tool turns.
+    tool_texts = [
+        str(item.get('content') or '')
+        for item in messages
+        if isinstance(item, dict) and item.get('role') == 'tool' and item.get('content')
+    ]
+    draft = ''
+    for item in output or []:
+        if item.get('type') == 'function_call_output':
+            parts = item.get('output') or []
+            text = '\n'.join(
+                str(part.get('text') or '') for part in parts if isinstance(part, dict)
+            ) if isinstance(parts, list) else str(parts)
+            tool_texts.append(text)
+        elif item.get('type') == 'function_call':
+            tool_texts.append(f"Werkzeugaufruf: {item.get('name')}")
+        elif item.get('type') == 'message':
+            for part in item.get('content') or []:
+                if part.get('type') == 'output_text':
+                    draft = str(part.get('text') or '')
+    result = [*systems, *history]
+    if tool_texts:
+        result.append({
+            'role': 'user',
+            'content': 'Ergebnisse der internen Werkzeuge dieser Anfrage:\n\n' + '\n\n'.join(tool_texts),
+        })
+    result.append({'role': 'assistant', 'content': draft})
+    result.append({'role': 'user', 'content': retry_prompt})
+    return result
+
+
+def _completion_text(response: Any) -> str:
+    if hasattr(response, 'body'):
+        try:
+            response = json.loads(response.body)
+        except (TypeError, ValueError):
+            return ''
+    choices = response.get('choices') if isinstance(response, dict) else None
+    if not choices:
+        return ''
+    text = str((choices[0].get('message') or {}).get('content') or '')
+    text = re.sub(r'(?is)<(think|thinking|reasoning)>.*?</\1>', '', text)
+    return text.strip()
+
+
+def _replace_last_answer_text(output: list[dict[str, Any]], text: str) -> None:
+    for item in reversed(output or []):
+        if item.get('type') != 'message':
+            continue
+        for part in reversed(item.get('content') or []):
+            if part.get('type') == 'output_text':
+                part['text'] = text
+                return
+
+
 def _observe_model_led_answer(
     output: list[dict[str, Any]], harness_payload: dict[str, Any],
     *, sources: list[dict[str, Any]] | tuple = (), feedback_link: str = '',
