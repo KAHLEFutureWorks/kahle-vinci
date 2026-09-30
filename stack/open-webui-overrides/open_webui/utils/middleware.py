@@ -1821,12 +1821,19 @@ def _normalize_repeated_location_prompt_output(output: list) -> list:
     ]
 
 
-def _stream_safe_output(output: list, *, suppress_message_text: bool = False) -> list:
+def _stream_safe_output(
+    output: list,
+    *,
+    suppress_message_text: bool = False,
+    suppress_reasoning: bool | None = None,
+) -> list:
+    if suppress_reasoning is None:
+        suppress_reasoning = suppress_message_text
     safe_output = copy.deepcopy(output or [])
     for item in safe_output:
         if not isinstance(item, dict):
             continue
-        if suppress_message_text and item.get('type') == 'reasoning':
+        if suppress_reasoning and item.get('type') == 'reasoning':
             item['content'] = []
             item.pop('reasoning_details', None)
             summaries = item.get('summary', [])
@@ -6972,6 +6979,12 @@ async def streaming_chat_response_handler(response, ctx):
                 ),
                 prerouted=bool(metadata.get('kahle_internal_rag_prerouted')),
             )
+            # Knowledge answers stay hidden until validated (Phase 2); tool
+            # status and model reasoning remain visible.
+            hold_knowledge_answer = (
+                _answer_enforcement_mode() == 'enforce'
+                and bool(metadata.get('kahle_knowledge_harness_active'))
+            )
 
             def full_output():
                 combined = prior_output + output if prior_output else output
@@ -6992,12 +7005,14 @@ async def streaming_chat_response_handler(response, ctx):
                 if location_mode or temporary_survey_without_location:
                     safe_output = _stream_safe_output(
                         combined,
-                        suppress_message_text=suppress_initial_rag_response,
+                        suppress_message_text=suppress_initial_rag_response or hold_knowledge_answer,
+                        suppress_reasoning=suppress_initial_rag_response,
                     )
                     return _normalize_repeated_location_prompt_output(safe_output)
                 return _stream_safe_output(
                     combined,
-                    suppress_message_text=suppress_initial_rag_response,
+                    suppress_message_text=suppress_initial_rag_response or hold_knowledge_answer,
+                    suppress_reasoning=suppress_initial_rag_response,
                 )
 
             reasoning_tags_param = metadata.get('params', {}).get('reasoning_tags')
@@ -7912,6 +7927,8 @@ async def streaming_chat_response_handler(response, ctx):
                             metadata,
                             user,
                         )
+                        if tool_function_name in {'rag_chat', 'personio_directory'}:
+                            hold_knowledge_answer = _answer_enforcement_mode() == 'enforce'
                         if tool_function_name == 'rag_chat':
                             canonical_rag_sources.extend(_extract_kahle_rag_sources(tool_result))
                             if citations_enabled:
