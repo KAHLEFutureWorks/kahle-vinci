@@ -178,3 +178,105 @@ def test_replace_last_answer_text_only_touches_the_final_message():
 
     assert output[0]["content"][0]["text"] == "alt 1"
     assert output[2]["content"][0]["text"] == "neu"
+
+
+def _enforce_namespace():
+    harness = load_harness()
+    namespace = load_middleware_functions(
+        "_enforce_knowledge_answer", "_knowledge_retry_messages",
+        "_replace_last_answer_text", "_last_kahle_answer_text",
+        validate_knowledge_harness_answer=harness.validate_answer,
+        knowledge_abstention_answer=harness.knowledge_abstention_answer,
+    )
+    return harness, namespace["_enforce_knowledge_answer"]
+
+
+def _payload(harness):
+    rag = "KAHLE_RAG_RESULT\nFOUND: true\nCONTEXT:\n[1] Handbuch | A\nÖffnen Sie die Maske.\n"
+    return harness.build_decision(
+        query="Wie öffne ich die Maske?", resolved_query="Wie öffne ich die Maske?", messages=[],
+        model_id="m", permission_scope={"user_id": "u"}, rag_result=rag,
+    ).to_dict()
+
+
+def _output(text):
+    return [{"type": "message", "content": [{"type": "output_text", "text": text}]}]
+
+
+def _run(enforce, output, payload, replies, timeout=5):
+    calls = []
+
+    async def regenerate(messages):
+        calls.append(messages)
+        reply = replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    result = asyncio.run(enforce(
+        output, payload, messages=[{"role": "user", "content": "Frage"}],
+        reference_urls=(), regenerate=regenerate, timeout_seconds=timeout,
+    ))
+    return result, calls
+
+
+def test_accepted_answer_is_delivered_without_retry():
+    harness, enforce = _enforce_namespace()
+    output = _output("Öffnen Sie die Maske [1].")
+
+    result, calls = _run(enforce, output, _payload(harness), [])
+
+    assert calls == []
+    assert (result["delivery_status"], result["retry_count"], result["fallback_used"]) == ("accepted", 0, False)
+    assert output[0]["content"][0]["text"] == "Öffnen Sie die Maske [1]."
+
+
+def test_blocking_violation_is_corrected_once():
+    harness, enforce = _enforce_namespace()
+    output = _output("Öffnen Sie die Maske.")
+
+    result, calls = _run(enforce, output, _payload(harness), ["Öffnen Sie die Maske [1]."])
+
+    assert len(calls) == 1 and calls[0][-1]["content"].startswith("KAHLE_KNOWLEDGE_ANSWER_RETRY")
+    assert '"allowed_source_ids":["[1]"]' in calls[0][-1]["content"]
+    assert (result["delivery_status"], result["retry_count"], result["fallback_used"]) == ("corrected", 1, False)
+    assert [attempt["status"] for attempt in result["attempts"]] == ["retry_required", "accepted"]
+    assert output[0]["content"][0]["text"] == "Öffnen Sie die Maske [1]."
+
+
+@pytest.mark.parametrize("reply", ["Immer noch ohne Zitat.", asyncio.TimeoutError(), RuntimeError("upstream")])
+def test_failed_correction_falls_back_to_neutral_abstention(reply):
+    harness, enforce = _enforce_namespace()
+    output = _output("Öffnen Sie die Maske.")
+
+    result, calls = _run(enforce, output, _payload(harness), [reply])
+
+    assert len(calls) == 1
+    assert (result["delivery_status"], result["retry_count"], result["fallback_used"]) == ("abstained", 1, True)
+    assert output[0]["content"][0]["text"].startswith("Dazu habe ich keine verlässliche freigegebene Information.")
+
+
+def test_slow_correction_is_cut_by_the_timeout():
+    harness, enforce = _enforce_namespace()
+    output = _output("Öffnen Sie die Maske.")
+
+    async def slow(_messages):
+        await asyncio.sleep(1)
+        return "Öffnen Sie die Maske [1]."
+
+    result = asyncio.run(enforce(
+        output, _payload(harness), messages=[], reference_urls=(), regenerate=slow, timeout_seconds=0.05,
+    ))
+
+    assert result["delivery_status"] == "abstained"
+    assert result["attempts"][-1]["error"] == "TimeoutError"
+
+
+def test_advisory_findings_never_trigger_a_retry():
+    harness, enforce = _enforce_namespace()
+    output = _output("Öffnen Sie die Maske [1]. Das ist technisch möglich.")
+
+    result, calls = _run(enforce, output, _payload(harness), [])
+
+    assert calls == []
+    assert result["delivery_status"] == "accepted"

@@ -94,6 +94,7 @@ from open_webui.utils.filter import (
 from open_webui.utils.kahle_knowledge_harness import (
     build_decision as build_knowledge_harness_decision,
     classify_personio_directory_intent,
+    knowledge_abstention_answer,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
     resolve_request,
@@ -4424,6 +4425,56 @@ def _replace_last_answer_text(output: list[dict[str, Any]], text: str) -> None:
             if part.get('type') == 'output_text':
                 part['text'] = text
                 return
+
+
+async def _enforce_knowledge_answer(
+    output: list[dict[str, Any]],
+    harness_payload: dict[str, Any],
+    *,
+    messages: list[dict[str, Any]],
+    reference_urls: tuple[str, ...],
+    regenerate: Any,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Validate before delivery; one tool-free correction; else abstain.
+
+    The function never formulates internal facts itself: it either keeps a
+    model answer that passed the blocking checks or replaces it with a neutral
+    abstention.
+    """
+    first = validate_knowledge_harness_answer(
+        _last_kahle_answer_text(output), harness_payload, reference_urls=reference_urls,
+    )
+    attempts = [first.to_dict()]
+    if not first.retry_required:
+        return {'attempts': attempts, 'delivery_status': 'accepted', 'retry_count': 0, 'fallback_used': False}
+
+    evidence = harness_payload.get('evidence_bundle') or {}
+    source_ids = tuple(
+        str(source.get('id') or source.get('number') or source.get('source_id') or '').lstrip('#')
+        for source in evidence.get('sources') or ()
+        if isinstance(source, dict)
+    )
+    source_ids = tuple(source_id for source_id in source_ids if source_id)
+    retry_prompt = first.retry_prompt(source_ids=source_ids)
+    corrected = ''
+    try:
+        corrected = await asyncio.wait_for(
+            regenerate(_knowledge_retry_messages(messages, output, retry_prompt)),
+            timeout=timeout_seconds,
+        )
+    except Exception as error:  # timeout or upstream failure → neutral abstention
+        attempts.append({'status': 'retry_failed', 'error': type(error).__name__, 'violations': []})
+    if corrected:
+        second = validate_knowledge_harness_answer(
+            corrected, harness_payload, reference_urls=reference_urls,
+        )
+        attempts.append(second.to_dict())
+        if not second.retry_required:
+            _replace_last_answer_text(output, corrected)
+            return {'attempts': attempts, 'delivery_status': 'corrected', 'retry_count': 1, 'fallback_used': False}
+    _replace_last_answer_text(output, knowledge_abstention_answer(has_sources=bool(source_ids)))
+    return {'attempts': attempts, 'delivery_status': 'abstained', 'retry_count': 1, 'fallback_used': True}
 
 
 def _observe_model_led_answer(
