@@ -53,9 +53,14 @@ bleiben nutzbar. Werte werden nicht aus fehlenden Zellen ergänzt.
 
 ## Übergang und Konflikte
 
-Im modellgeführten Pfad erzeugen Kontakte aus Fließtext, Suchhilfen oder alten
-Indexeinträgen keine Kontaktfreigabe. Das Modell erhält die Anweisung, solche
-Werte nicht zu nennen, darf aber belegte Prozesse weiter erklären. Fehlende
+Im modellgeführten Pfad sind typisierte Zeilen der Tabelle „Funktionskontakte“
+die bevorzugte Kontaktfreigabe. Seit dem 30.09.2026 gilt zusätzlich: Ein
+Kontaktwert, der **wörtlich in einer belegten, redaktionellen RAG-Aussage der
+aktuellen Anfrage** steht, ist an die Quelle dieser Aussage gebunden und darf mit
+Zitat und Geltungsbereich aus derselben Aussage genannt werden. Typisierte Zeilen
+behalten Vorrang. Suchhilfen, OCR-Hilfstexte, alte Indexeinträge außerhalb der
+gelieferten Evidenz und Werte, die nicht wörtlich belegt sind, erzeugen weiterhin
+keine Kontaktfreigabe. Fehlende
 Angaben werden offen benannt, nicht durch Einzelkontakte, Websuche oder
 Modellwissen ersetzt. Ein unklarer Geltungsbereich wird erfragt oder die
 belegten Bereiche werden ausdrücklich getrennt dargestellt.
@@ -65,12 +70,16 @@ Eine unvollständige Konfliktprüfung erteilt ebenfalls keine Kontaktfreigabe.
 Nicht zugängliche Quellen dürfen keinen sichtbaren Konflikthinweis auslösen.
 Korrekturen erfolgen an den Originalquellen mit neuer Freigabe und Indexierung.
 
-Wichtig: Die aktuelle zusätzliche Antwortprüfung läuft ausschließlich beobachtend
-(`shadow`). Sie hält keine Modellantwort zurück, ersetzt sie nicht und startet
-keinen Korrekturlauf. Eine fehlende Kontaktfreigabe ist daher keine technische
-Garantie, dass das Modell den Wert niemals ausgibt. Solche Fehler bleiben in
-der Abnahme sichtbar. Zusätzliche Prüfungen sind erst nach gesonderter Entscheidung
-bei gehäuften, reproduzierbaren Fehlern ein mögliches Experiment.
+Die Antwortprüfung wird über `KAHLE_ANSWER_ENFORCEMENT` gesteuert. Mit
+`observe` (Default im Basis-Stack) läuft sie nur beobachtend. Mit `enforce`
+(lokales Edge-Overlay) wird eine Antwort mit internem Wissen vor der Anzeige
+geprüft: Ein ungebundener Kontaktwert ist ein blockierender Verstoß, löst genau
+einen Korrekturlauf ohne Tools aus und führt, wenn auch dieser scheitert, zu
+einer neutralen Enthaltung.
+
+Kontaktarten sind ausschließlich `E-Mail`, `Telefon` und `Kontaktseite`. Zeilen
+mit anderen Bezeichnungen, zum Beispiel „Ticket-System“, erhalten keinen
+typisierten Kontaktbeleg; Links auf ein Ticketsystem als `Kontaktseite` pflegen.
 
 ## Indexierung und Rückweg
 

@@ -3011,7 +3011,8 @@ def test_result_driven_rag_sanitizes_structured_personio_fields_without_dropping
         field not in claim
         for field in ("display_name", "position", "business_email")
     )
-    assert decision.answer_contract.allowed_contact_values == ()
+    # Decision 30.09.: a mailbox quoted in person-free evidence is source-bound.
+    assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
 
 
 @pytest.mark.parametrize(
@@ -3069,7 +3070,8 @@ def test_result_driven_rag_removes_all_canonical_personio_fields_from_safe_paths
     claim = decision.evidence_bundle.supported_claims[0]
     assert claim["text"].startswith("Der dokumentierte Kontaktweg")
     assert field_name not in claim
-    assert decision.answer_contract.allowed_contact_values == ()
+    # Decision 30.09.: a mailbox quoted in person-free evidence is source-bound.
+    assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
 
 
 @pytest.mark.parametrize(
@@ -3104,7 +3106,8 @@ def test_result_driven_rag_claim_contract_normalizes_only_personio_carrier_value
     else:
         claim = decision.evidence_bundle.supported_claims[0]
         assert "field" not in claim
-        assert decision.answer_contract.allowed_contact_values == ()
+        # Decision 30.09.: a mailbox quoted in person-free evidence is source-bound.
+        assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
 
 
 @pytest.mark.parametrize(
@@ -3304,7 +3307,8 @@ def test_result_driven_rag_keeps_functional_contacts_without_person_subject(clai
     assert decision is not None
     assert decision.evidence_bundle.status == "supported"
     assert decision.evidence_bundle.supported_claims[0]["text"] == claim_text
-    assert decision.answer_contract.allowed_contact_values == ()
+    # Decision 30.09.: a mailbox quoted in person-free evidence is source-bound.
+    assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
 
 
 def test_result_driven_mixed_evidence_keeps_personio_authority_and_rag_path():
@@ -3336,9 +3340,11 @@ def test_result_driven_mixed_evidence_keeps_personio_authority_and_rag_path():
         isinstance(claim, dict) and "Ticketsystem" in str(claim.get("text") or "")
         for claim in claims
     )
+    # Personio contact first; the documented mailbox from person-free RAG
+    # evidence is bound to its own source (decision 30.09.).
     assert decision.answer_contract.allowed_contact_values == (
         "person@example.invalid",
-
+        "team@example.invalid",
     )
 
 
@@ -3491,7 +3497,8 @@ def test_result_driven_rag_support_status_is_monotonic(personio_not_found, statu
     else:
         assert len(decision.evidence_bundle.supported_claims) == 1
         assert "personio_id" not in decision.evidence_bundle.supported_claims[0]
-        assert decision.answer_contract.allowed_contact_values == ()
+        # Decision 30.09.: a mailbox quoted in person-free evidence is source-bound.
+        assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
 
 
 @pytest.mark.parametrize("personio_not_found", (False, True))
@@ -3661,13 +3668,17 @@ def test_result_driven_typed_contact_tampering_grants_nothing(tamper):
 
 
 @pytest.mark.parametrize("not_found", [False, True])
-def test_result_driven_generic_process_preserved_without_contact_permission(not_found):
+def test_result_driven_generic_process_binds_its_quoted_mailbox(not_found):
     harness = load_harness()
     text = "Öffne das Portal und erfasse die Anfrage; Rückfragen an team@example.invalid."
     decision = _decision_for_rag_authority(harness, _result_driven_rag_payload(claim_text=text), not_found)
     assert decision.evidence_bundle.supported_claims[0]["text"] == text
-    assert decision.answer_contract.allowed_contact_values == ()
-    assert decision.answer_contract.allowed_contact_bindings == ()
+    # Decision 30.09.: a mailbox quoted in person-free evidence is source-bound.
+    assert decision.answer_contract.allowed_contact_values == ("team@example.invalid",)
+    assert [
+        (item["channel"], item["value"], item["binding"])
+        for item in decision.answer_contract.allowed_contact_bindings
+    ] == [("email", "team@example.invalid", "evidence_text")]
 
 
 def test_result_driven_personio_binding_comes_from_field_not_prose():

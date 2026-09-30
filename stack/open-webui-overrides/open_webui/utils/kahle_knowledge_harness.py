@@ -404,6 +404,9 @@ class HarnessDecision:
             "Übernimm Kontaktwert, Funktion, Verwendungszweck, Geltungsbereich und Quellen-ID "
             "aus derselben Bindung. Eine Bindung erlaubt keine zusätzliche Personen- oder "
             "Führungskräfteaussage. Kontaktseiten benötigen ebenfalls eine Bindung. "
+            "Kontaktwerte, die wörtlich in einer belegten Aussage stehen, sind mit der Quelle "
+            "dieser Aussage gebunden; nenne sie nur mit ihrem Geltungsbereich aus derselben "
+            "Aussage und zitiere die Quelle. "
             "Erzeuge genau eine endgültige Antwort. Gib den FEEDBACK_LINK nicht selbst aus "
             "und formuliere auch keine eigene Zeile oder Überschrift 'Wissensfehler melden'; "
             "die Oberfläche ergänzt den vertrauenswürdigen Link separat."
@@ -2546,6 +2549,36 @@ def _model_led_contact_bindings(evidence: EvidenceBundle) -> tuple[dict[str, Any
             bindings.append({"source_kind": "rag_chat", "source_id": source_id, "claim_id": claim["claim_id"],
                 **{key: contact[key] for key in ("channel", "value", "function", "purpose", "scope", "row_number")},
                 "document_id": claim["document_id"], "version_id": claim["version_id"]})
+    # Decision 2026-09-30: a contact quoted verbatim in a supported, editorial
+    # RAG claim of this request is bound to that claim's source. Typed rows
+    # keep precedence; values outside the evidence stay unbound.
+    bound = {(item["channel"], item["value"]) for item in bindings}
+    for claim in evidence.supported_claims:
+        if not isinstance(claim, dict) or claim.get("claim_type") == "functional_contact":
+            continue
+        source_id = claim.get("source_id")
+        if (
+            not isinstance(source_id, str)
+            or not re.fullmatch(r"(?:#|R)?[1-9]\d*", source_id)
+            or claim.get("evidence_role", "editorial") != "editorial"
+        ):
+            continue
+        text = " ".join(
+            str(claim.get(field) or "") for field in ("text", "evidence_span")
+        )
+        if _has_named_person_entity(text):
+            # Individual contacts belong to Personio (ADR-008): a claim that
+            # names a person never authorizes a contact value.
+            continue
+        for channel, value in extract_contact_literals(text):
+            if (channel, value) in bound:
+                continue
+            bound.add((channel, value))
+            bindings.append({
+                "source_kind": "rag_chat", "source_id": source_id,
+                "claim_id": str(claim.get("claim_id") or ""), "channel": channel,
+                "value": value, "binding": "evidence_text",
+            })
     return tuple(bindings)
 
 
