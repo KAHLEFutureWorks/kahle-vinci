@@ -2411,8 +2411,10 @@ def test_endvalidator_returns_structured_retry_without_rewriting_answer():
         "unsubstantiated_referral",
     }
     assert original not in result.retry_prompt()
-    assert "kahle.answer-retry.v1" in result.retry_prompt()
-    assert "unsubstantiated_referral" in result.retry_prompt()
+    assert "kahle.answer-retry.v2" in result.retry_prompt()
+    # Advisory findings never trigger a correction, so they are not listed.
+    assert "unsubstantiated_referral" not in result.retry_prompt()
+    assert "Ergänze keine neuen Informationen" in result.retry_prompt()
 
 
 def test_endvalidator_rejects_unknown_source_ids_and_missing_permission_scope():

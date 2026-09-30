@@ -213,20 +213,60 @@ class AnswerValidation:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    def retry_prompt(self) -> str:
-        """Return a structured retry order without rewriting the answer."""
+    def retry_prompt(self, source_ids: tuple[str, ...] = ()) -> str:
+        """Return a structured, model-neutral correction order for the same evidence."""
+        blocking = [
+            item for item in self.violations if item.get("severity", "blocking") == "blocking"
+        ]
+        allowed = [f"[{source_id}]" for source_id in source_ids]
+        codes = {str(item.get("code") or "") for item in blocking}
+        instructions = [
+            "Erzeuge die Antwort erneut aus derselben Evidenz. Ergänze keine neuen Informationen.",
+        ]
+        if not allowed:
+            instructions.append("Setze kein Zitat.")
+        else:
+            if "unknown_source_id" in codes:
+                instructions.append("Entferne jedes Zitat, das nicht in allowed_source_ids steht.")
+            if "citation_missing" in codes:
+                instructions.append(
+                    "Belege jede interne Aussage mit einer Quellen-ID aus allowed_source_ids."
+                )
+        if codes & {"unbound_contact_literal", "unbound_link_target", "contact_link_mismatch"}:
+            instructions.append(
+                "Entferne jede E-Mail-Adresse, Telefonnummer und jeden Link, der nicht wörtlich "
+                "in der Evidenz steht."
+            )
+        if "required_document_sections_missing" in codes:
+            instructions.append(
+                "Gib jeden verpflichtenden Abschnitt in der vorgegebenen Reihenfolge aus."
+            )
         payload = {
-            "schema_version": "kahle.answer-retry.v1",
-            "violations": list(self.violations),
-            "instructions": (
-                "Erzeuge die Antwort erneut aus demselben EvidenceBundle. "
-                "Behebe alle genannten Verstöße. Ergänze keine neuen Informationen."
-            ),
+            "schema_version": "kahle.answer-retry.v2",
+            "violations": [
+                {key: item[key] for key in ("code", "message", "source_ids") if key in item}
+                for item in blocking
+            ],
+            "allowed_source_ids": allowed,
+            "instructions": " ".join(instructions),
         }
         return (
             "KAHLE_KNOWLEDGE_ANSWER_RETRY\n"
             + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         )
+
+
+_ABSTENTION_TEXT = "Dazu habe ich keine verlässliche freigegebene Information."
+
+
+def knowledge_abstention_answer(*, has_sources: bool) -> str:
+    """Neutral fallback after a failed correction; never states internal facts."""
+    if not has_sources:
+        return _ABSTENTION_TEXT
+    return (
+        f"{_ABSTENTION_TEXT} Die gefundenen Quellen sind unten verlinkt; bitte prüfe sie "
+        "direkt oder formuliere die Frage genauer."
+    )
 
 
 @dataclass(frozen=True)
