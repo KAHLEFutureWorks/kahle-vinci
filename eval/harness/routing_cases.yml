@@ -110,6 +110,10 @@ cases:
   - {id: none_my_tasks, category: no_knowledge_tool, question: "Zeig mir meine offenen Aufgaben.", expected_tools: []}
   - {id: none_script_help, category: no_knowledge_tool, question: 'Warum funktioniert dieses Skript nicht? robocopy C:\quelle D:\ziel /MIR', expected_tools: []}
   - {id: none_general_leasing, category: no_knowledge_tool, question: "Erkläre mir allgemein den Unterschied zwischen Leasing und Finanzierung.", expected_tools: []}
+  - {id: none_howto_cooking, category: no_knowledge_tool, question: "Wie koche ich Nudeln?", expected_tools: [], findings: [P3b]}
+  - {id: none_howto_pivot, category: no_knowledge_tool, question: "Wie erstelle ich eine Pivot-Tabelle?", expected_tools: [], findings: [P3b]}
+  - {id: none_howto_passport, category: no_knowledge_tool, question: "Wie beantrage ich einen Reisepass?", expected_tools: [], findings: [P3b]}
+  - {id: none_howto_flight, category: no_knowledge_tool, question: "Wie storniere ich einen Flug bei Lufthansa?", expected_tools: [], findings: [P3b]}
   - {id: none_web_news, category: no_knowledge_tool, question: "Recherchiere aktuelle News zum VW ID.7.", expected_tools: []}
   # --- Folgefragen mit Verlauf ---
   - id: followup_supervisor_reference
