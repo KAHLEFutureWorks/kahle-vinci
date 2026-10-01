@@ -23,6 +23,7 @@ services:
       KAHLE_KNOWLEDGE_HARNESS_MODE: "active"
       KAHLE_KNOWLEDGE_ROUTING_MODE: "model_led"
       KAHLE_ANSWER_ENFORCEMENT: "enforce"
+      KAHLE_MODEL_LED_PREROUTE_OFF_MODELS: ${KAHLE_MODEL_LED_PREROUTE_OFF_MODELS:-}
     # Code may come from an isolated worktree while KAHLE_ROOT keeps the data.
     volumes:
       - "${KAHLE_LOCAL_CODE_ROOT:-${KAHLE_ROOT}}/stack/open-webui-overrides/open_webui/routers/openai.py:/app/backend/open_webui/routers/openai.py:ro"

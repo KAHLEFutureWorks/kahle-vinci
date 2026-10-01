@@ -211,7 +211,15 @@ def _knowledge_routing_mode() -> str:
     return mode if mode in {'legacy', 'model_led'} else 'legacy'
 
 
-def _routing_plan_for_execution(routing_mode: str, legacy_plan: Any) -> Any:
+def _model_led_preroute_disabled(model_id: str) -> bool:
+    """Per-model switch to measure and later release pure model-led routing."""
+    raw = str(os.getenv('KAHLE_MODEL_LED_PREROUTE_OFF_MODELS') or '')
+    return str(model_id or '') in {item.strip() for item in raw.split(',') if item.strip()}
+
+
+def _routing_plan_for_execution(routing_mode: str, legacy_plan: Any, model_id: str = '') -> Any:
+    if routing_mode == 'model_led' and _model_led_preroute_disabled(model_id):
+        return None
     return legacy_plan if routing_mode in {'legacy', 'model_led'} else None
 
 
@@ -5333,7 +5341,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 _knowledge_routing_comparison_payload(legacy_retrieval_plan)
             )
         retrieval_plan = _routing_plan_for_execution(
-            routing_mode, legacy_retrieval_plan
+            routing_mode, legacy_retrieval_plan, str(form_data.get('model') or '')
         )
         rag_tool_request = (
             original_user_tool_request or user_tool_request
