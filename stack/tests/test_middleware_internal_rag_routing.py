@@ -1651,6 +1651,8 @@ def load_function_from_middleware(name: str):
         required_names.add("_canonical_kahle_reference_urls")
     if name == "_prerouted_rag_tool_output":
         required_names.add("_prerouted_internal_tool_output")
+    if name == "_routing_plan_for_execution":
+        required_names.add("_model_led_preroute_disabled")
     nodes = [
         node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in required_names
