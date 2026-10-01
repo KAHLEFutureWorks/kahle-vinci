@@ -221,3 +221,10 @@ def test_release_clears_a_contract_the_pre_route_refresh_installed():
 
 def test_release_path_uses_the_cleanup():
     assert "_release_evidence_probe(form_data, metadata, request)" in MIDDLEWARE.read_text(encoding="utf-8")
+
+
+def test_released_probe_still_writes_routing_metrics():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert "elif metadata.get('kahle_evidence_probe'):" in source
+    assert "'schema_version': 'kahle.harness-metrics.v1'," in source.split("elif metadata.get('kahle_evidence_probe'):", 1)[1][:400]

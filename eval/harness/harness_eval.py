@@ -243,6 +243,7 @@ def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
         "retry_count": int(metrics.get("retry_count") or 0),
         "fallback_used": bool(metrics.get("fallback_used")),
         "delivery_status": str(metrics.get("delivery_status") or "not_run"),
+        "evidence_probe": str(metrics.get("evidence_probe") or ""),
     }
 
 
@@ -281,5 +282,7 @@ def summarize_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "latency_p95_ms": nearest_rank(latencies, 0.95),
             "wall_p50_ms": nearest_rank(walls, 0.5),
             "wall_p95_ms": nearest_rank(walls, 0.95),
+            "probe_bound": sum(row.get("evidence_probe") == "bound" for row in items),
+            "probe_released": sum(row.get("evidence_probe") == "released" for row in items),
         }
     return summary

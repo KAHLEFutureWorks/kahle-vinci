@@ -197,6 +197,7 @@ def test_score_answer_keeps_only_blocking_codes_and_no_text():
         "retry_count": 0,
         "fallback_used": False,
         "delivery_status": "not_run",
+        "evidence_probe": "",
     }
     assert "verlässliche" not in json.dumps(score, ensure_ascii=False)
 
@@ -256,3 +257,19 @@ def test_score_and_summary_include_correction_metrics():
 
     assert (score["retry_count"], score["fallback_used"], score["delivery_status"]) == (1, False, "corrected")
     assert summary["retry_rate"] == 1.0 and summary["fallback_rate"] == 0.0
+
+
+def test_score_and_summary_count_evidence_probes():
+    bound = _message(text="Antwort [1].")
+    bound["kahle_harness_metrics"]["evidence_probe"] = "bound"
+    released = {"content": "Allgemeine Antwort.", "output": [], "kahle_harness_metrics": {"evidence_probe": "released"}}
+
+    rows = [
+        {"model": "m", **score_answer(_case(), bound), "wall_ms": 10},
+        {"model": "m", **score_answer(_case(), released), "wall_ms": 10},
+        {"model": "m", **score_answer(_case(), {"content": "x", "output": []}), "wall_ms": 10},
+    ]
+    summary = summarize_answers(rows)["m"]
+
+    assert [row["evidence_probe"] for row in rows] == ["bound", "released", ""]
+    assert (summary["probe_bound"], summary["probe_released"]) == (1, 1)

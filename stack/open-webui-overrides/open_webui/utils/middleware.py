@@ -8654,6 +8654,14 @@ async def streaming_chat_response_handler(response, ctx):
                         'feedback_link_present': bool(canonical_rag_feedback_link),
                         'latency_ms': elapsed_ms,
                     }
+                elif metadata.get('kahle_evidence_probe'):
+                    # A released probe has no harness payload; keep it measurable.
+                    metadata['kahle_harness_metrics'] = {
+                        'schema_version': 'kahle.harness-metrics.v1',
+                        'model_id': str(model_id or ''),
+                        **_knowledge_harness_routing_metric_fields(metadata),
+                        'delivery_status': 'not_run',
+                    }
 
                 if not shadow_validation:
                     _append_canonical_rag_source_links(output, canonical_rag_sources)
