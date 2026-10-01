@@ -316,7 +316,29 @@ def _plan_kahle_retrieval_gate(
         and 'rag_chat' in tools_dict
     ):
         return plan
+    if (
+        'rag_chat' in required_tools
+        and 'rag_chat' in tools_dict
+        and _evidence_probe_kinds_match(plan)
+    ):
+        return replace(plan, evidence_probe=True)
     return None
+
+
+def _evidence_probe_kinds_match(plan: Any) -> bool:
+    """Specific needs justify a silent pre-search; the catch-all kind does not."""
+    kinds = {
+        str(getattr(need, 'kind', '') or '')
+        for need in tuple(getattr(plan, 'information_needs', ()) or ())
+    }
+    return bool(kinds & {
+        'procedure',
+        'functional_contact',
+        'functional_responsibility',
+        'workflow',
+        'opening_hours',
+        'system_usage_locations',
+    })
 
 
 async def _execute_kahle_retrieval_plan(

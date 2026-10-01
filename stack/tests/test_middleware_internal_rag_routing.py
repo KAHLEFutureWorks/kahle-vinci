@@ -73,7 +73,13 @@ def load_retrieval_gate():
         if isinstance(node, ast.FunctionDef)
         and node.name == "_plan_kahle_retrieval_gate"
     )
-    module = ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]))
+    probe_kinds = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_evidence_probe_kinds_match"
+    )
+    module = ast.fix_missing_locations(ast.Module(body=[node, probe_kinds], type_ignores=[]))
     harness = load_python_module(HARNESS, "kahle_harness_gate")
     namespace = {
         "Any": Any,

@@ -122,6 +122,8 @@ class RetrievalPlan:
     permission_scope: dict[str, Any]
     information_needs: tuple[InformationNeed, ...] = ()
     mode: str = "shadow"
+    # A silent pre-search whose evidence decides between harness and free answer.
+    evidence_probe: bool = False
 
     @property
     def required_tool(self) -> str:
