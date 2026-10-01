@@ -518,6 +518,8 @@ def _knowledge_harness_tool_called(metadata: dict[str, Any]) -> str:
 
 def _knowledge_harness_routing_metric_fields(metadata: dict[str, Any]) -> dict[str, Any]:
     fields = {'tool_called': _knowledge_harness_tool_called(metadata)}
+    if metadata.get('kahle_evidence_probe'):
+        fields['evidence_probe'] = metadata['kahle_evidence_probe']
     comparison = metadata.get('kahle_knowledge_routing_comparison')
     if isinstance(comparison, dict):
         fields['routing_comparison'] = _model_led_routing_comparison(
@@ -1421,8 +1423,59 @@ def _prerouted_rag_tool_output(
 
 def _should_emit_prerouted_rag_status(retrieval_plan: Any) -> bool:
     """Show native RAG progress only when the fixed plan actually uses RAG."""
+    if getattr(retrieval_plan, 'evidence_probe', False):
+        return False
     return 'rag_chat' in tuple(
         getattr(retrieval_plan, 'required_tools', ()) or ()
+    )
+
+
+def _evidence_probe_outcome(retrieval_plan: Any, rag_outcome: str) -> str:
+    """Bind a silent pre-search only when it produced usable evidence."""
+    if not getattr(retrieval_plan, 'evidence_probe', False):
+        return ''
+    if rag_outcome in {'found', 'clarification', 'forbidden'}:
+        return 'bound'
+    return 'released'
+
+
+def _release_evidence_probe(
+    form_data: dict[str, Any], metadata: dict[str, Any], request: Any
+) -> None:
+    """Undo the contract the pre-route tool refresh installed for an empty probe."""
+    form_data['messages'] = [
+        message
+        for message in form_data.get('messages', []) or []
+        if not (
+            isinstance(message, dict)
+            and message.get('role') == 'system'
+            and str(message.get('content') or '').startswith(
+                'KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n'
+            )
+        )
+    ]
+    for target in (metadata, form_data.get('metadata')):
+        if not isinstance(target, dict):
+            continue
+        for key in (
+            'kahle_knowledge_harness_active',
+            'kahle_answer_contract',
+            'kahle_knowledge_harness_shadow',
+            '_kahle_final_answer_prompt',
+            '_kahle_answer_blueprint_metrics',
+        ):
+            target.pop(key, None)
+        target['kahle_retrieval_tools'] = []
+    setattr(request.state, '_kahle_knowledge_harness_payload', None)
+
+
+def _evidence_probe_release_prompt() -> str:
+    return (
+        'Die Suche in den freigegebenen KAHLE-Dokumenten hat zu dieser Frage nichts ergeben. '
+        'Betrifft die Frage einen KAHLE-internen Ablauf, ein internes System oder eine interne '
+        'Zuständigkeit, sage das im ersten Satz und kennzeichne allgemeine Hinweise ausdrücklich '
+        'als allgemein, nicht als KAHLE-Vorgabe. Andernfalls beantworte die Frage normal, ohne '
+        'die Suche zu erwähnen.'
     )
 
 
@@ -5602,6 +5655,35 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         if 'rag_chat' in retrieval_plan.required_tools
                         else 'not_required'
                     )
+                    evidence_probe = _evidence_probe_outcome(retrieval_plan, pre_routed_internal_rag)
+                    if evidence_probe:
+                        metadata['kahle_evidence_probe'] = evidence_probe
+                    if evidence_probe == 'released':
+                        # Nothing usable was found: no contract, no chips, and
+                        # rag_chat stays available to the model.
+                        released_sources = [id(source) for source in pre_route_sources]
+                        sources[:] = [
+                            source for source in sources if id(source) not in released_sources
+                        ]
+                        pre_route_sources = []
+                        pre_route_rag_result = ''
+                        pre_routed_internal_rag = ''
+                        knowledge_evidence_session.forget('rag_chat')
+                        _release_evidence_probe(form_data, metadata, request)
+                        form_data['messages'] = add_or_update_system_message(
+                            _evidence_probe_release_prompt(),
+                            form_data.get('messages', []) or [],
+                            append=True,
+                        )
+                    elif evidence_probe == 'bound':
+                        metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
+                            pre_route_call_id, user_tool_request or '', completed=True,
+                        )
+                        if event_emitter:
+                            await event_emitter({
+                                'type': 'chat:completion',
+                                'data': {'output': metadata['kahle_prerouted_rag_tool_output']},
+                            })
                     canonical_pre_route_sources = _extract_kahle_rag_sources(
                         pre_route_rag_result
                     )
@@ -5623,7 +5705,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     if pre_routed_internal_rag:
                         metadata['kahle_internal_rag_prerouted'] = pre_routed_internal_rag
                     harness_decision = None
-                    if harness_mode != 'off':
+                    if harness_mode != 'off' and evidence_probe != 'released':
                         harness_decision = build_knowledge_harness_decision(
                             query=original_user_tool_request or '',
                             resolved_query=user_tool_request or original_user_tool_request or '',

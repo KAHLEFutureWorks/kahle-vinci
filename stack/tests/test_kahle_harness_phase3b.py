@@ -101,3 +101,123 @@ def test_directory_plans_never_become_probes():
     assert plan is not None
     assert plan.required_tools == ("personio_directory",)
     assert plan.evidence_probe is False
+
+
+INTERNAL = UTILS / "kahle_internal_knowledge.py"
+PROBE = replace(
+    load_harness().RetrievalPlan(required_tools=("rag_chat",), queries=("q",), permission_scope={}),
+    evidence_probe=True,
+)
+BINDING = replace(PROBE, evidence_probe=False)
+
+
+@pytest.mark.parametrize(
+    "plan, rag_outcome, expected",
+    [
+        (PROBE, "found", "bound"),
+        (PROBE, "clarification", "bound"),
+        (PROBE, "forbidden", "bound"),
+        (PROBE, "missing", "released"),
+        (PROBE, "", "released"),
+        (BINDING, "missing", ""),
+        (None, "missing", ""),
+    ],
+)
+def test_probe_outcome_binds_only_on_evidence(plan, rag_outcome, expected):
+    outcome = load_middleware_functions("_evidence_probe_outcome")["_evidence_probe_outcome"]
+
+    assert outcome(plan, rag_outcome) == expected
+
+
+def test_release_prompt_separates_internal_and_general_questions():
+    prompt = load_middleware_functions("_evidence_probe_release_prompt")["_evidence_probe_release_prompt"]()
+
+    assert "Die Suche in den freigegebenen KAHLE-Dokumenten hat zu dieser Frage nichts ergeben." in prompt
+    assert "Betrifft die Frage einen KAHLE-internen Ablauf" in prompt
+    assert "kennzeichne allgemeine Hinweise ausdrücklich als allgemein" in prompt
+    assert "Andernfalls beantworte die Frage normal" in prompt
+
+
+def test_probe_plans_do_not_announce_the_search_upfront():
+    emit = load_middleware_functions("_should_emit_prerouted_rag_status")["_should_emit_prerouted_rag_status"]
+
+    assert emit(BINDING) is True
+    assert emit(PROBE) is False
+
+
+def test_session_can_forget_a_released_probe():
+    sys.path.insert(0, str(ROOT / "open-webui-overrides"))
+    try:
+        spec = importlib.util.spec_from_file_location("kahle_internal_phase3b", INTERNAL)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(ROOT / "open-webui-overrides"))
+    session = module.KnowledgeEvidenceSession(messages=[{"role": "user", "content": "q"}])
+    session.record("rag_chat", "FOUND: false")
+    session.record("personio_directory", {"people": []})
+
+    session.forget("rag_chat")
+
+    assert session.called_tools() == ("personio_directory",)
+
+
+def test_release_path_is_wired_into_the_pre_route():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    for fragment in (
+        "evidence_probe = _evidence_probe_outcome(retrieval_plan, pre_routed_internal_rag)",
+        "metadata['kahle_evidence_probe'] = evidence_probe",
+        "knowledge_evidence_session.forget('rag_chat')",
+        "_evidence_probe_release_prompt()",
+        "if harness_mode != 'off' and evidence_probe != 'released':",
+    ):
+        assert fragment in source
+
+
+def test_routing_metrics_report_the_probe():
+    fields = load_middleware_functions(
+        "_knowledge_harness_routing_metric_fields",
+        "_knowledge_harness_tool_called",
+        "_model_led_routing_comparison",
+    )["_knowledge_harness_routing_metric_fields"]
+
+    assert fields({"kahle_evidence_probe": "released"})["evidence_probe"] == "released"
+    assert "evidence_probe" not in fields({})
+
+
+def test_release_clears_a_contract_the_pre_route_refresh_installed():
+    from types import SimpleNamespace
+
+    release = load_middleware_functions("_release_evidence_probe")["_release_evidence_probe"]
+    request = SimpleNamespace(state=SimpleNamespace(_kahle_knowledge_harness_payload={"x": 1}))
+    copied = {
+        "kahle_knowledge_harness_active": True,
+        "kahle_answer_contract": {"citation_required": True},
+        "kahle_knowledge_harness_shadow": {},
+        "_kahle_final_answer_prompt": "p",
+        "kahle_retrieval_tools": ["rag_chat"],
+    }
+    metadata = dict(copied)
+    form_data = {
+        "metadata": dict(copied),
+        "messages": [
+            {"role": "system", "content": "Basis"},
+            {"role": "system", "content": "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n{}"},
+            {"role": "user", "content": "Wie koche ich Nudeln?"},
+        ],
+    }
+
+    release(form_data, metadata, request)
+
+    assert [m["content"] for m in form_data["messages"]] == ["Basis", "Wie koche ich Nudeln?"]
+    for md in (metadata, form_data["metadata"]):
+        assert "kahle_knowledge_harness_active" not in md
+        assert "kahle_answer_contract" not in md
+        assert "_kahle_final_answer_prompt" not in md
+        assert md["kahle_retrieval_tools"] == []
+    assert request.state._kahle_knowledge_harness_payload is None
+
+
+def test_release_path_uses_the_cleanup():
+    assert "_release_evidence_probe(form_data, metadata, request)" in MIDDLEWARE.read_text(encoding="utf-8")

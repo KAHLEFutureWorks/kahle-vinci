@@ -136,6 +136,12 @@ class KnowledgeEvidenceSession:
     def called_tools(self) -> tuple[str, ...]:
         return tuple(self._calls)
 
+    def forget(self, tool_name: str) -> None:
+        """Drop a released pre-search so it never feeds an answer contract."""
+        name = str(tool_name or "")
+        self._calls = [call for call in self._calls if call != name]
+        self._results.pop(name, None)
+
     def request_query(self) -> str:
         """Return the original user query captured before tool orchestration."""
         for message in reversed(self._messages):
