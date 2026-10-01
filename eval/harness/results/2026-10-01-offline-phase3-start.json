@@ -1,0 +1,1504 @@
+{
+  "schema_version": "kahle.harness-eval.v1",
+  "mode": "offline_planner",
+  "generated_at": "2026-10-01T10:40:42+00:00",
+  "case_count": 102,
+  "summary": {
+    "legacy-planner": {
+      "total": 102,
+      "correct": 92,
+      "accuracy": 0.902,
+      "outcomes": {
+        "correct": 92,
+        "extra_source": 6,
+        "missing_source": 1,
+        "wrong_source": 3
+      },
+      "by_category": {
+        "abbreviation": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "followup": {
+          "total": 6,
+          "correct": 4,
+          "accuracy": 0.6667
+        },
+        "functional_contact": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "internal_knowledge": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "no_knowledge_tool": {
+          "total": 10,
+          "correct": 6,
+          "accuracy": 0.6
+        },
+        "onboarding_people": {
+          "total": 3,
+          "correct": 3,
+          "accuracy": 1.0
+        },
+        "onboarding_process": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        },
+        "organization_contact": {
+          "total": 9,
+          "correct": 9,
+          "accuracy": 1.0
+        },
+        "person_process": {
+          "total": 4,
+          "correct": 3,
+          "accuracy": 0.75
+        },
+        "personio_list": {
+          "total": 8,
+          "correct": 6,
+          "accuracy": 0.75
+        },
+        "personio_person": {
+          "total": 8,
+          "correct": 8,
+          "accuracy": 1.0
+        },
+        "procedure": {
+          "total": 16,
+          "correct": 16,
+          "accuracy": 1.0
+        },
+        "responsibility": {
+          "total": 8,
+          "correct": 8,
+          "accuracy": 1.0
+        },
+        "scope_location": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "supervisor": {
+          "total": 6,
+          "correct": 5,
+          "accuracy": 0.8333
+        },
+        "unanswerable": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        }
+      },
+      "procedural_checked": 19,
+      "procedural_accuracy": 0.8947
+    }
+  },
+  "rows": [
+    {
+      "model": "legacy-planner",
+      "case_id": "person_profile_mustermann",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_phone_mustermann",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_reach_beispiel",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_job_beispiel",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_position_mustermann",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_location_beispiel",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_contact_mustermann",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_info_beispiel",
+      "category": "personio_person",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_serviceberater_wunstorf",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_teiledienst_hannover",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_serviceassistenz_nominal",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "wrong_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_verkaeufer_stadthagen",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_buchhaltung_people",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_marketing_people",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_automobilverkaeufer_walsrode",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "list_count_serviceberater_nienburg",
+      "category": "personio_list",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "wrong_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "supervisor_von_mustermann",
+      "category": "supervisor",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "supervisor_vorgesetzter_beispiel",
+      "category": "supervisor",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "supervisor_genitive_mustermann",
+      "category": "supervisor",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "supervisor_typo",
+      "category": "supervisor",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "supervisor_team_lead_beispiel",
+      "category": "supervisor",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "wrong_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "supervisor_role_group",
+      "category": "supervisor",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "onboarding_people_now",
+      "category": "onboarding_people",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "onboarding_people_month",
+      "category": "onboarding_people",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "onboarding_people_hannover",
+      "category": "onboarding_people",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "onboarding_process_flow",
+      "category": "onboarding_process",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "onboarding_process_workshop",
+      "category": "onboarding_process",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_address_umlaut",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_address_ascii",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_order_umlaut",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_order_ascii",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_dialog_umlaut",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_dialog_ascii",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_hu_umlaut",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_hu_ascii",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_slot_umlaut",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_slot_ascii",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K1"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_new_customer",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K3"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_cancel_invoice",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K3"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_courtesy_car",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K3"
+      ],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_test_drive_imperative",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_warranty_steps",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "procedure_calendar_plan",
+      "category": "procedure",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [],
+      "procedural_match": true
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_warranty",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_role_tasks",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_lease_returns",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_dunning",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2",
+        "U3"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_complaints",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2",
+        "U3"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_work_instruction_approval",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_vehicle_prep",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "responsibility_data_access",
+      "category": "responsibility",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "K2"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "functional_applications_mailbox",
+      "category": "functional_contact",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "functional_sick_note",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "functional_privacy_central",
+      "category": "functional_contact",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "functional_it_contact_page",
+      "category": "functional_contact",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "functional_it_ticket",
+      "category": "functional_contact",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "functional_applications_submit",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "org_contact_accounting",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "org_contact_hr_extension",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "org_contact_marketing",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "org_contact_it_nominal",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "org_contact_parts_wunstorf",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "org_contact_dispatch_mail",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "org_contact_service_neustadt",
+      "category": "organization_contact",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "P3"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_process_project",
+      "category": "person_process",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_process_role_duties",
+      "category": "person_process",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_process_handover",
+      "category": "person_process",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "missing_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "person_process_relation",
+      "category": "person_process",
+      "expected_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "abbreviation_td",
+      "category": "abbreviation",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "abbreviation_da",
+      "category": "abbreviation",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "abbreviation_vk",
+      "category": "abbreviation",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "abbreviation_wps",
+      "category": "abbreviation",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "internal_service_systems",
+      "category": "internal_knowledge",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "internal_wps_locations",
+      "category": "internal_knowledge",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "internal_opening_hours",
+      "category": "internal_knowledge",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "internal_dialog_notes",
+      "category": "internal_knowledge",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "internal_ai_policy",
+      "category": "internal_knowledge",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "internal_complaint_notes",
+      "category": "internal_knowledge",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "scope_opt_out_vaudis",
+      "category": "scope_location",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "U1"
+      ],
+      "procedural_match": false
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "scope_survey_opt_out",
+      "category": "scope_location",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "U1"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "scope_opt_out_walsrode",
+      "category": "scope_location",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "U1"
+      ],
+      "procedural_match": false
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "scope_dse_wunstorf",
+      "category": "scope_location",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "U1"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "scope_natural_hannover",
+      "category": "scope_location",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "U1",
+        "P3"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "scope_natural_no_ads",
+      "category": "scope_location",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "U1",
+        "P3"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_customer_mail",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_rephrase",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_translate",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_general_capital",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "extra_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_today",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "extra_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_reminder",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_my_tasks",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_script_help",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_general_leasing",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "extra_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "none_web_news",
+      "category": "no_knowledge_tool",
+      "expected_tools": [],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "extra_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "followup_supervisor_reference",
+      "category": "followup",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "followup_procedure_other_system",
+      "category": "followup",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "followup_scope_location_reply",
+      "category": "followup",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": [
+        "U1"
+      ]
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "followup_people_contact",
+      "category": "followup",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory",
+        "rag_chat"
+      ],
+      "outcome": "extra_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "followup_system_procedure",
+      "category": "followup",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "followup_rewrite_text",
+      "category": "followup",
+      "expected_tools": [],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "extra_source",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "unanswerable_unknown_identifier",
+      "category": "unanswerable",
+      "expected_tools": [
+        "rag_chat"
+      ],
+      "actual_tools": [
+        "rag_chat"
+      ],
+      "outcome": "correct",
+      "findings": []
+    },
+    {
+      "model": "legacy-planner",
+      "case_id": "unanswerable_unknown_person",
+      "category": "unanswerable",
+      "expected_tools": [
+        "personio_directory"
+      ],
+      "actual_tools": [
+        "personio_directory"
+      ],
+      "outcome": "correct",
+      "findings": []
+    }
+  ]
+}

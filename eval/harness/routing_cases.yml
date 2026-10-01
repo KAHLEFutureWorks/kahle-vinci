@@ -75,6 +75,7 @@ cases:
   - {id: org_contact_it_nominal, category: organization_contact, question: "Kontaktdaten der IT", expected_tools: [personio_directory, rag_chat]}
   - {id: org_contact_parts_wunstorf, category: organization_contact, question: "Wie komme ich mit dem Teiledienst in Wunstorf in Kontakt?", expected_tools: [personio_directory, rag_chat]}
   - {id: org_contact_dispatch_mail, category: organization_contact, question: "Welche E-Mail-Adresse hat die Disposition?", expected_tools: [personio_directory, rag_chat]}
+  - {id: org_contact_service_neustadt, category: organization_contact, question: "Wen erreiche ich im Service in Neustadt und wie?", expected_tools: [personio_directory, rag_chat], findings: [P3]}
   # --- Beide: Person und dokumentierter Prozess ---
   - {id: person_process_project, category: person_process, question: "Was hat Max Mustermann mit dem Projekt Digitales Autohaus zu tun?", expected_tools: [personio_directory, rag_chat]}
   - {id: person_process_role_duties, category: person_process, question: "Welche Rolle hat Anna Beispiel und welche Aufgaben gehören laut Arbeitsanweisung dazu?", expected_tools: [personio_directory, rag_chat]}
@@ -97,6 +98,8 @@ cases:
   - {id: scope_survey_opt_out, category: scope_location, question: "Ein Kunde möchte keine Zufriedenheitsbefragungen mehr erhalten, was muss ich tun?", expected_tools: [rag_chat], findings: [U1]}
   - {id: scope_opt_out_walsrode, category: scope_location, question: "Wie sperre ich einen Kunden für Werbung am Standort Walsrode?", expected_tools: [rag_chat], findings: [U1], expected_procedural: true}
   - {id: scope_dse_wunstorf, category: scope_location, question: "Wie deaktiviere ich die DSE-Kontaktfreigaben in Wunstorf?", expected_tools: [rag_chat], findings: [U1]}
+  - {id: scope_natural_hannover, category: scope_location, question: "Wie sperre ich einen Kunden für Werbung am Standort Hannover?", expected_tools: [rag_chat], findings: [U1, P3]}
+  - {id: scope_natural_no_ads, category: scope_location, question: "Der Kunde will keine Werbung mehr bekommen, wie trage ich das ein?", expected_tools: [rag_chat], findings: [U1, P3]}
   # --- Kein Wissens-Tool ---
   - {id: none_customer_mail, category: no_knowledge_tool, question: "Schreibe mir eine E-Mail an einen Kunden wegen einer Terminverschiebung.", expected_tools: []}
   - {id: none_rephrase, category: no_knowledge_tool, question: "Formuliere diesen Satz freundlicher: Das Auto ist noch nicht fertig.", expected_tools: []}
