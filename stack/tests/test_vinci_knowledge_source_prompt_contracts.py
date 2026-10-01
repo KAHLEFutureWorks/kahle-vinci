@@ -37,8 +37,8 @@ def test_base_prompts_publish_one_explicit_internal_source_matrix():
     expected_matrix = (
         "| Informationsbedarf | Zulässige Quelle |",
         "aktuelle Personen, Profile, geschäftliche Einzelkontakte",
-        "dokumentierte Prozesse, Zuständigkeiten, Funktionspostfächer",
-        "Personio und RAG nur bei echtem Bedarf an beiden Evidenzarten",
+        "dokumentierte Prozesse, Zuständigkeiten und Aufgaben von Rollen",
+        "Fragen mit echtem Bedarf an beiden Evidenzarten | beide Tools",
         "Kein Web-Fallback bei fehlender Personen- oder Führungskraft-Evidenz",
         "Kompakte Nominalphrasen sind vollständige Suchanfragen",
         "Antworte ausschließlich aus dem aktuellen EvidenceBundle und lege Lücken offen",
@@ -61,8 +61,8 @@ def test_shared_function_calling_prompt_describes_both_internal_sources():
     assert "personio_directory" in prompt
     assert "rag_chat" in prompt
     assert "current people, profiles, business contacts" in prompt
-    assert "documented processes, responsibilities, shared mailboxes" in prompt
-    assert "both evidence types are actually needed" in prompt
+    assert "documented processes, responsibilities and duties of roles" in prompt
+    assert "questions that actually need both evidence types" in prompt
     assert "Do not use rag_chat, web search, or model knowledge as a fallback" in prompt
     assert "RAG_Chat ist fuer KAHLE-internes Wissen die SSOT." not in prompt
 

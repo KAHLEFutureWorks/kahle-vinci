@@ -103,3 +103,46 @@ def test_model_note_matches_the_source_policy():
     note = models.make_meta(models.MODELS[0])["kahleKnowledgeNote"]
 
     assert "Abteilungs- und Bereichskontakte: beide Tools" in note
+
+
+PROMPTS = (
+    ROOT / "open-webui-prompts" / "kahle-vinci-systemprompt.md",
+    ROOT / "open-webui-prompts" / "kahle-vinci-thinking-systemprompt.md",
+)
+RULES = (
+    "Beantworte KAHLE-interne Fragen nie ohne Tool-Evidenz. Das gilt auch für Abkürzungen, Systeme, Öffnungszeiten und Folgefragen; rufe dafür das passende Tool erneut auf.",
+    "Kontaktfragen zu einer Abteilung oder einem Bereich brauchen beide Quellen: rufe rag_chat und personio_directory im selben Schritt auf.",
+)
+MATRIX_ROWS = (
+    "| aktuelle Personen, Profile, geschäftliche Einzelkontakte, Positionen, Teams, Abteilungs- und Standortzuordnung von Personen, Onboarding und Führungskräfte | `personio_directory` |",
+    "| dokumentierte Prozesse, Zuständigkeiten und Aufgaben von Rollen, standortbezogene Abläufe, Abkürzungen, Funktionspostfächer, Ticketsysteme sowie Einreichungs- und Kontaktwege | `rag_chat` |",
+    "| Kontakte einer Abteilung oder eines Bereichs sowie Fragen mit echtem Bedarf an beiden Evidenzarten | beide Tools |",
+)
+
+
+@pytest.mark.parametrize("prompt_path", PROMPTS, ids=lambda p: p.name)
+def test_prompts_state_tool_duty_and_mixed_contacts(prompt_path):
+    prompt = prompt_path.read_text(encoding="utf-8")
+    for rule in RULES:
+        assert rule in prompt
+
+
+@pytest.mark.parametrize("prompt_path", PROMPTS, ids=lambda p: p.name)
+def test_prompt_source_matrix_matches_the_tool_descriptions(prompt_path):
+    prompt = prompt_path.read_text(encoding="utf-8")
+    for row in MATRIX_ROWS:
+        assert row in prompt
+    assert "Rollen, Teams, Abteilungen, Standorte, Onboarding und Führungskräfte | `personio_directory`" not in prompt
+
+
+def test_function_calling_prompt_matches_the_tool_descriptions():
+    prompt = _load(REGISTER, "reg_phase3_fc").TOOLS_FUNCTION_CALLING_PROMPT
+
+    for row in (
+        "| current people, profiles, business contacts, positions, teams, department and location assignment of people, onboarding, and supervisors | personio_directory |",
+        "| documented processes, responsibilities and duties of roles, location-specific workflows, abbreviations, shared mailboxes, ticket systems, submission, and contact paths | rag_chat |",
+        "| contacts of a department or area, and questions that actually need both evidence types | personio_directory and rag_chat |",
+        "- Never answer KAHLE-internal questions without tool evidence, including abbreviations, systems, opening hours, and follow-ups.",
+    ):
+        assert row in prompt
+    assert "roles, teams, departments, locations" not in prompt

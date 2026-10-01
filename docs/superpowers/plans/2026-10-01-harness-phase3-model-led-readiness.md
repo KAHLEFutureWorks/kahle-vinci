@@ -320,6 +320,18 @@ def test_prompts_state_tool_duty_and_mixed_contacts(prompt_path):
 - [ ] **Step 4:** Tests → PASS; `stack/tests` vollständig
 - [ ] **Step 5: Commit** `fix(prompts): require tool evidence and both sources for department contacts`
 
+**Abweichung bei der Umsetzung:**
+
+- Die Quellenmatrix in Abschnitt 3.3 beider Prompts und die gemeinsame Function-Calling-Anweisung in `register-kahle-workflow-tool.py` wiesen „Rollen, Teams, Abteilungen, Standorte“ weiterhin allein `personio_directory` zu. Das widersprach den neuen Tool-Beschreibungen aus Task 3 und damit der Hauptursache des Prototyps.
+- Beide Matrizen folgen jetzt der Modellnotiz:
+  - Personio: Personen, Positionen, Teams, Abteilungs- und Standortzuordnung von Personen.
+  - rag_chat: Aufgaben von Rollen, standortbezogene Abläufe, Abkürzungen.
+  - Beide Tools: Abteilungs- und Bereichskontakte.
+- Die Function-Calling-Anweisung enthält zusätzlich die Tool-Pflicht.
+- Neue Tests: `test_prompt_source_matrix_matches_the_tool_descriptions`, `test_function_calling_prompt_matches_the_tool_descriptions`. Die Altverträge in `test_vinci_knowledge_source_prompt_contracts.py` wurden auf den neuen Wortlaut umgestellt.
+- Die Personio-Führungshoheit und das Fallback-Verbot bleiben unverändert.
+- Task 3: Der Personio-Test liest die String-Konstanten über den AST statt des Rohtexts, weil die Beschreibung über implizite Stringverkettung auf mehrere Zeilen verteilt ist.
+
 ### Task 5: Verify, Ausrollen, zweifache Laufzeitmessung
 
 - [ ] Full Verify → Exit 0
