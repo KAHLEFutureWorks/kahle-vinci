@@ -169,7 +169,7 @@ def test_release_path_is_wired_into_the_pre_route():
         "evidence_probe = _evidence_probe_outcome(retrieval_plan, pre_routed_internal_rag)",
         "metadata['kahle_evidence_probe'] = evidence_probe",
         "knowledge_evidence_session.forget('rag_chat')",
-        "_evidence_probe_release_prompt()",
+        "metadata['_kahle_final_answer_prompt'] = _evidence_probe_release_prompt()",
         "if harness_mode != 'off' and evidence_probe != 'released':",
     ):
         assert fragment in source

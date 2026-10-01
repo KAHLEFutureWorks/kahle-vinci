@@ -5670,11 +5670,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         pre_routed_internal_rag = ''
                         knowledge_evidence_session.forget('rag_chat')
                         _release_evidence_probe(form_data, metadata, request)
-                        form_data['messages'] = add_or_update_system_message(
-                            _evidence_probe_release_prompt(),
-                            form_data.get('messages', []) or [],
-                            append=True,
-                        )
+                        # Placed next to the user turn; the system prompt end is too weak.
+                        metadata['_kahle_final_answer_prompt'] = _evidence_probe_release_prompt()
                     elif evidence_probe == 'bound':
                         metadata['kahle_prerouted_rag_tool_output'] = _prerouted_rag_tool_output(
                             pre_route_call_id, user_tool_request or '', completed=True,
