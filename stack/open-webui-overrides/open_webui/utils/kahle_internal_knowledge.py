@@ -213,15 +213,21 @@ def _personio_tool(
         "spec": {
             "name": "personio_directory",
             "description": (
-                "Search the current KAHLE employee directory for people, positions, "
-                "teams, departments, locations, onboarding, and supervisors."
+                "Durchsucht das aktuelle KAHLE-Mitarbeiterverzeichnis (Personio): Personen, "
+                "Positionen, Teams, Abteilungen, Standorte, Onboarding und Führungskräfte. "
+                "Nicht für dokumentierte Prozesse, Zuständigkeiten oder Aufgabenbeschreibungen; "
+                "dafür rag_chat. Bei Kontaktfragen zu einer Abteilung oder einem Bereich "
+                "zusätzlich rag_chat aufrufen."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The unchanged natural-language directory question.",
+                        "description": (
+                            "Die unveränderte Verzeichnisfrage. Bei Folgefragen den Bezug "
+                            "(Name, Bereich, Standort) aus dem Verlauf ausschreiben."
+                        ),
                     }
                 },
                 "required": ["query"],

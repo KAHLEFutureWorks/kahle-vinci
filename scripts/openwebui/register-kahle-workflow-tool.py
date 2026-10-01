@@ -366,10 +366,25 @@ TOOL_DEFINITIONS = {
         "specs": [
             {
                 "name": "rag_chat",
-                "description": "Liefert ausschließlich dokumentierte KAHLE-Prozesse, Zuständigkeiten, Funktionspostfächer, Ticketsysteme sowie Einreichungs- und Kontaktwege als zitierbare Evidenz. Nicht für aktuelle Personen, Profile, geschäftliche Einzelkontakte, Rollen, Teams, Abteilungen, Standorte, Onboarding oder Führungskräfte verwenden. Bei Folgefragen erneut mit eigenständiger Query und bekannter Dokument- oder Produktkennung aufrufen.",
+                "description": (
+                    "Durchsucht freigegebene KAHLE-Dokumente: Prozesse und Arbeitsanweisungen, "
+                    "Zuständigkeiten und Aufgaben von Rollen, standortbezogene Abläufe, Systeme, "
+                    "Abkürzungen, Öffnungszeiten, Funktionspostfächer, Ticketsysteme sowie "
+                    "Einreichungs- und Kontaktwege. Für jede Frage zu internem KAHLE-Wissen aufrufen, "
+                    "statt aus Modellwissen zu antworten – auch bei kurzen Begriffen, Abkürzungen und "
+                    "Folgefragen. Nicht für aktuelle Personen, ihre Einzelkontakte oder Führungskräfte; "
+                    "dafür personio_directory. Bei Kontaktfragen zu einer Abteilung oder einem Bereich "
+                    "zusätzlich personio_directory aufrufen."
+                ),
                 "parameters": {
                     "type": "object",
-                    "properties": {"query": {"type": "string"}},
+                    "properties": {"query": {
+                        "type": "string",
+                        "description": (
+                            "Eigenständige, vollständige Frage auf Deutsch. Bei Folgefragen den Bezug "
+                            "aus dem Verlauf ausschreiben, zum Beispiel System, Prozess oder Standort."
+                        ),
+                    }},
                     "required": ["query"],
                 },
             }

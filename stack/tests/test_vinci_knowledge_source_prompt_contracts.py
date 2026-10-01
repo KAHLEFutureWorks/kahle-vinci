@@ -72,8 +72,9 @@ def test_registered_descriptions_keep_personio_and_rag_authority_separate():
     model_registration = load_model_registration()
 
     rag_description = registration.TOOL_DEFINITIONS["rag_chat"]["specs"][0]["description"]
-    assert "dokumentierte KAHLE-Prozesse, Zuständigkeiten, Funktionspostfächer" in rag_description
-    assert "Nicht für aktuelle Personen" in rag_description
+    assert "Durchsucht freigegebene KAHLE-Dokumente: Prozesse und Arbeitsanweisungen, Zuständigkeiten" in rag_description
+    assert "Funktionspostfächer" in rag_description
+    assert "Nicht für aktuelle Personen, ihre Einzelkontakte oder Führungskräfte; dafür personio_directory" in rag_description
 
     model_note = model_registration.make_meta(model_registration.MODELS[0])["kahleKnowledgeNote"]
     assert "personio_directory" in model_note

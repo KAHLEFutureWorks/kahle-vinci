@@ -231,7 +231,7 @@ def make_meta(model: dict) -> dict:
                 "legacy": True,
             }
         ],
-        "kahleKnowledgeNote": "Quellenhoheit: aktuelle Personen, Profile, geschäftliche Einzelkontakte, Rollen, Teams, Abteilungen, Standorte, Onboarding und Führungskräfte über personio_directory; dokumentierte Prozesse, Zuständigkeiten, Funktionspostfächer, Ticketsysteme sowie Einreichungs- und Kontaktwege über rag_chat. Beide nur bei echtem Bedarf an beiden Evidenzarten; OpenWebUI file context ist global deaktiviert.",
+        "kahleKnowledgeNote": "Quellenhoheit: aktuelle Personen, Einzelkontakte und Führungskräfte über personio_directory; dokumentierte Prozesse, Zuständigkeiten und Aufgaben von Rollen, standortbezogene Abläufe, Abkürzungen, Funktionspostfächer, Ticketsysteme sowie Einreichungs- und Kontaktwege über rag_chat. Abteilungs- und Bereichskontakte: beide Tools. OpenWebUI file context ist global deaktiviert.",
         "defaultFeatureIds": [],
         "builtinTools": {
             "memory": False,
