@@ -198,8 +198,6 @@ class AnswerContract:
     allowed_contact_values: tuple[str, ...] = ()
     allowed_contact_bindings: tuple[dict[str, Any], ...] = ()
     required_sections: tuple[str, ...] = ()
-    location_mode: str = ""
-    requested_location: str = ""
 
 
 @dataclass(frozen=True)
@@ -300,21 +298,6 @@ class HarnessDecision:
                     f"{question}\n"
                     "Gib keine Anleitung, keine Aussage, dass keine Evidenz vorliegt, und keine Quellen aus."
                 )
-        if self.answer_contract.location_mode:
-            payload = {
-                "schema_version": "kahle.location-context.v1",
-                "location_mode": self.answer_contract.location_mode,
-                "requested_location": self.answer_contract.requested_location,
-            }
-            return (
-                "KAHLE_KNOWLEDGE_LOCATION_CONTEXT\n"
-                + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-                + "\nBeantworte die ursprüngliche Nutzerfrage ausschließlich aus dem RAG-Kontext. "
-                "Erkläre den vollständigen belegten Ablauf als gemeinsamen Vorgang für Hannover, "
-                "Wunstorf und Wedemark. Stelle klar, dass er nur für diese drei Standorte gilt, "
-                "und nenne für alle anderen Standorte genau einmal datenschutz@kahle.de. "
-                "Erfinde keine Daten."
-            )
         directory_claims = tuple(
             claim
             for claim in self.evidence_bundle.supported_claims
@@ -605,9 +588,7 @@ def _requested_contact_channels(query: str) -> frozenset[str]:
         channels.add("email")
     if re.search(r"\b(?:telefon(?:nummer)?|durchwahl)\b", folded):
         channels.add("phone")
-    if not channels and (
-        _contact_information_requested(folded) or _marketing_opt_out_query(folded)
-    ):
+    if not channels and _contact_information_requested(folded):
         channels.add("any")
     return frozenset(channels)
 
@@ -640,17 +621,6 @@ def _contact_values(evidence: EvidenceBundle) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _marketing_opt_out_query(query: str) -> bool:
-    folded = _fold(query)
-    return all(
-        marker in folded
-        for marker in ("werbewiderspruch", "zufriedenheitsbefragung", "dse-kontaktfreigaben")
-    )
-
-
-_SUPPORTED_OPT_OUT_LOCATIONS = {"Hannover": "HAN", "Wunstorf": "WUN", "Wedemark": "WED"}
-
-
 def _customer_lock_followup_query(
     current: str, prior_user: str, prior_assistant: str,
 ) -> str:
@@ -673,11 +643,11 @@ def _customer_lock_followup_query(
         return ""
 
     folded = _fold(current)
-    supported_location = next(
+    location = next(
         (
-            location
-            for location in _SUPPORTED_OPT_OUT_LOCATIONS
-            if re.search(rf"\b{re.escape(_fold(location))}\b", folded)
+            name
+            for name in _REQUEST_LOCATIONS
+            if re.search(rf"\b{re.escape(_fold(name))}\b", folded)
         ),
         "",
     )
@@ -690,7 +660,7 @@ def _customer_lock_followup_query(
         "zweiteres", "zweite option",
     ))
     # An explicit general lock must never be reclassified as the scoped
-    # marketing opt-out merely because it names a supported location.
+    # marketing opt-out merely because it names a location.
     if general_choice:
         return (
             "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? Falls dafür "
@@ -698,20 +668,17 @@ def _customer_lock_followup_query(
             "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
         )
 
-    if marketing_choice or supported_location:
-        location_suffix = (
-            f" am Standort {supported_location}" if supported_location else ""
-        )
-        return (
-            "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-            "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
-            f"{location_suffix} durchgeführt?"
-        )
+    if marketing_choice:
+        location_suffix = f" am Standort {location}" if location else ""
+        return f"Wie hinterlege ich einen Werbewiderspruch in Vaudis{location_suffix}?"
+    if location:
+        # Which process applies to a location is the documents' decision.
+        return f"{str(prior_user or '').strip()} Standort {location}"
 
     return ""
 
 
-def _opt_out_location(query: str) -> str:
+def _requested_location(query: str) -> str:
     # Prefer the latest explicit location, including names outside the company list.
     # Application names following "in" are not locations.
     candidates = re.findall(
@@ -724,21 +691,9 @@ def _opt_out_location(query: str) -> str:
         return next((name for name in _REQUEST_LOCATIONS if _fold(name) == _fold(requested)), requested)
     value = str(query or "").strip()
     return next((
-        name for name in _SUPPORTED_OPT_OUT_LOCATIONS
+        name for name in _REQUEST_LOCATIONS
         if _fold(name) == _fold(value)
     ), "")
-
-
-def _opt_out_contract_scope(query: str, evidence: EvidenceBundle) -> dict[str, str]:
-    # The delivery gate must remain active precisely when retrieval has no
-    # usable evidence; otherwise a model draft could bypass the fail-closed
-    # fallback for this bounded process.
-    if not _marketing_opt_out_query(query):
-        return {}
-    location = _opt_out_location(query)
-    return {"location_mode": ("supported_location" if location in _SUPPORTED_OPT_OUT_LOCATIONS
-            else "out_of_scope_location" if location else "unspecified_location"),
-            "requested_location": location}
 
 
 def _is_phone_literal(value: str) -> bool:
@@ -1099,9 +1054,6 @@ def validate_answer(
         for item in evidence.get("supported_claims") or []
     )
     folded_claims = _fold(claim_text)
-
-    if contract.get("location_mode") and "wissensfehler melden" in folded_text:
-        add("model_feedback_link_not_allowed", "Den Feedback-Link stellt die Oberfläche separat bereit.")
 
     if (
         re.search(r"\b(?:erfind|dicht|fingier|glaubwurdig(?:en|er)? wortlaut)\w*", retrieval_query)
@@ -1898,9 +1850,7 @@ def _prior_topic_anchor(
 def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedContext:
     """Resolve bounded conversational references without inventing evidence."""
     original = str(query or "").strip()
-    retrieval_query = _canonical_marketing_opt_out_query(
-        resolve_query_aliases(original)
-    )
+    retrieval_query = resolve_query_aliases(original)
     entities = _request_entities(retrieval_query)
     prior_user, prior_assistant = _prior_conversation_turns(messages, original)
     topic_anchor = _prior_topic_anchor(messages, original, prior_user)
@@ -1916,7 +1866,7 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
     )
     location_reply = bool(
         prior_user
-        and _opt_out_location(original)
+        and _requested_location(original)
         and len(_fold(original).split()) <= 3
     )
     ambiguities: tuple[str, ...] = ()
@@ -1942,39 +1892,13 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
     elif (conversation_reference or location_reply) and not entities["persons"]:
         context_query = topic_anchor or prior_user
         combined = f"{context_query} {original}"
-        prior_folded = _fold(context_query)
-        explicit_location = _opt_out_location(original)
-        current_locations = (explicit_location,) if explicit_location else entities["locations"]
-        prior_opt_out_query = _canonical_marketing_opt_out_query(context_query)
-        is_temporary_manufacturer_anchor = (
-            "herstellerbefrag" in prior_folded and "tempor" in prior_folded
-        )
-        if prior_opt_out_query != context_query and is_temporary_manufacturer_anchor:
-            location_suffix = (
-                f" am Standort {current_locations[0]}" if current_locations else ""
-            )
-            retrieval_query = (
-                "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-                "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
-                f"{location_suffix} durchgeführt?"
-            )
-        elif "werbung" in prior_folded and "vaudis" in prior_folded:
-            location_suffix = (
-                f" am Standort {current_locations[0]}" if current_locations else ""
-            )
-            retrieval_query = (
-                "Wie wird ein Werbewiderspruch in Vaudis"
-                f"{location_suffix} durchgeführt?"
-            )
-        else:
-            retrieval_query = combined
+        retrieval_query = combined
         resolved_entities = _request_entities(retrieval_query)
         entities = {
             key: entities[key] or resolved_entities[key]
             for key in entities
         }
 
-    retrieval_query = _canonical_marketing_opt_out_query(retrieval_query)
     needs = tuple(need.kind for need in _information_needs(retrieval_query))
     return ResolvedContext(
         original_query=original,
@@ -1994,32 +1918,6 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
         ambiguities=ambiguities,
         required_clarification=bool(ambiguities),
         clarification_question=clarification_question,
-    )
-
-
-def _canonical_marketing_opt_out_query(query: str) -> str:
-    """Map common opt-out wording to the approved process vocabulary."""
-    value = str(query or "").strip()
-    folded = _fold(value)
-    marketing_scope = re.search(
-        r"\b(?:werbung|werbesperre|werbewiderspruch|bewertung(?:en)?|"
-        r"zufriedenheitsbefragung(?:en)?|zufriedenheitsabfrag(?:en)?|herstellerbefragung(?:en)?|"
-        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
-        folded,
-    )
-    action = re.search(
-        r"\b(?:sperr|hinterleg|deaktivier|widersprech|abbestell|tempor|"
-        r"keine\b.{0,35}\berhalt)\w*",
-        folded,
-    )
-    if not marketing_scope or not action:
-        return value
-    location = _opt_out_location(value)
-    location_suffix = f" am Standort {location}" if location else ""
-    return (
-        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
-        f"{location_suffix} durchgeführt?"
     )
 
 
@@ -3105,6 +3003,17 @@ def build_decision(
     evidence, allowed_contact_values = _apply_contact_evidence_requirement(
         retrieval_query, evidence
     )
+    # Decision 2026-09-30 also holds for the pre-route: person-free RAG
+    # contacts are source-bound. Personio fields still need a contact question.
+    rag_contact_bindings = tuple(
+        binding
+        for binding in _model_led_contact_bindings(evidence)
+        if binding.get("source_kind") == "rag_chat"
+    )
+    allowed_contact_values = tuple(dict.fromkeys((
+        *allowed_contact_values,
+        *(binding["value"] for binding in rag_contact_bindings),
+    )))
 
     retrieval_events = []
     for tool in retrieval_plan.required_tools:
@@ -3139,8 +3048,8 @@ def build_decision(
         answer_blueprint=_answer_blueprint(evidence),
         answer_contract=AnswerContract(
             allowed_contact_values=allowed_contact_values,
+            allowed_contact_bindings=rag_contact_bindings,
             required_sections=_complete_document_overview_sections(evidence),
-            **_opt_out_contract_scope(retrieval_query, evidence),
         ),
         events=(
             {"type": "intent/started"},
@@ -3269,7 +3178,6 @@ def build_result_driven_decision(
             allowed_contact_values=tuple(dict.fromkeys(binding["value"] for binding in _model_led_contact_bindings(evidence))),
             allowed_contact_bindings=_model_led_contact_bindings(evidence),
             required_sections=_complete_document_overview_sections(evidence),
-            **_opt_out_contract_scope(resolved_context.retrieval_query, evidence),
         ),
         events=(
             *retrieval_events,

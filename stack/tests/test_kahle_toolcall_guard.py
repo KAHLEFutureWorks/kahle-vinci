@@ -64,8 +64,7 @@ def test_guard_expands_short_marketing_reply_from_customer_lock_clarification():
     ]
 
     assert module._expand_customer_lock_followup("Werbung", messages) == (
-        "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
-        "in Vaudis über die DSE-Kontaktfreigaben?"
+        "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
     )
 
 
@@ -77,7 +76,7 @@ def test_guard_expands_short_marketing_reply_from_customer_lock_clarification():
         ("Wedemark", "Wedemark"),
     ),
 )
-def test_guard_expands_supported_location_after_customer_lock_clarification(
+def test_guard_keeps_the_question_for_a_bare_location_after_customer_lock_clarification(
     reply, expected_location,
 ):
     module = load_module()
@@ -93,10 +92,9 @@ def test_guard_expands_supported_location_after_customer_lock_clarification(
         },
     ]
 
+    # Which process applies to a location is the documents' decision.
     assert module._expand_customer_lock_followup(reply, messages) == (
-        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
-        f"am Standort {expected_location} durchgeführt?"
+        f"Wie sperre ich einen Kunden in Vaudis? Standort {expected_location}"
     )
 
 
@@ -122,7 +120,7 @@ def test_guard_keeps_general_or_other_location_out_of_the_marketing_opt_out_proc
 
     assert "Werbewiderspruch" not in expanded
     if reply == "Nienburg":
-        assert expanded == "Nienburg"
+        assert expanded == "Wie sperre ich einen Kunden in Vaudis? Standort Nienburg"
     else:
         assert "allgemeine Kundensperre" in expanded
 
