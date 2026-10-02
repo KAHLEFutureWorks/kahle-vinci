@@ -2055,14 +2055,38 @@ def _procedural_evidence_intent(query):
             value,
         )
     )
+_PROCEDURE_ACTION_PATTERNS = (
+    r"\b(?:oe|o)?ffn\w*",
+    r"\bnavigier\w*",
+    r"\bklick\w*",
+    r"\bwae?hl\w*",
+    r"\b(?:eingeb\w*|gib)\b",
+    r"\berfass\w*",
+    r"\bspeicher\w*",
+    r"\bbestae?tig\w*",
+    r"\berstell\w*",
+    r"\baufruf\w*",
+    r"\beintrag\w*",
+    r"\bentfern\w*",
+    r"\bdokumentier\w*",
+    r"\bprue?f\w*",
+    r"\bauswae?hl\w*",
+    r"\banleg\w*",
+    r"\bausfue?ll\w*",
+    r"\bhinterleg\w*",
+    r"\b(?:de)?aktivier\w*",
+)
 def _context_has_procedure(context):
     value = _fold_evidence_text(context)
-    patterns = (
-        r"\bo?ffn\w*", r"\bnavigier\w*", r"\bklick\w*",
-        r"\bwaehl\w*", r"\b(?:eingeb\w*|gib)\b", r"\berfass\w*",
-        r"\bspeicher\w*", r"\bbestaetig\w*", r"\berstell\w*",
+    # Accent-folded either way: ä may arrive as "ae" (rag_chat) or "a" (harness).
+    hits = [pattern for pattern in _PROCEDURE_ACTION_PATTERNS if re.search(pattern, value)]
+    if len(hits) >= 3:
+        return True
+    # A numbered list of at least three steps, one of them an action, is a procedure.
+    steps = re.findall(r"(?m)^\s*\d{1,2}[.)]\s+(.+)$", value)
+    return len(steps) >= 3 and any(
+        re.search(pattern, step) for step in steps for pattern in _PROCEDURE_ACTION_PATTERNS
     )
-    return sum(bool(re.search(pattern, value)) for pattern in patterns) >= 3
 def _detected_conflict_source_ids(source_items):
     """Detect explicit mutually exclusive procedure instructions."""
     folded = [

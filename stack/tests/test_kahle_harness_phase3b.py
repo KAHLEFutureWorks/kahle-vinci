@@ -228,3 +228,46 @@ def test_released_probe_still_writes_routing_metrics():
 
     assert "elif metadata.get('kahle_evidence_probe'):" in source
     assert "'schema_version': 'kahle.harness-metrics.v1'," in source.split("elif metadata.get('kahle_evidence_probe'):", 1)[1][:400]
+
+
+TOOL_PATH = ROOT / "open-webui-tools" / "rag_chat_hybrid_tool.py"
+
+OPT_OUT_STEPS = """## 5. Durchführung der Sperrung
+1. Kunden in Vaudis anhand der gemeldeten Kundennummer aufrufen.
+1. Die DSE-Einstellungen des Kunden öffnen.
+1. Die für die Kontaktfreigaben gesetzten Haken entfernen.
+1. Exakt dokumentieren, welche Haken entfernt wurden.
+1. Den Kunden unmittelbar danach in die standortbezogene Sperrliste eintragen.
+"""
+PROSE_ONLY = "Im Servicebereich kann man den Kalender öffnen. Die Termine sind dort sichtbar."
+NUMBERED_FACTS = """1. Hannover, Mo-Fr 7-18 Uhr
+2. Wunstorf, Mo-Fr 7-17 Uhr
+3. Wedemark, Mo-Fr 8-17 Uhr
+"""
+VERB_STEPS = "Öffne die Maske. Wähle den Kunden. Speichere die Änderung."
+
+
+def _procedure_detectors():
+    sys.path.insert(0, str(TOOL_PATH.parent))
+    try:
+        spec = importlib.util.spec_from_file_location("rag_tool_phase3b", TOOL_PATH)
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+    finally:
+        sys.path.remove(str(TOOL_PATH.parent))
+    return {"tool": tool._context_has_procedure, "harness": load_harness()._procedure_is_supported}
+
+
+@pytest.mark.parametrize("detector", ["tool", "harness"])
+@pytest.mark.parametrize(
+    "context, expected",
+    [
+        (OPT_OUT_STEPS, True),
+        (VERB_STEPS, True),
+        (PROSE_ONLY, False),
+        (NUMBERED_FACTS, False),
+    ],
+    ids=["numbered_steps", "verb_steps", "prose", "numbered_facts"],
+)
+def test_procedure_detection_recognises_numbered_steps(detector, context, expected):
+    assert _procedure_detectors()[detector](context) is expected
