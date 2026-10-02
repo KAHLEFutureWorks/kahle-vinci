@@ -271,3 +271,39 @@ def _procedure_detectors():
 )
 def test_procedure_detection_recognises_numbered_steps(detector, context, expected):
     assert _procedure_detectors()[detector](context) is expected
+
+
+def test_diagnostic_metrics_explain_the_evidence_status():
+    from types import SimpleNamespace
+
+    fields = load_middleware_functions(
+        "_knowledge_harness_diagnostic_metric_fields"
+    )["_knowledge_harness_diagnostic_metric_fields"]
+    session = SimpleNamespace(called_tools=lambda: ("rag_chat", "personio_directory", "rag_chat"))
+    metadata = {
+        "kahle_contract_origin": "model_led_refresh",
+        "kahle_internal_rag_prerouted": "found",
+        "kahle_knowledge_evidence_session": session,
+    }
+    evidence = {"missing_information": ["a", "b", "c", "d"]}
+
+    assert fields(metadata, evidence) == {
+        "contract_origin": "model_led_refresh",
+        "prerouted_rag": "found",
+        "rag_call_count": 2,
+        "evidence_missing": ["a", "b", "c"],
+    }
+    assert fields({}, {}) == {
+        "contract_origin": "",
+        "prerouted_rag": "",
+        "rag_call_count": 0,
+        "evidence_missing": [],
+    }
+
+
+def test_contract_origin_is_recorded_on_both_paths():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert source.count("metadata['kahle_contract_origin'] = 'pre_route'") == 1
+    assert source.count("metadata['kahle_contract_origin'] = 'model_led_refresh'") == 1
+    assert "**_knowledge_harness_diagnostic_metric_fields(metadata, evidence_payload)," in source

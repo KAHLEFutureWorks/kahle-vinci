@@ -471,6 +471,7 @@ def _refresh_model_led_answer_contract(
     if decision is None:
         return body
 
+    metadata['kahle_contract_origin'] = 'model_led_refresh'
     body['messages'] = upsert_answer_contract_message(
         body.get('messages', []) or [], decision
     )
@@ -527,6 +528,23 @@ def _knowledge_harness_routing_metric_fields(metadata: dict[str, Any]) -> dict[s
             comparison.get('actual_tools') or (),
         )
     return fields
+
+
+def _knowledge_harness_diagnostic_metric_fields(
+    metadata: dict[str, Any], evidence_payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Explain an evidence status with fixed harness texts only, never user data."""
+    session = metadata.get('kahle_knowledge_evidence_session')
+    called = getattr(session, 'called_tools', None)
+    calls = tuple(called()) if callable(called) else ()
+    return {
+        'contract_origin': str(metadata.get('kahle_contract_origin') or ''),
+        'prerouted_rag': str(metadata.get('kahle_internal_rag_prerouted') or ''),
+        'rag_call_count': sum(1 for tool in calls if tool == 'rag_chat'),
+        'evidence_missing': [
+            str(item) for item in list(evidence_payload.get('missing_information') or [])[:3]
+        ],
+    }
 
 
 def _knowledge_harness_blueprint_metric_fields(
@@ -5712,6 +5730,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             rag_result=pre_route_rag_result,
                             personio_result=retrieval['personio_result'],
                         )
+                        metadata['kahle_contract_origin'] = 'pre_route'
                         harness_payload = harness_decision.to_dict()
                         blueprint_metrics = (
                             _knowledge_harness_blueprint_metric_fields(
@@ -8620,6 +8639,7 @@ async def streaming_chat_response_handler(response, ctx):
                         'required_tool': str(retrieval_payload.get('required_tool') or ''),
                         **_knowledge_harness_routing_metric_fields(metadata),
                         'evidence_status': str(evidence_payload.get('status') or ''),
+                        **_knowledge_harness_diagnostic_metric_fields(metadata, evidence_payload),
                         'source_count': len(evidence_payload.get('sources') or []),
                         **(
                             metadata.get('_kahle_answer_blueprint_metrics')
