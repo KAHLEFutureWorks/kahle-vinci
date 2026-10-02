@@ -167,6 +167,50 @@ $P -m pytest eval/harness/tests -q -p no:cacheprovider
 - [ ] Antwort-Probe: Für die vier natürlichen Werbewiderspruch-Fragen und die Befragungsfrage nennt die Antwort die Standorte Hannover, Wunstorf und Wedemark. Für andere Standorte nennt sie `datenschutz@kahle.de`. Ausgelieferte blockierende Verstöße: 0. Länge je Antwort.
 - [ ] **Gate:** Routing nicht schlechter als `2026-10-01-runtime-phase3-hybrid.json` (±1 je Kategorie) und die Inhalts-Probe bestanden. Sonst Stopp und Rückmeldung an den Nutzer.
 
+### Ergebnis Task 6 (01.10.) und Revision (02.10.)
+
+**Gate nicht bestanden, Rückbau zurückgenommen** (`88f7456`, Revert `a2dfbfb`):
+
+- Routing: bestanden (`scope_location` 6/6 je Modell, `followup` je 4/6, keine ausgelieferten blockierenden Verstöße).
+- Inhalt: nur 4 von 18 Werbewiderspruch-Antworten nannten drei Standorte und `datenschutz@kahle.de`. gpt-oss enthielt sich in 4 von 6 Fällen.
+
+**Ursache (gemessen 02.10., `optout_evidence_probe.py`, `optout_missing_probe.py`):**
+
+| Anfrage | Belegte Aussagen | Status | Begründung des Tools |
+| --- | --- | --- | --- |
+| „Wie hinterlege ich einen Werbewiderspruch in Vaudis?“ (natürlich) | 132 | `partially_supported` | „enthalten aber keine ausreichende Anleitung“ |
+| umgeschriebene Passivfrage „Wie wird … durchgeführt?“ | 132 | `supported` | – |
+
+- Die Belegmenge ist gleich. Entscheidend ist die Anleitungserkennung: `_context_has_procedure` (Tool) und `_procedure_is_supported` (Harness) zählen nur die Verben öffnen, navigieren, klicken, wählen, eingeben, erfassen, speichern, bestätigen, erstellen und brauchen drei verschiedene Treffer.
+- Das Dokument beschreibt seine Schritte als nummerierte Liste mit aufrufen, öffnen, entfernen, dokumentieren, eintragen, prüfen, wiederherstellen. Davon trifft nur „öffnen“.
+- Natürliche „Wie …?“-Fragen gelten als Anleitungsfrage und werden deshalb herabgestuft. Die Passivfrage der Umschreibung umging diese Prüfung.
+- Die Umschreibung hat also einen Fehler der Anleitungserkennung verdeckt. Er betrifft jedes Dokument mit anderen Verben.
+
+**Revidierte Reihenfolge für Teil B:**
+
+#### Task 5a: Anleitungserkennung strukturell machen
+
+**Files:** `rag_chat_hybrid_tool.py` (+ `dist/`), Harness; Tests `test_kahle_harness_phase3b.py`
+
+- [ ] **Failing tests** für beide Erkennungen (Tool über den Bundle-Loader, Harness direkt):
+  - Eine nummerierte Liste mit mindestens drei Schritten, von denen mindestens einer mit einem Handlungsverb beginnt, ist eine Anleitung (synthetischer Auszug im Stil der Werbewiderspruch-Schritte).
+  - Fließtext, der nur „öffnen“ erwähnt, ist keine Anleitung.
+  - Eine nummerierte Faktenliste ohne Handlungsverb (Standorte, Öffnungszeiten) ist keine Anleitung.
+  - Die bisherigen Verbfälle bleiben grün.
+- [ ] **Implement:**
+  - Gemeinsame Regel in beiden Modulen, entweder mindestens drei verschiedene Handlungsverben oder mindestens drei nummerierte Schritte mit mindestens einem Handlungsverb.
+  - Die Verbliste wird um aufrufen, eintragen, entfernen, dokumentieren, prüfen, auswählen, anlegen, ausfüllen, hinterlegen, aktivieren/deaktivieren erweitert.
+  - Danach `build_tools.py` und `--check`.
+- [ ] `stack/tests` vollständig → PASS. Commit `fix(rag): recognise numbered step lists as procedures`.
+- [ ] Ausrollen. `optout_missing_probe.py` → natürliche Werbewiderspruch-Fragen `supported`.
+
+#### Task 5b: Rückbau erneut anwenden
+
+- [ ] `git revert a2dfbfb` (stellt `88f7456` wieder her), `stack/tests` → PASS.
+- [ ] Zwischenmessung wie Task 6.
+- [ ] Fällt die Inhaltsprüfung nur wegen fehlender Standortnennung durch, folgt eine dokumentgetriebene Prompt-Regel: „Nennt eine Quelle einen Geltungsbereich, gib ihn an und nenne den dokumentierten Weg für alle anderen Fälle.“ Danach erneut messen.
+- [ ] Anderes Scheitern: Stopp und Rückmeldung.
+
 ### Task 7: Tool-Sonderfilter entfernen
 
 **Files:** `rag_chat_hybrid_tool.py`, `hybrid_retrieval.py`, `dist/`; Tests `test_hybrid_retrieval_security.py`, `test_rag_evidence_bundle_contract.py`
