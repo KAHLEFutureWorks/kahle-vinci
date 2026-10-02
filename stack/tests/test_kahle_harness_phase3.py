@@ -146,3 +146,17 @@ def test_function_calling_prompt_matches_the_tool_descriptions():
     ):
         assert row in prompt
     assert "roles, teams, departments, locations" not in prompt
+
+
+SCOPE_RULE = (
+    "- Nennt eine Quelle einen Geltungsbereich (zum Beispiel „gilt nur für …“), gib ihn in der "
+    "Antwort an und nenne den dokumentierten Weg für alle anderen Fälle."
+)
+
+
+@pytest.mark.parametrize("prompt_path", PROMPTS, ids=lambda p: p.name)
+def test_prompts_carry_the_document_scope_rule(prompt_path):
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    assert SCOPE_RULE in prompt
+    assert "Hannover" not in prompt.split(SCOPE_RULE, 1)[0][-400:]
