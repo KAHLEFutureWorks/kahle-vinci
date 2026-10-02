@@ -5568,11 +5568,14 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             }
                             for need in getattr(retrieval_plan, 'information_needs', ()) or ()
                         ]
+                        # The handler reads extra_params['__metadata__']; hand it the
+                        # copy that carries the forced-call flags and information needs.
+                        pre_route_extra_params = {**extra_params, '__metadata__': pre_route_metadata}
                         try:
                             pre_route_form_data, flags = await chat_completion_tools_handler(
                                 request,
                                 pre_route_form_data,
-                                extra_params,
+                                pre_route_extra_params,
                                 user,
                                 models,
                                 pre_route_tools,

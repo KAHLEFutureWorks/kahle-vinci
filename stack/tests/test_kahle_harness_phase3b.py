@@ -307,3 +307,16 @@ def test_contract_origin_is_recorded_on_both_paths():
     assert source.count("metadata['kahle_contract_origin'] = 'pre_route'") == 1
     assert source.count("metadata['kahle_contract_origin'] = 'model_led_refresh'") == 1
     assert "**_knowledge_harness_diagnostic_metric_fields(metadata, evidence_payload)," in source
+
+
+def test_pre_route_handler_receives_the_flagged_metadata_copy():
+    """The nested handler reads extra_params['__metadata__']; the flags live in the copy."""
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    block = source[
+        source.index("async def retrieve_pre_route_rag()"):
+        source.index("retrieval = await _execute_kahle_retrieval_plan(")
+    ]
+
+    assert "pre_route_extra_params = {**extra_params, '__metadata__': pre_route_metadata}" in block
+    call = block[block.index("await chat_completion_tools_handler("):]
+    assert call.index("pre_route_extra_params,") < call.index(")")
