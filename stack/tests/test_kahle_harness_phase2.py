@@ -285,7 +285,6 @@ def test_advisory_findings_never_trigger_a_retry():
 def test_hold_hides_answer_text_but_keeps_reasoning():
     safe = load_middleware_functions(
         "_stream_safe_output", "_strip_pseudo_toolcall_stream_text",
-        "_collapse_immediately_repeated_paragraph_sequence",
     )["_stream_safe_output"]
     output = [
         {"type": "reasoning", "content": [{"type": "text", "text": "denke"}], "summary": []},
@@ -305,8 +304,8 @@ def test_stream_holds_knowledge_answers_in_enforce_mode():
     assert "hold_knowledge_answer = (" in source
     assert source.count(
         "suppress_message_text=suppress_initial_rag_response or hold_knowledge_answer"
-    ) == 2
-    assert source.count("suppress_reasoning=suppress_initial_rag_response") == 2
+    ) == 1
+    assert source.count("suppress_reasoning=suppress_initial_rag_response") == 1
     assert re.search(
         r"if tool_function_name in \{'rag_chat', 'personio_directory'\}:\s+"
         r"hold_knowledge_answer = _answer_enforcement_mode\(\) == 'enforce'",

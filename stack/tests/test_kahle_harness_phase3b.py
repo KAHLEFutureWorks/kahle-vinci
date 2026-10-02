@@ -230,6 +230,68 @@ def test_released_probe_still_writes_routing_metrics():
     assert "'schema_version': 'kahle.harness-metrics.v1'," in source.split("elif metadata.get('kahle_evidence_probe'):", 1)[1][:400]
 
 
+GUARD = ROOT / "open-webui-functions" / "kahle_toolcall_guard.py"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Wie sperre ich einen Kunden für Werbung am Standort Walsrode?",
+        "Der Kunde will keine Werbung mehr bekommen, wie trage ich das ein?",
+        "Wie deaktiviere ich die DSE-Kontaktfreigaben in Wunstorf?",
+    ],
+)
+def test_opt_out_wording_is_no_longer_rewritten(query):
+    harness = load_harness()
+
+    assert harness.resolve_request(query, [{"role": "user", "content": query}]).retrieval_query == query
+
+
+def test_customer_lock_choice_resolves_to_a_natural_question():
+    harness = load_harness()
+    prior_user = "Wie sperre ich einen Kunden?"
+    prior_assistant = (
+        "Meinst du Werbung und Befragungen oder eine allgemeine Kundensperre in Vaudis?"
+    )
+
+    def follow(reply):
+        return harness._customer_lock_followup_query(reply, prior_user, prior_assistant)
+
+    assert follow("Werbung") == "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
+    assert follow("Werbung für Walsrode") == (
+        "Wie hinterlege ich einen Werbewiderspruch in Vaudis am Standort Walsrode?"
+    )
+    # A bare location keeps the original question; retrieval decides the process.
+    assert follow("Nienburg") == "Wie sperre ich einen Kunden? Standort Nienburg"
+    assert follow("allgemein").startswith("Wie veranlasse ich eine allgemeine Kundensperre in Vaudis?")
+
+
+def test_special_path_identifiers_are_gone():
+    harness_source = HARNESS.read_text(encoding="utf-8")
+    middleware_source = MIDDLEWARE.read_text(encoding="utf-8")
+    guard_source = GUARD.read_text(encoding="utf-8")
+
+    for name in (
+        "_canonical_marketing_opt_out_query",
+        "_marketing_opt_out_query",
+        "_opt_out_contract_scope",
+        "_SUPPORTED_OPT_OUT_LOCATIONS",
+        "KAHLE_KNOWLEDGE_LOCATION_CONTEXT",
+        "location_mode",
+    ):
+        assert name not in harness_source
+    for name in (
+        "temporary_survey_opt_out",
+        "temporary_survey_without_location",
+        "kahle_survey_location_mode",
+        "_normalize_repeated_location_prompt_output",
+        "location_mode",
+    ):
+        assert name not in middleware_source
+    for source in (harness_source, middleware_source, guard_source):
+        assert "herstellerseitige Zufriedenheitsbefragungen" not in source
+
+
 TOOL_PATH = ROOT / "open-webui-tools" / "rag_chat_hybrid_tool.py"
 
 OPT_OUT_STEPS = """## 5. Durchführung der Sperrung

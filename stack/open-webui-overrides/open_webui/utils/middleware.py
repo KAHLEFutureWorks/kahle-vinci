@@ -285,15 +285,6 @@ def _plan_kahle_retrieval_gate(
         permission_scope=permission_scope,
     )
     required_tools = tuple(getattr(plan, 'required_tools', ()) or ())
-    resolved_folded = str(resolved_query or '').casefold()
-    temporary_survey_opt_out = all(
-        marker in resolved_folded
-        for marker in (
-            'werbewiderspruch',
-            'zufriedenheitsbefragung',
-            'dse-kontaktfreigaben',
-        )
-    )
     if harness_mode == 'off':
         if legacy_rag_request and 'rag_chat' in tools_dict:
             return replace(plan, required_tools=('rag_chat',))
@@ -303,7 +294,6 @@ def _plan_kahle_retrieval_gate(
     if (
         (
             legacy_rag_request
-            or temporary_survey_opt_out
             or any(
                 getattr(need, 'kind', '') in {
                     'abbreviation_definition',
@@ -501,8 +491,6 @@ def _high_salience_knowledge_answer_prompt(decision: Any) -> str:
     answer_contract = getattr(decision, 'answer_contract', None)
     if not (
         getattr(getattr(decision, 'user_intent', None), 'clarification_required', False)
-        or
-        getattr(answer_contract, 'location_mode', False)
         or getattr(decision, 'answer_blueprint', None) is not None
     ):
         return ''
@@ -616,60 +604,6 @@ def _planned_rag_tool_calls(
     if not query:
         return []
     return [{'name': 'rag_chat', 'parameters': {'query': query}}]
-
-
-def _prerouted_rag_tool_context(
-    extra_params: dict[str, Any], permission_scope: dict[str, Any],
-    metadata: dict[str, Any],
-) -> dict[str, Any]:
-    """Return the safe request binding required by the local RAG adapter."""
-    tool_user = extra_params.get('__user__')
-    if not isinstance(tool_user, dict) or not str(tool_user.get('id') or '').strip():
-        tool_user = {
-            'id': str(permission_scope.get('user_id') or ''),
-            'role': str(permission_scope.get('role') or ''),
-        }
-    return {
-        '__user__': tool_user,
-        '__chat_id__': extra_params.get('__chat_id__') or '',
-        '__message_id__': extra_params.get('__message_id__') or '',
-        '__metadata__': metadata,
-    }
-
-
-async def _execute_prerouted_rag_tool(
-    tool: dict[str, Any], query: str, *, tool_context: dict[str, Any] | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
-    """Call the already-bound RAG adapter for a mandatory procedure lookup.
-
-    The adapter's authorization and retrieval configuration are supplied via
-    OpenWebUI's request-scoped special parameters.  A direct pre-route must
-    preserve those bindings just as the ordinary tool handler does.
-    """
-    callable_tool = tool.get('callable') if isinstance(tool, dict) else None
-    if not callable(callable_tool):
-        return '', []
-    # Local OpenWebUI tools are partial functions with frozen context. Rebind
-    # through the platform helper so request values replace those frozen values
-    # without passing a duplicate reserved keyword to ``functools.partial``.
-    original_callable = getattr(
-        callable_tool, '__kahle_rag_original__', callable_tool
-    )
-    callable_tool = await get_updated_tool_function(
-        function=original_callable, extra_params=dict(tool_context or {})
-    )
-    result = callable_tool(query=str(query or '').strip())
-    if inspect.isawaitable(result):
-        result = await result
-    raw_result = str(result or '')
-    if not raw_result:
-        return '', []
-    return raw_result, [{
-        'source': {'name': 'rag_chat/rag_chat'},
-        'document': [raw_result],
-        'metadata': [{'source': 'rag_chat/rag_chat', 'parameters': {'query': str(query or '').strip()}}],
-        'tool_result': True,
-    }]
 
 
 def _filter_native_tools_for_kahle_retrieval(
@@ -1848,62 +1782,6 @@ def _strip_pseudo_toolcall_stream_text(text: str) -> str:
     return value
 
 
-def _collapse_immediately_repeated_paragraph_sequence(text: str) -> str:
-    """Remove an exact duplicated paragraph sequence from one model response."""
-    value = str(text or "")
-    answer, separator, sources = value.partition("\n\nQuellen:")
-    paragraphs = [paragraph for paragraph in answer.split("\n\n") if paragraph]
-    for width in range(len(paragraphs) // 2, 0, -1):
-        if paragraphs[:width] == paragraphs[width : 2 * width]:
-            answer = "\n\n".join(paragraphs[:width] + paragraphs[2 * width :])
-            return f"{answer}{separator}{sources}"
-    return value
-
-
-def _normalize_repeated_location_prompt_output(output: list) -> list:
-    """Normalize only duplicate prose; never add, replace or regenerate content."""
-    normalized = copy.deepcopy(output or [])
-    for item in normalized:
-        if not isinstance(item, dict) or item.get("type") != "message":
-            continue
-        for part in item.get("content", []):
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                part["text"] = _collapse_immediately_repeated_paragraph_sequence(part["text"])
-
-    final_location_response_index = None
-    final_location_answer = ''
-    for index, item in enumerate(normalized):
-        if not isinstance(item, dict) or item.get("type") != "message":
-            continue
-        text = "\n".join(
-            str(part.get("text") or "")
-            for part in item.get("content", [])
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
-        )
-        if (
-            "Zufriedenheitsbefragungen" in text
-            and "\n\nQuellen:" in text
-        ):
-            final_location_response_index = index
-            final_location_answer = text.partition("\n\nQuellen:")[0].strip()
-
-    return [
-        item for index, item in enumerate(normalized)
-        if not (
-            final_location_response_index is not None
-            and index < final_location_response_index
-            and isinstance(item, dict)
-            and item.get("type") == "message"
-            and final_location_answer
-            and "\n".join(
-                str(part.get("text") or "")
-                for part in item.get("content", [])
-                if isinstance(part, dict) and isinstance(part.get("text"), str)
-            ).strip() == final_location_answer
-        )
-    ]
-
-
 def _stream_safe_output(
     output: list,
     *,
@@ -1937,11 +1815,6 @@ def _stream_safe_output(
                     if suppress_message_text
                     else _strip_pseudo_toolcall_stream_text(part.get('text', ''))
                 )
-                if (
-                    'Zufriedenheitsbefragungen' in text
-                    and 'An welchem Standort arbeitest du: Hannover, Wunstorf oder Wedemark?' in text
-                ):
-                    text = _collapse_immediately_repeated_paragraph_sequence(text)
                 part['text'] = text
     return safe_output
 
@@ -5384,14 +5257,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             original_user_tool_request or '', form_data.get('messages', []) or []
         )
         user_tool_request = resolved_internal_request.retrieval_query
-        temporary_survey_opt_out = all(
-            marker in str(user_tool_request or '').casefold()
-            for marker in (
-                'werbewiderspruch',
-                'zufriedenheitsbefragung',
-                'dse-kontaktfreigaben',
-            )
-        )
         permission_scope = _knowledge_harness_permission_scope(user)
         legacy_rag_request = (
             _looks_like_internal_rag_request(user_tool_request or '')
@@ -5442,7 +5307,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 and _should_execute_kahle_retrieval(retrieval_plan, tools_dict)
                 and (
                     native_function_calling
-                    or temporary_survey_opt_out
                     or any(
                         getattr(need, 'kind', '') == 'abbreviation_definition'
                         for need in tuple(
@@ -5453,7 +5317,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             )
 
             pre_routed_internal_rag = ''
-            pre_route_private_context_sources: list[dict[str, Any]] = []
             if force_internal_rag:
                 metadata['_kahle_harness_started_monotonic'] = time.monotonic()
                 # The information-needs plan is fixed before either adapter is
@@ -5501,19 +5364,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         if 'rag_chat' not in tools_dict:
                             return {'form_data': None, 'sources': [], 'rag_result': ''}
                         pre_route_tools = {'rag_chat': tools_dict['rag_chat']}
-                        if temporary_survey_opt_out:
-                            raw_result, direct_sources = await _execute_prerouted_rag_tool(
-                                pre_route_tools['rag_chat'], user_tool_request or '',
-                                tool_context=_prerouted_rag_tool_context(
-                                    extra_params, permission_scope, metadata
-                                ),
-                            )
-                            return {
-                                'form_data': form_data,
-                                'sources': direct_sources,
-                                'private_context_sources': direct_sources,
-                                'rag_result': raw_result,
-                            }
                         pre_route_form_data = copy.deepcopy(form_data)
                         pre_route_metadata = pre_route_form_data.setdefault('metadata', {})
                         # ``deepcopy(form_data)`` must not fork the request-local
@@ -5640,9 +5490,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         if rag_execution.get('form_data') is not None:
                             form_data = rag_execution['form_data']
                         pre_route_sources = list(rag_execution.get('sources') or [])
-                        pre_route_private_context_sources = list(
-                            rag_execution.get('private_context_sources') or []
-                        )
                         pre_route_rag_result = str(rag_execution.get('rag_result') or '')
                     else:
                         pre_route_sources = []
@@ -5729,9 +5576,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             harness_decision
                         )
                         metadata['kahle_knowledge_harness_shadow'] = shadow_decision
-                        metadata['kahle_survey_location_mode'] = (
-                            harness_decision.answer_contract.location_mode
-                        )
                         if harness_mode == 'active':
                             metadata['kahle_knowledge_harness_active'] = True
                             metadata['kahle_answer_contract'] = harness_payload[
@@ -5871,10 +5715,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     metadata['user_prompt'] = get_last_user_message(form_data['messages'])
     metadata['sources'] = sources[:] if sources else []
 
-    # Keep the complete raw RAG result in a request-local context channel for
-    # the answer model.  The public ``sources`` list deliberately contains
-    # only canonical portal references, so it remains safe for the citation UI.
-    model_context_sources = [*sources, *pre_route_private_context_sources]
+    model_context_sources = list(sources)
 
     # If context is not empty, insert it into the messages
     if model_context_sources and prompt:
@@ -7097,27 +6938,6 @@ async def streaming_chat_response_handler(response, ctx):
 
             def full_output():
                 combined = prior_output + output if prior_output else output
-                answer_contract = metadata.get('kahle_answer_contract') or {}
-                location_mode = (
-                    answer_contract.get('location_mode')
-                    or metadata.get('kahle_survey_location_mode')
-                )
-                initial_location_query = _ascii_fold(initial_user_message or '')
-                temporary_survey_without_location = (
-                    'tempor' in initial_location_query
-                    and 'herstellerbefrag' in initial_location_query
-                    and not any(
-                        location in initial_location_query
-                        for location in ('hannover', 'wunstorf', 'wedemark', 'walsrode')
-                    )
-                )
-                if location_mode or temporary_survey_without_location:
-                    safe_output = _stream_safe_output(
-                        combined,
-                        suppress_message_text=suppress_initial_rag_response or hold_knowledge_answer,
-                        suppress_reasoning=suppress_initial_rag_response,
-                    )
-                    return _normalize_repeated_location_prompt_output(safe_output)
                 return _stream_safe_output(
                     combined,
                     suppress_message_text=suppress_initial_rag_response or hold_knowledge_answer,
@@ -8664,15 +8484,6 @@ async def streaming_chat_response_handler(response, ctx):
                     _append_canonical_rag_source_links(output, canonical_rag_sources)
                     _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
 
-                if any(
-                    'Zufriedenheitsbefragungen'
-                    in str(part.get('text') or '')
-                    for item in output
-                    if isinstance(item, dict)
-                    for part in item.get('content', [])
-                    if isinstance(part, dict)
-                ):
-                    output = _normalize_repeated_location_prompt_output(output)
 
                 # Mark all in-progress items as completed
                 for item in output:
