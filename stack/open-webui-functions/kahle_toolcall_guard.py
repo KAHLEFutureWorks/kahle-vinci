@@ -1779,37 +1779,28 @@ def _expand_customer_lock_followup(
             "keine freigegebene Anleitung vorliegt: Welche freigegebene "
             "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
         )
-    location = next(
-        (
-            name
-            for name in (
-                "Hannover", "Wunstorf", "Wedemark", "Walsrode",
-                "Neustadt", "Nienburg", "Stadthagen",
-            )
-            if re.search(rf"\b{fold(name)}\b", folded)
-        ),
-        "",
-    )
-    location_suffix = f" am Standort {location}" if location else ""
     if any(token in folded for token in (
         "werbung", "werbesperre", "werbewiderspruch", "befragung",
         "kontaktfreigabe", "ersteres", "erste option",
     )):
-        return f"Wie hinterlege ich einen Werbewiderspruch in Vaudis{location_suffix}?"
-    if location:
-        # Which process applies to a location is the documents' decision.
-        previous_user = ""
-        seen_assistant = False
-        for message in reversed(messages or []):
-            if not isinstance(message, dict):
-                continue
-            if message.get("role") == "assistant":
-                seen_assistant = True
-            elif seen_assistant and message.get("role") == "user":
-                previous_user = str(message.get("content") or "").strip()
-                break
-        if previous_user:
-            return f"{previous_user} Standort {location}"
+        return (
+            "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
+            "in Vaudis über die DSE-Kontaktfreigaben?"
+        )
+    supported_location = next(
+        (
+            location
+            for location in ("Hannover", "Wunstorf", "Wedemark")
+            if re.search(rf"\b{fold(location)}\b", folded)
+        ),
+        "",
+    )
+    if supported_location:
+        return (
+            "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
+            "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
+            f"am Standort {supported_location} durchgeführt?"
+        )
     return current
 
 
