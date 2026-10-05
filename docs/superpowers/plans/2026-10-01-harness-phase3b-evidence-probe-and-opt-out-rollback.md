@@ -240,3 +240,45 @@ $P -m pytest eval/harness/tests -q -p no:cacheprovider
 
 - Korpuslücken (Rechnung stornieren, HU-Anmeldung, Garantieanfrage) werden zu verworfenen Vorabsuchen. Sie zeigen sich im Eval als `probe_released` bei erwartetem `rag_chat` und sind Inhaltsarbeit, kein Harness-Fehler.
 - Die Formulierung „am Standort Hannover“ zieht das Standortdokument vor die Prozessbeschreibung. Die allgemeine Standortlogik ist nicht Teil dieses Plans. Der Fall `scope_natural_hannover` macht es messbar.
+
+## Ergebnis (05.10.) und Abschluss
+
+Nutzerentscheidung 05.10.:
+- Phase 3b schließt mit Teil A und den beim Rückbau gefundenen Korrekturen ab.
+- Der Sonderpfad bleibt aktiv.
+- Der Rückbau folgt als Phase 3c, mit dem Geltungsbereich als Evidenzrolle, Vertragspflicht und Korrekturaufruf.
+
+**Beim Rückbau gefundene und behobene Fehler:**
+
+- `828782d`: Die Anleitungserkennung kannte nur neun Verben. Nummerierte Schrittlisten galten deshalb als „keine ausreichende Anleitung“.
+- `cae6329`: Die Pflicht-Flags der Vorabsuche (`_kahle_force_rag_tool_call`, `_kahle_pre_route_rag_call`, `_kahle_information_needs`) lagen in einer Metadaten-Kopie, die `chat_completion_tools_handler` nicht liest. Statt des geplanten Aufrufs entschied das Task-Modell; gpt-oss rief kein Tool auf.
+- `70e4b71`: Die Harness-Metriken erklären den Evidenzstatus (`contract_origin`, `prerouted_rag`, `rag_call_count`, `evidence_missing`).
+- `62ec5a2`: Prompt-Regel zum Geltungsbereich. Ohne Sonderpfad brachte sie keine messbare Wirkung (5 von 18 vollständig).
+
+**Full Verify:** 13/13 Bereiche bestanden, Exit 0.
+
+**Voller Laufzeit-Eval** (106 Fälle, Sonderpfad aktiv, `2026-10-05-runtime-phase3b.json`):
+
+| Modell | korrekt | gemeinsame 102 (Hybrid 01.10.) | Fehler | ausgelieferte blockierende Verstöße | verworfene / gebundene Vorabsuchen |
+| --- | --- | --- | --- | --- | --- |
+| Mistral | 98/106 | 94 (91) | 0 | 0 | 8 / 7 |
+| gpt-oss | 97/106 | 93 (95) | 0 | 0 | 8 / 7 |
+| Qwen | 98/106 | 94 (94) | 0 | 0 | 8 / 7 |
+
+**Abnahme:**
+
+| Kriterium | Ergebnis |
+| --- | --- |
+| Routing ±2 | erfüllt |
+| Allgemeine Anleitungsfragen | 4/4 je Modell korrekt, ohne Enthaltung |
+| Ausgelieferte blockierende Verstöße | 0 |
+| `not_run` bei internen Fragen mit Dokument | nicht ganz erfüllt, siehe unten |
+| Werbewiderspruch-Inhalt (mit Sonderpfad) | 16 von 18 vollständig. Beide Lücken bei „Der Kunde will keine Werbung mehr bekommen …“ (Mistral, gpt-oss: Kontakt ja, drei Standorte nein) |
+| Walsrode-Antwort deutlich kürzer | nicht erfüllt (3.055–7.710 Zeichen). Hängt am Rückbau, geht in Phase 3c |
+
+**Zu `not_run` bei internen Fragen mit Dokument:**
+
+- Verbleibend sind `followup_scope_location_reply` (alle Modelle), `responsibility_lease_returns` (Mistral) und `internal_complaint_notes` (gpt-oss).
+- Sie haben nur die Sammelart `internal_knowledge` bzw. sind Standort-Folgeantworten und sind deshalb bewusst von der Vorabsuche ausgenommen.
+
+**Zur Bewertung von gpt-oss (−2):** Die Abweichung kommt aus den Korpuslücken. HU-Anmeldung ×2, Rechnungsstorno und Garantieanfrage werden jetzt als verworfene Vorabsuche mit Hinweis frei beantwortet, statt dass das Modell ergebnislos `rag_chat` aufruft.
