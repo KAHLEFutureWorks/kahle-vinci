@@ -116,3 +116,38 @@ def test_contract_explains_that_evidence_quotes_may_be_named():
     )
 
     assert "Kontaktwerte, die wörtlich in einer belegten Aussage stehen" in decision.answer_prompt()
+
+
+def _preroute_decision(harness, rag, query="Wie hinterlege ich einen Werbewiderspruch in Vaudis?"):
+    return harness.build_decision(
+        query=query,
+        resolved_query=query,
+        messages=[],
+        model_id="m",
+        permission_scope={"user_id": "u"},
+        rag_result=rag,
+    )
+
+
+def test_preroute_contract_binds_evidence_contacts_without_a_contact_question():
+    harness = load_harness()
+    decision = _preroute_decision(harness, _rag_result(
+        "An allen anderen Standorten wende dich an datenschutz@kahle.de.",
+    ))
+
+    assert "datenschutz@kahle.de" in decision.answer_contract.allowed_contact_values
+    assert {item["binding"] for item in decision.answer_contract.allowed_contact_bindings} == {"evidence_text"}
+    result = harness.validate_answer(
+        "Für alle anderen Standorte wende dich an datenschutz@kahle.de [1].",
+        decision.to_dict(),
+    )
+    assert "unbound_contact_literal" not in [item["code"] for item in result.violations]
+
+
+def test_preroute_contract_keeps_person_contacts_out():
+    harness = load_harness()
+    decision = _preroute_decision(harness, _rag_result(
+        "Ansprechpartnerin ist Anna Beispiel, erreichbar unter anna.beispiel@kahle.de.",
+    ))
+
+    assert "anna.beispiel@kahle.de" not in decision.answer_contract.allowed_contact_values

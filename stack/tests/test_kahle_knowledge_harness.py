@@ -79,28 +79,7 @@ def test_shadow_harness_accepts_real_procedure_and_preserves_sources():
     assert decision.evidence_bundle.sources[0]["source_id"] == "doc-7"
 
 
-@pytest.mark.parametrize(
-    "query",
-    (
-        "Wie sperre ich einen Kunden für Bewertungen?",
-        "Wie sperre ich einen Kunden für Zufriedenheitsbefragungen?",
-        "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das?",
-    ),
-)
-def test_marketing_opt_out_wording_resolves_to_canonical_retrieval_query(query):
-    harness = load_harness()
-
-    resolved = harness.resolve_request(
-        query,
-        [{"role": "user", "content": query}],
-    )
-
-    assert "Werbewiderspruch" in resolved.retrieval_query
-    assert "Vaudis" in resolved.retrieval_query
-    assert "DSE-Kontaktfreigaben" in resolved.retrieval_query
-
-
-def test_marketing_opt_out_location_followup_keeps_canonical_process_query():
+def test_marketing_opt_out_location_followup_keeps_the_process_question():
     harness = load_harness()
     messages = [
         {
@@ -116,8 +95,7 @@ def test_marketing_opt_out_location_followup_keeps_canonical_process_query():
 
     resolved = harness.resolve_request(messages[-1]["content"], messages)
 
-    assert "Werbewiderspruch" in resolved.retrieval_query
-    assert "Vaudis" in resolved.retrieval_query
+    assert "keine Werbung mehr erhalten" in resolved.retrieval_query
     assert "Nienburg" in resolved.retrieval_query
 
     plan = harness.plan_retrieval(
@@ -140,7 +118,7 @@ def test_marketing_opt_out_location_followup_keeps_canonical_process_query():
         ("Wedemark", "Wedemark"),
     ),
 )
-def test_customer_lock_clarification_followup_selects_the_documented_opt_out_process(
+def test_customer_lock_clarification_followup_resolves_a_natural_question(
     reply, expected_location,
 ):
     harness = load_harness()
@@ -167,11 +145,11 @@ def test_customer_lock_clarification_followup_selects_the_documented_opt_out_pro
     )
 
     assert resolved.required_clarification is False
+    # A bare location keeps the original question; retrieval decides the process.
     assert resolved.retrieval_query == (
-        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben"
-        + (f" am Standort {expected_location}" if expected_location else "")
-        + " durchgeführt?"
+        f"Wie sperre ich einen Kunden in Vaudis? Standort {expected_location}"
+        if expected_location
+        else "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
     )
     assert plan.required_tools == ("rag_chat",)
 
@@ -221,23 +199,7 @@ def test_temporary_survey_location_reply_resolves_the_previous_process_question(
     resolved = harness.resolve_request(messages[-1]["content"], messages)
 
     assert resolved.retrieval_query == (
-        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
-        "am Standort Hannover durchgeführt?"
-    )
-
-
-def test_marketing_opt_out_query_stays_concise_to_preserve_procedure_evidence():
-    harness = load_harness()
-
-    resolved = harness.resolve_request(
-        "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das?",
-        [],
-    )
-
-    assert resolved.retrieval_query == (
-        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben durchgeführt?"
+        "Wie funktioniert die temporäre Herstellerbefragung? Hannover"
     )
 
 
@@ -278,7 +240,7 @@ def test_supported_claims_keep_scope_and_contact_from_long_passage_tail():
     assert "KD-Sperrprozess-Liste-WED" in joined
 
 
-def test_marketing_answer_contract_exposes_location_context_without_delivery_facts():
+def test_marketing_answer_contract_binds_the_documented_contact_without_location_context():
     harness = load_harness()
     query = "Ein Kunde möchte keine Werbung mehr erhalten. Wie hinterlege ich das am Standort Hannover?"
     decision = harness.build_decision(
@@ -289,10 +251,9 @@ def test_marketing_answer_contract_exposes_location_context_without_delivery_fac
         rag_result=_marketing_process_result(),
     )
 
-    assert decision.answer_contract.location_mode == "supported_location"
-    assert decision.answer_contract.requested_location == "Hannover"
-    assert decision.answer_contract.allowed_contact_values == ("datenschutz@kahle.de",)
-    assert "KAHLE_KNOWLEDGE_LOCATION_CONTEXT" in decision.answer_prompt()
+    # Contact binding needs the bundle format; see test_kahle_harness_contact_literals.
+    assert not hasattr(decision.answer_contract, "location_mode")
+    assert "KAHLE_KNOWLEDGE_LOCATION_CONTEXT" not in decision.answer_prompt()
 
 
 def test_marketing_answer_validation_observes_without_enforcing_process_completeness():
@@ -308,23 +269,6 @@ def test_marketing_answer_validation_observes_without_enforcing_process_complete
 
     result = harness.validate_answer("Öffne Vaudis und speichere die Änderung [1].", decision)
     assert result.status == "accepted"
-
-
-def test_marketing_location_followup_exposes_out_of_scope_context():
-    harness = load_harness()
-    query = "Wie geht es in Nienburg?"
-    resolved = (
-        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
-        "am Standort Nienburg durchgeführt?"
-    )
-    decision = harness.build_decision(
-        query=query, resolved_query=resolved, messages=[], model_id="kahle-vinci",
-        permission_scope={"user_id": "user-1"}, rag_result=_marketing_process_result(),
-    )
-
-    assert decision.answer_contract.location_mode == "out_of_scope_location"
-    assert decision.answer_contract.requested_location == "Nienburg"
 
 
 def test_user_supplied_batch_help_does_not_require_internal_knowledge():
@@ -476,7 +420,7 @@ def test_request_resolution_turns_a_process_followup_into_a_standalone_query():
     resolved = harness.resolve_request(original, messages)
 
     assert resolved.original_query == original
-    assert "Werbewiderspruch" in resolved.retrieval_query
+    assert "keine Werbung mehr erhalten" in resolved.retrieval_query
     assert "Vaudis" in resolved.retrieval_query
     assert "Hannover" in resolved.retrieval_query
     assert resolved.entities["locations"] == ("Hannover",)
@@ -510,10 +454,9 @@ def test_request_resolution_keeps_the_process_anchor_across_two_location_followu
 
     resolved = harness.resolve_request(original, messages)
 
-    assert resolved.retrieval_query == (
-        "Wie wird ein Werbewiderspruch in Vaudis am Standort Nienburg durchgeführt?"
-    )
-    assert resolved.entities["locations"] == ("Nienburg",)
+    assert "keine Werbung mehr erhalten" in resolved.retrieval_query
+    assert "Nienburg" in resolved.retrieval_query
+    assert "Nienburg" in resolved.entities["locations"]
     assert resolved.entities["systems"] == ("Vaudis",)
     assert resolved.context_references == ("prior_user", "topic_anchor")
 
@@ -3844,46 +3787,6 @@ def _opt_out_decision(location=''):
         model_id='kahle-vinci', permission_scope={'user_id': 'synthetic'}, rag_result=result)
 
 
-@pytest.mark.parametrize(
-    ("location", "mode", "value"),
-    [
-        ("Hannover", "supported_location", "HAN"),
-        ("Wunstorf", "supported_location", "WUN"),
-        ("Wedemark", "supported_location", "WED"),
-    ],
-)
-def test_opt_out_answer_prompt_exposes_resolved_location_without_delivery_requirements(
-    location, mode, value,
-):
-    _harness, decision = _opt_out_decision(location)
-    prompt = decision.answer_prompt()
-
-    assert decision.answer_contract.location_mode == mode
-    assert decision.answer_contract.requested_location == location
-    assert location in prompt
-    assert "vollständigen belegten Ablauf" in prompt
-    assert "ZWINGENDE_PFLICHTFAKTEN_VOR_DER_ANTWORT" not in prompt
-    assert "KAHLE_KNOWLEDGE_ANSWER_RETRY" not in prompt
-    assert value not in prompt
-
-
-@pytest.mark.parametrize(
-    ("location", "mode", "expected"),
-    [
-        ("", "unspecified_location", "gemeinsamen Vorgang für Hannover"),
-        ("Walsrode", "out_of_scope_location", "gemeinsamen Vorgang für Hannover"),
-    ],
-)
-def test_opt_out_answer_prompt_sets_only_the_location_boundary(location, mode, expected):
-    _harness, decision = _opt_out_decision(location)
-    prompt = decision.answer_prompt()
-
-    assert decision.answer_contract.location_mode == mode
-    assert expected in prompt
-    assert "KD-Sperrprozess-Liste" not in prompt
-    assert "HAN – LÖSCHEN" not in prompt
-
-
 def test_opt_out_followup_resolves_hannover_after_an_unspecified_question():
     harness = load_harness()
 
@@ -3893,7 +3796,7 @@ def test_opt_out_followup_resolves_hannover_after_an_unspecified_question():
     ])
 
     assert "Hannover" in resolved.retrieval_query
-    assert "Werbewiderspruch" in resolved.retrieval_query
+    assert "Hersteller-Zufriedenheitsbefragungen" in resolved.retrieval_query
 
 
 def test_opt_out_harness_source_has_no_delivery_guard_symbols():
@@ -3906,20 +3809,6 @@ def test_opt_out_harness_source_has_no_delivery_guard_symbols():
     assert "missing_required_evidence" not in source
 
 
-@pytest.mark.parametrize('location,mode', [
-    ('', 'unspecified_location'),
-    ('Hannover', 'supported_location'),
-    ('Wunstorf', 'supported_location'),
-    ('Wedemark', 'supported_location'),
-    ('Nienburg', 'out_of_scope_location'),
-    ('Walsrode', 'out_of_scope_location'),
-])
-def test_opt_out_contract_selects_explicit_location_mode(location, mode):
-    harness, decision = _opt_out_decision(location)
-    assert decision.answer_contract.location_mode == mode
-    assert not hasattr(decision.answer_contract, "required_answer_facts")
-
-
 def test_opt_out_unspecified_location_accepts_only_scope_and_contact_boundary():
     harness, decision = _opt_out_decision()
     answer = ('Hannover, Wunstorf, Wedemark: KD-Sperrprozess-Liste-HAN, KD-Sperrprozess-Liste-WUN, '
@@ -3928,37 +3817,9 @@ def test_opt_out_unspecified_location_accepts_only_scope_and_contact_boundary():
     assert validation.status == 'accepted'
 
 
-def test_opt_out_location_prompt_always_explains_the_shared_process_and_contact():
-    harness, decision = _opt_out_decision()
-
-    prompt = decision.answer_prompt()
-
-    assert 'vollständigen belegten Ablauf als gemeinsamen Vorgang' in prompt
-    assert 'datenschutz@kahle.de' in prompt
-
-
 def test_opt_out_complete_evidence_based_answer_is_accepted():
     harness, decision = _opt_out_decision('Hannover')
     assert harness.validate_answer(_full_opt_out_evidence() + ' [1]', decision).status == 'accepted'
-
-
-def test_opt_out_unsupported_evidence_keeps_location_context_without_fallback():
-    harness = load_harness()
-    query = 'Wie sperre ich Werbung und Zufriedenheitsbefragungen?'
-    resolved = harness.resolve_request(query, []).retrieval_query
-    decision = harness.build_decision(
-        query=query,
-        resolved_query=resolved,
-        messages=[],
-        model_id='kahle-vinci',
-        permission_scope={'user_id': 'synthetic'},
-        rag_result='KAHLE_RAG_RESULT\nFOUND: false',
-    )
-
-    assert decision.evidence_bundle.status == 'unsupported'
-    assert decision.answer_contract.location_mode == 'unspecified_location'
-    assert not hasattr(decision.answer_contract, "missing_required_evidence")
-    assert "KAHLE_KNOWLEDGE_LOCATION_CONTEXT" in decision.answer_prompt()
 
 
 def test_opt_out_outside_scope_validation_remains_observational():
@@ -3968,14 +3829,6 @@ def test_opt_out_outside_scope_validation_remains_observational():
     assert harness.validate_answer(answer, decision).status == 'accepted'
 
 
-@pytest.mark.parametrize('location', ['Berlin', 'Bremen', 'Hamburg'])
-def test_opt_out_unknown_explicit_location_is_never_unspecified(location):
-    harness, decision = _opt_out_decision(location)
-    assert decision.answer_contract.location_mode == 'out_of_scope_location'
-    assert decision.answer_contract.requested_location == location
-    assert location in decision.resolved_context.retrieval_query
-
-
 def test_opt_out_unknown_location_followup_keeps_process_and_current_location():
     harness = load_harness()
     resolved = harness.resolve_request('Und wie geht es in Berlin?', [
@@ -3983,5 +3836,4 @@ def test_opt_out_unknown_location_followup_keeps_process_and_current_location():
         {'role': 'assistant', 'content': 'In Vaudis werden die DSE-Freigaben bearbeitet.'},
     ])
     assert 'Berlin' in resolved.retrieval_query
-    assert 'Hannover' not in resolved.retrieval_query
-    assert 'Werbewiderspruch' in resolved.retrieval_query
+    assert 'Wie sperre ich Werbung' in resolved.retrieval_query
