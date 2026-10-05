@@ -198,6 +198,7 @@ class AnswerContract:
     allowed_contact_values: tuple[str, ...] = ()
     allowed_contact_bindings: tuple[dict[str, Any], ...] = ()
     required_sections: tuple[str, ...] = ()
+    required_scope: tuple[dict[str, Any], ...] = ()
     location_mode: str = ""
     requested_location: str = ""
 
@@ -386,6 +387,7 @@ class HarnessDecision:
             "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
             f"{contract}\n"
             f"{blueprint_instruction}\n"
+            f"{_scope_instruction(self.answer_contract.required_scope)}"
             "Antworte nur aus der bereitgestellten Evidenz. "
             "Bei partially_supported beantworte ausschließlich die belegten Teile und "
             "benenne die fehlenden Informationen. Bei unsupported nutze kein allgemeines "
@@ -2545,6 +2547,34 @@ _SCOPE_STATEMENT = re.compile(
 _SCOPE_EXCLUSION = re.compile(r"\b(?:ausser|auer|ausgenommen|alle\s+anderen?)\b")
 
 
+def _german_list(values: tuple[str, ...]) -> str:
+    values = tuple(values)
+    if len(values) <= 1:
+        return "".join(values)
+    return ", ".join(values[:-1]) + " und " + values[-1]
+
+
+def _scope_instruction(requirements: tuple[dict[str, Any], ...]) -> str:
+    """Name each restrictive scope from the evidence and its documented exception path."""
+    sentences = []
+    for requirement in requirements or ():
+        locations = tuple(requirement.get("locations") or ())
+        if not locations:
+            continue
+        sentence = (
+            f"Die Quellen begrenzen ihren Geltungsbereich auf {_german_list(locations)} "
+            f"[{requirement.get('source_id')}]. Nenne diesen Geltungsbereich"
+        )
+        contacts = tuple(requirement.get("exception_contacts") or ())
+        if contacts:
+            sentence += (
+                " und für alle anderen Fälle den dokumentierten Weg "
+                f"({', '.join(contacts)})"
+            )
+        sentences.append(sentence + ".")
+    return ("KAHLE_KNOWLEDGE_SCOPE\n" + " ".join(sentences) + "\n") if sentences else ""
+
+
 def _named_request_locations(text: str) -> tuple[str, ...]:
     """KAHLE locations named in ``text``, in order of appearance."""
     folded = _fold(text)
@@ -3216,6 +3246,7 @@ def build_decision(
         answer_contract=AnswerContract(
             allowed_contact_values=allowed_contact_values,
             required_sections=_complete_document_overview_sections(evidence),
+            required_scope=_scope_requirements(evidence),
             **_opt_out_contract_scope(retrieval_query, evidence),
         ),
         events=(
@@ -3345,6 +3376,7 @@ def build_result_driven_decision(
             allowed_contact_values=tuple(dict.fromkeys(binding["value"] for binding in _model_led_contact_bindings(evidence))),
             allowed_contact_bindings=_model_led_contact_bindings(evidence),
             required_sections=_complete_document_overview_sections(evidence),
+            required_scope=_scope_requirements(evidence),
             **_opt_out_contract_scope(resolved_context.retrieval_query, evidence),
         ),
         events=(

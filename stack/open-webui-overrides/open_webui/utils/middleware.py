@@ -505,6 +505,7 @@ def _high_salience_knowledge_answer_prompt(decision: Any) -> str:
         or
         getattr(answer_contract, 'location_mode', False)
         or getattr(decision, 'answer_blueprint', None) is not None
+        or bool(getattr(answer_contract, 'required_scope', ()))
     ):
         return ''
     return str(decision.answer_prompt() or '')

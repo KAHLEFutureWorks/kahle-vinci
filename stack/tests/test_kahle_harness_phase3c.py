@@ -123,3 +123,104 @@ def test_non_editorial_or_unsupported_evidence_creates_no_requirement():
 
     assert harness._scope_requirements(_bundle(harness, _claim(SCOPE_ROW, role="auxiliary_ocr"))) == ()
     assert harness._scope_requirements(_bundle(harness, _claim(SCOPE_ROW), status="unsupported")) == ()
+
+
+import ast
+import json
+from typing import Any
+
+MIDDLEWARE = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "middleware.py"
+
+
+def _rag_result(*claims, sources):
+    bundle = {
+        "schema_version": "kahle.evidence-bundle.v1", "status": "supported",
+        "supported_claims": list(claims), "missing_information": [], "conflicts": [],
+        "sources": list(sources),
+    }
+    return (
+        "KAHLE_RAG_RESULT\nFOUND: true\n"
+        f"EVIDENCE_BUNDLE_JSON: {json.dumps(bundle, ensure_ascii=False)}\n"
+        "CONTEXT:\n[1] Prozess | A\n" + " ".join(c["text"] for c in claims) + "\n"
+    )
+
+
+def _scoped_rag_result():
+    contact, source = _contact_claim()
+    return _rag_result(
+        _claim(SCOPE_ROW), _claim(STEP, index=2), contact,
+        sources=[{"number": 1, "document_id": "doc-1", "version_id": "v-1", "title": "Prozess"}, source],
+    )
+
+
+# Neutral wording: the opt-out special path (until Task 4) rewrites opt-out questions.
+QUESTION = "Wie läuft der dokumentierte Prozess ab?"
+EXPECTED_SCOPE = ({
+    "source_id": "#1",
+    "locations": ("Hannover", "Wunstorf", "Wedemark"),
+    "exception_contacts": ("datenschutz@kahle.de",),
+},)
+
+
+def _pre_route_decision(harness, rag):
+    return harness.build_decision(
+        query=QUESTION, resolved_query=QUESTION, messages=[], model_id="m",
+        permission_scope={"user_id": "u"}, rag_result=rag,
+    )
+
+
+def _model_led_decision(harness, rag):
+    return harness.build_result_driven_decision(
+        called_tools=("rag_chat",), query=QUESTION, messages=[], model_id="m",
+        permission_scope={"user_id": "u"}, rag_result=[rag],
+    )
+
+
+@pytest.mark.parametrize("build", [_pre_route_decision, _model_led_decision], ids=["pre_route", "model_led"])
+def test_both_contract_paths_carry_the_scope(build):
+    harness = load_harness()
+
+    decision = build(harness, _scoped_rag_result())
+
+    assert decision.answer_contract.required_scope == EXPECTED_SCOPE
+    prompt = decision.answer_prompt()
+    assert (
+        "Die Quellen begrenzen ihren Geltungsbereich auf Hannover, Wunstorf und Wedemark [#1]. "
+        "Nenne diesen Geltungsbereich und für alle anderen Fälle den dokumentierten Weg "
+        "(datenschutz@kahle.de)."
+    ) in prompt
+
+
+@pytest.mark.parametrize("build", [_pre_route_decision, _model_led_decision], ids=["pre_route", "model_led"])
+def test_no_scope_no_requirement_and_no_scope_sentence(build):
+    harness = load_harness()
+    rag = _rag_result(_claim(STEP), sources=[{"number": 1, "document_id": "doc-1", "version_id": "v-1", "title": "Prozess"}])
+
+    decision = build(harness, rag)
+
+    assert decision.answer_contract.required_scope == ()
+    assert "begrenzen ihren Geltungsbereich" not in decision.answer_prompt()
+
+
+def test_scope_without_exception_path_asks_only_for_the_scope():
+    harness = load_harness()
+    rag = _rag_result(
+        _claim("Diese Anleitung gilt nur für Walsrode."),
+        sources=[{"number": 1, "document_id": "doc-1", "version_id": "v-1", "title": "Prozess"}],
+    )
+
+    prompt = _model_led_decision(harness, rag).answer_prompt()
+
+    assert "Die Quellen begrenzen ihren Geltungsbereich auf Walsrode [#1]. Nenne diesen Geltungsbereich." in prompt
+
+
+def test_scope_contract_is_repeated_right_before_the_answer():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_high_salience_knowledge_answer_prompt")
+    namespace: dict[str, Any] = {"Any": Any}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(MIDDLEWARE), "exec"), namespace)
+    harness = load_harness()
+
+    decision = _model_led_decision(harness, _scoped_rag_result())
+
+    assert namespace["_high_salience_knowledge_answer_prompt"](decision) == decision.answer_prompt()
