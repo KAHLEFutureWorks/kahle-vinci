@@ -29,6 +29,7 @@ BLOCKING_VIOLATION_CODES = frozenset(
         "unbound_link_target",
         "contact_link_mismatch",
         "required_document_sections_missing",
+        "required_scope_missing",
     }
 )
 _ABSTENTION = re.compile(

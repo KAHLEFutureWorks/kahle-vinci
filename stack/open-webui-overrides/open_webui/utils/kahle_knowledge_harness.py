@@ -31,6 +31,7 @@ BLOCKING_VIOLATION_CODES = frozenset(
         "unbound_link_target",
         "contact_link_mismatch",
         "required_document_sections_missing",
+        "required_scope_missing",
     }
 )
 
@@ -244,6 +245,19 @@ class AnswerValidation:
             instructions.append(
                 "Gib jeden verpflichtenden Abschnitt in der vorgegebenen Reihenfolge aus."
             )
+        for item in blocking:
+            if item.get("code") != "required_scope_missing":
+                continue
+            locations = tuple(item.get("scope_locations") or ())
+            if locations:
+                instructions.append(
+                    f"Nenne den Geltungsbereich aus der Evidenz: {_german_list(locations)}."
+                )
+            contacts = tuple(item.get("exception_contacts") or ())
+            if contacts:
+                instructions.append(
+                    f"Nenne für alle anderen Fälle: {', '.join(contacts)}."
+                )
         payload = {
             "schema_version": "kahle.answer-retry.v2",
             "violations": [
@@ -1035,6 +1049,36 @@ def validate_answer(
             "Die Antwort enthält nicht alle verpflichtenden Dokumentabschnitte.",
             section_indices=list(missing_sections),
         )
+
+    # The scope obligation is recomputed from the evidence; the serialized
+    # contract is not an authority. An abstention states no process at all.
+    if text and _ABSTENTION_TEXT not in text:
+        scope_evidence = EvidenceBundle(
+            status=evidence.get("status", "unsupported"),
+            supported_claims=tuple(evidence.get("supported_claims") or ()),
+            sources=tuple(evidence.get("sources") or ()),
+        )
+        folded_answer = _fold(text)
+        for requirement in _scope_requirements(scope_evidence):
+            missing_locations = [
+                name for name in requirement["locations"]
+                if not re.search(rf"\b{re.escape(_fold(name))}\b", folded_answer)
+            ]
+            missing_contacts = [
+                value for value in requirement["exception_contacts"]
+                if value.casefold() not in text.casefold()
+            ]
+            if missing_locations or missing_contacts:
+                add(
+                    "required_scope_missing",
+                    "Die Antwort nennt den belegten Geltungsbereich oder den Weg für "
+                    "alle anderen Fälle nicht vollständig.",
+                    source_ids=[requirement["source_id"]],
+                    missing_locations=missing_locations,
+                    missing_contacts=missing_contacts,
+                    scope_locations=list(requirement["locations"]),
+                    exception_contacts=list(requirement["exception_contacts"]),
+                )
 
     if retrieval_plan.get("mode") == "model_led":
         # The serialized contract is not an independent source of authority.

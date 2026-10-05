@@ -224,3 +224,78 @@ def test_scope_contract_is_repeated_right_before_the_answer():
     decision = _model_led_decision(harness, _scoped_rag_result())
 
     assert namespace["_high_salience_knowledge_answer_prompt"](decision) == decision.answer_prompt()
+
+
+FULL_ANSWER = (
+    "Der Ablauf gilt nur für Hannover, Wunstorf und Wedemark [1]. Kunden in Vaudis aufrufen [1]. "
+    "Für alle anderen Standorte wende dich an datenschutz@kahle.de [2]."
+)
+
+
+def _codes(result):
+    return [item["code"] for item in result.violations]
+
+
+@pytest.mark.parametrize("build", [_pre_route_decision, _model_led_decision], ids=["pre_route", "model_led"])
+def test_complete_scope_passes(build):
+    harness = load_harness()
+    decision = build(harness, _scoped_rag_result())
+
+    assert "required_scope_missing" not in _codes(harness.validate_answer(FULL_ANSWER, decision.to_dict()))
+
+
+@pytest.mark.parametrize("build", [_pre_route_decision, _model_led_decision], ids=["pre_route", "model_led"])
+def test_missing_location_or_contact_blocks_delivery(build):
+    harness = load_harness()
+    decision = build(harness, _scoped_rag_result())
+
+    no_wedemark = harness.validate_answer(FULL_ANSWER.replace(" und Wedemark", ""), decision.to_dict())
+    no_contact = harness.validate_answer(FULL_ANSWER.split(" Für alle anderen")[0], decision.to_dict())
+
+    [violation] = [v for v in no_wedemark.violations if v["code"] == "required_scope_missing"]
+    assert violation["severity"] == "blocking"
+    assert violation["missing_locations"] == ["Wedemark"]
+    assert violation["missing_contacts"] == []
+    [violation] = [v for v in no_contact.violations if v["code"] == "required_scope_missing"]
+    assert violation["missing_contacts"] == ["datenschutz@kahle.de"]
+
+
+def test_abstention_is_exempt():
+    harness = load_harness()
+    decision = _model_led_decision(harness, _scoped_rag_result())
+
+    result = harness.validate_answer(harness.knowledge_abstention_answer(has_sources=True), decision.to_dict())
+
+    assert "required_scope_missing" not in _codes(result)
+
+
+def test_serialized_scope_is_not_an_authority():
+    harness = load_harness()
+    decision = _model_led_decision(harness, _scoped_rag_result()).to_dict()
+    decision["answer_contract"]["required_scope"] = []
+
+    result = harness.validate_answer(FULL_ANSWER.replace(" und Wedemark", ""), decision)
+
+    assert "required_scope_missing" in _codes(result)
+
+
+def test_retry_prompt_names_the_missing_values():
+    harness = load_harness()
+    decision = _model_led_decision(harness, _scoped_rag_result())
+
+    result = harness.validate_answer("Kunden in Vaudis aufrufen [1].", decision.to_dict())
+    prompt = result.retry_prompt(("1", "2"))
+
+    assert "Nenne den Geltungsbereich aus der Evidenz: Hannover, Wunstorf und Wedemark." in prompt
+    assert "Nenne für alle anderen Fälle: datenschutz@kahle.de." in prompt
+
+
+def test_eval_knows_the_new_blocking_code():
+    sys.path.insert(0, str(ROOT.parent / "eval" / "harness"))
+    try:
+        import harness_eval
+    finally:
+        sys.path.remove(str(ROOT.parent / "eval" / "harness"))
+
+    assert harness_eval.BLOCKING_VIOLATION_CODES == load_harness().BLOCKING_VIOLATION_CODES
+    assert "required_scope_missing" in harness_eval.BLOCKING_VIOLATION_CODES
