@@ -2539,6 +2539,62 @@ def _rag_claim_contract_error(evidence: EvidenceBundle) -> str:
     return ""
 
 
+_SCOPE_STATEMENT = re.compile(
+    r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschlie\w*|lediglich)\s+fur\b"
+)
+_SCOPE_EXCLUSION = re.compile(r"\b(?:ausser|auer|ausgenommen|alle\s+anderen?)\b")
+
+
+def _named_request_locations(text: str) -> tuple[str, ...]:
+    """KAHLE locations named in ``text``, in order of appearance."""
+    folded = _fold(text)
+    hits = []
+    for name in _REQUEST_LOCATIONS:
+        match = re.search(rf"\b{re.escape(_fold(name))}\b", folded)
+        if match:
+            hits.append((match.start(), name))
+    return tuple(name for _position, name in sorted(hits))
+
+
+def _scope_requirements(evidence: EvidenceBundle) -> tuple[dict[str, Any], ...]:
+    """Restrictive document scopes the answer has to state.
+
+    A supported editorial claim that limits validity to a strict subset of the
+    KAHLE locations is an obligation. The path for everything outside it is a
+    typed functional contact whose scope excludes exactly those locations.
+    """
+    if evidence.status == "unsupported":
+        return ()
+    exclusions = []
+    for binding in _model_led_contact_bindings(evidence):
+        scope = str(binding.get("scope") or "")
+        if binding.get("source_kind") == "rag_chat" and _SCOPE_EXCLUSION.search(_fold(scope)):
+            exclusions.append((frozenset(_named_request_locations(scope)), str(binding["value"])))
+    requirements: list[dict[str, Any]] = []
+    for claim in evidence.supported_claims:
+        if not isinstance(claim, dict) or claim.get("claim_type") == "functional_contact":
+            continue
+        if str(claim.get("evidence_role") or "editorial") != "editorial":
+            continue
+        source_id = claim.get("source_id")
+        text = str(claim.get("text") or "")
+        if not isinstance(source_id, str) or not _SCOPE_STATEMENT.search(_fold(text)):
+            continue
+        locations = _named_request_locations(text)
+        if not locations or len(locations) >= len(_REQUEST_LOCATIONS):
+            continue
+        requirement = {
+            "source_id": source_id,
+            "locations": locations,
+            "exception_contacts": tuple(dict.fromkeys(
+                value for excluded, value in exclusions if excluded == frozenset(locations)
+            )),
+        }
+        if requirement not in requirements:
+            requirements.append(requirement)
+    return tuple(requirements)
+
+
 def _model_led_contact_bindings(evidence: EvidenceBundle) -> tuple[dict[str, Any], ...]:
     """Only typed source-bound rows or actual Personio fields authorize values."""
     if evidence.status == "unsupported":
