@@ -219,6 +219,8 @@ def load_tool_helpers(*names):
     dependencies = set()
     if set(names).intersection({"_filter_evidence_chunks", "_claim_evidence_spans"}):
         dependencies.add("_fold_evidence_text")
+    if "_claim_evidence_spans" in names:
+        dependencies.add("_is_scope_statement")
     if "_rag_final_response_instruction" in names:
         dependencies.update({"_fold_evidence_text", "_temporary_survey_location_scope"})
     nodes = [
@@ -228,6 +230,9 @@ def load_tool_helpers(*names):
     ]
     namespace = {
         "re": re,
+        "_SCOPE_STATEMENT": re.compile(
+            r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschliesslich|lediglich)\s+fuer\b"
+        ),
         "_TEMPORARY_SURVEY_LOCATION_CODES": {
             "hannover": "HAN", "wunstorf": "WUN", "wedemark": "WED",
         },

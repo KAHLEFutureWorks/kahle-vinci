@@ -475,6 +475,87 @@ def _marketing_opt_out_query(query):
     return bool(marketing_scope and opt_out_action)
 
 
+_KAHLE_LOCATIONS = (
+    "Hannover",
+    "Wunstorf",
+    "Wedemark",
+    "Walsrode",
+    "Neustadt",
+    "Nienburg",
+    "Stadthagen",
+)
+_SCOPE_STATEMENT = re.compile(
+    r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschliesslich|lediglich)\s+fuer\b"
+)
+_SCOPE_EXCLUSION = re.compile(r"\b(?:ausser|ausgenommen|alle\s+anderen?)\b")
+
+
+def _named_kahle_locations(text):
+    """KAHLE locations named in ``text``, in order of appearance."""
+    folded = _fold_evidence_text(text)
+    hits = []
+    for name in _KAHLE_LOCATIONS:
+        match = re.search(rf"\b{re.escape(name.casefold())}\b", folded)
+        if match:
+            hits.append((match.start(), name))
+    return tuple(name for _position, name in sorted(hits))
+
+
+def _is_scope_statement(text):
+    return bool(_SCOPE_STATEMENT.search(_fold_evidence_text(text)))
+
+
+def _restrictive_scope_locations(chunks):
+    """Locations of the first scope statement that names a strict subset of KAHLE."""
+    for chunk in chunks or ():
+        if getattr(chunk, "functional_contact", None) is not None:
+            continue
+        passage = str(getattr(chunk, "parent_content", "") or "")
+        for line in re.split(r"(?<=[.!?])\s+|\n+", passage):
+            if not _is_scope_statement(line):
+                continue
+            locations = _named_kahle_locations(line)
+            if locations and len(locations) < len(_KAHLE_LOCATIONS):
+                return locations
+    return ()
+
+
+def _exception_contact_chunks(chunks, locations):
+    """Typed contacts whose scope excludes exactly ``locations``."""
+    wanted = frozenset(locations or ())
+    selected = []
+    for chunk in chunks or ():
+        contact = getattr(chunk, "functional_contact", None)
+        if getattr(chunk, "chunk_kind", "") != "functional_contact" or not isinstance(contact, dict):
+            continue
+        scope = str(contact.get("scope") or "")
+        if (
+            wanted
+            and _SCOPE_EXCLUSION.search(_fold_evidence_text(scope))
+            and frozenset(_named_kahle_locations(scope)) == wanted
+        ):
+            selected.append(chunk)
+    return selected
+
+
+def _scope_exception_query(locations):
+    names = tuple(locations or ())
+    joined = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " und " + names[-1]
+    return f"Kontakt für alle anderen Standorte außer {joined}"
+
+
+def _trusted_contact_chunk(chunk):
+    """A typed row only counts when its validated contact matches its exact span."""
+    if getattr(chunk, "contact_error", "") or getattr(chunk, "chunk_kind", "") != "functional_contact":
+        return False
+    contact = validate_functional_contact(getattr(chunk, "functional_contact", None))
+    return bool(
+        contact is not None
+        and getattr(chunk, "content", None) == contact["evidence_span"]
+        and getattr(chunk, "parent_content", None) == contact["evidence_span"]
+    )
+
+
 _TEMPORARY_SURVEY_LOCATION_CODES = {
     "hannover": "HAN",
     "wunstorf": "WUN",
@@ -672,6 +753,11 @@ def _claim_evidence_spans(query, passage, *, full_procedure=False):
         sentence for score, _position, sentence in scored
         if score == best
     ][:3]
+    # A documented scope bounds every statement of its passage.
+    selected.extend(
+        sentence for sentence in sentences
+        if _is_scope_statement(sentence) and sentence not in selected
+    )
     folded_query = _fold_evidence_text(query)
     if all(
         marker in folded_query
@@ -983,6 +1069,26 @@ class Tools:
                         continue
                 valid_chunks.append(chunk)
             chunks = _filter_evidence_chunks(query, valid_chunks) + contact_errors
+            scope_locations = _restrictive_scope_locations(chunks)
+            if scope_locations and not _exception_contact_chunks(chunks, scope_locations):
+                # The path for all other locations lives in typed contact rows;
+                # fetch exactly those whose scope excludes the documented one.
+                try:
+                    exception_query = _scope_exception_query(scope_locations)
+                    exception_chunks = retriever.retrieve(
+                        exception_query,
+                        _hybrid_embed(base_url, api_key, model, exception_query, int(self.valves.TIMEOUT_S)),
+                        scope,
+                        information_needs=[{"kind": "functional_contact", "evidence_capabilities": ["functional_contact"]}],
+                    )
+                    chunks.extend(
+                        chunk for chunk in _exception_contact_chunks(chunks=[
+                            item for item in exception_chunks if _trusted_contact_chunk(item)
+                        ], locations=scope_locations)
+                        if chunk not in chunks
+                    )
+                except Exception:
+                    pass
             chunks = _prioritize_marketing_opt_out_evidence(query, chunks)
         except Exception as exc:
             error_code = (

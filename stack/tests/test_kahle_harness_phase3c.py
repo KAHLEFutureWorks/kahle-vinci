@@ -299,3 +299,85 @@ def test_eval_knows_the_new_blocking_code():
 
     assert harness_eval.BLOCKING_VIOLATION_CODES == load_harness().BLOCKING_VIOLATION_CODES
     assert "required_scope_missing" in harness_eval.BLOCKING_VIOLATION_CODES
+
+
+TOOL_PATH = ROOT / "open-webui-tools" / "rag_chat_hybrid_tool.py"
+
+
+def load_tool():
+    sys.path.insert(0, str(TOOL_PATH.parent))
+    try:
+        spec = importlib.util.spec_from_file_location("rag_tool_phase3c", TOOL_PATH)
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+    finally:
+        sys.path.remove(str(TOOL_PATH.parent))
+    return tool
+
+
+def test_tool_and_harness_share_the_location_list():
+    assert load_tool()._KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
+
+
+def test_scope_sentences_always_reach_the_claims():
+    tool = load_tool()
+    passage = (
+        "| Geltungsbereich | Servicebereiche der Standorte Hannover (HAN), Wunstorf (WUN) und Wedemark (WED) |\n"
+        "Die DSE-Einstellungen des Kunden öffnen.\n"
+        "Die für die Kontaktfreigaben gesetzten Haken entfernen."
+    )
+
+    spans = tool._claim_evidence_spans("Wie deaktiviere ich die DSE-Kontaktfreigaben in Wunstorf?", passage)
+
+    assert any(span.startswith("| Geltungsbereich |") for span in spans)
+
+
+class _Chunk:
+    def __init__(self, parent_content="", functional_contact=None, chunk_kind="text", document_id="d"):
+        self.parent_content = parent_content
+        self.content = parent_content
+        self.functional_contact = functional_contact
+        self.chunk_kind = chunk_kind
+        self.document_id = document_id
+
+
+def test_restrictive_scope_locations_come_from_scope_statements():
+    tool = load_tool()
+    chunks = [
+        _Chunk("| Geltungsbereich | Standorte Hannover, Wunstorf und Wedemark |"),
+        _Chunk("In Walsrode gibt es eine eigene Annahme."),
+    ]
+
+    assert tool._restrictive_scope_locations(chunks) == ("Hannover", "Wunstorf", "Wedemark")
+    assert tool._restrictive_scope_locations([_Chunk("Geltungsbereich: alle KAHLE-Standorte")]) == ()
+
+
+def test_exception_contacts_must_exclude_exactly_the_scoped_locations():
+    tool = load_tool()
+    exact = _Chunk(chunk_kind="functional_contact", functional_contact={
+        "value": "datenschutz@kahle.de", "scope": "Alle KAHLE-Standorte außer Hannover, Wunstorf und Wedemark"})
+    partial = _Chunk(chunk_kind="functional_contact", functional_contact={
+        "value": "x@kahle.de", "scope": "Alle KAHLE-Standorte außer Hannover"})
+    group = _Chunk(chunk_kind="functional_contact", functional_contact={
+        "value": "it@kahle.de", "scope": "gruppenweit"})
+
+    selected = tool._exception_contact_chunks([exact, partial, group], ("Hannover", "Wunstorf", "Wedemark"))
+
+    assert selected == [exact]
+
+
+def test_exception_query_names_only_the_scope_from_the_evidence():
+    tool = load_tool()
+
+    assert tool._scope_exception_query(("Hannover", "Wunstorf", "Wedemark")) == (
+        "Kontakt für alle anderen Standorte außer Hannover, Wunstorf und Wedemark"
+    )
+
+
+def test_rag_chat_completes_the_exception_path():
+    source = TOOL_PATH.read_text(encoding="utf-8")
+
+    assert "scope_locations = _restrictive_scope_locations(chunks)" in source
+    assert "_exception_contact_chunks(chunks, scope_locations)" in source
+    assert "_scope_exception_query(scope_locations)" in source
+    assert '{"kind": "functional_contact", "evidence_capabilities": ["functional_contact"]}' in source
