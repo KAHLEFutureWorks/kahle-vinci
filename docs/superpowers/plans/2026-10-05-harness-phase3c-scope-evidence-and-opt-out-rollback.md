@@ -127,6 +127,26 @@ $P -m pytest eval/harness/tests -q -p no:cacheprovider   # Ausgang: 41 passed
   - Walsrode-Antwort unter 4.000 Zeichen bei mindestens zwei Modellen.
   - Sonst Stopp und Rückmeldung.
 
+#### Ergebnis Task 3 und 4 (05./06.10.) und Revision
+
+**Task 3 – Zwischenmessung mit Sonderpfad, bestanden:**
+- Werbewiderspruch-Inhalt: 18 von 18 (Phase 3b: 16 von 18).
+- `scope_location` und `internal_knowledge` identisch mit Phase 3b.
+- `procedure` 12/12/12 von 16 (Phase 3b: 13/12/12; Mistral −1 bei der Korpuslücke Garantieanfrage).
+- 0 ausgelieferte blockierende Verstöße.
+
+**Task 4 – Rückbau (`b59f6c4`), Gate nicht bestanden, zurückgenommen (`8860f20`):**
+- Erfüllt: Routing wie Phase 3b, 0 ausgelieferte blockierende Verstöße, Walsrode 682–1.427 Zeichen.
+- Nicht erfüllt: Inhalt nur 8 von 18.
+- Ursache: Die Geltungsbereich-Pflicht entsteht zur Laufzeit unvollständig. `rag_chat` übernimmt nur zur Frage passende Sätze, dadurch fehlte die Geltungsbereich-Zeile, zum Beispiel bei „DSE-Kontaktfreigaben in Wunstorf“. Die Funktionskontakt-Tabelle mit dem Ausnahmeweg wird ohne Umschreibung nicht gefunden.
+
+**Revision – Task 4a, umgesetzt (`426e29f`):**
+- Geltungsbereich-Sätze eines Abschnitts kommen immer in die Belegliste.
+- Bei einschränkendem Geltungsbereich ohne passenden Ausnahmekontakt holt `rag_chat` per zweiter, auf Funktionskontakte beschränkter Suche nur validierte Zeilen nach, deren Gültigkeitsfeld genau diese Standorte ausnimmt.
+- Die Standortliste spiegelt den Harness und ist per Test gekoppelt.
+
+**Task 4b:** `git revert 8860f20`, danach dasselbe Gate wie Task 4.
+
 ### Task 5: Kundensperren-Rückfrage zusammenführen
 
 **Files:** Middleware, Guard; Tests
