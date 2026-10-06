@@ -2019,17 +2019,16 @@ def _claim_evidence_spans(query, passage, *, full_procedure=False):
         terms = set(re.findall(r"[a-z0-9]{3,}", _fold_evidence_text(sentence)))
         scored.append((len(query_terms.intersection(terms)), position, sentence))
     best = max(score for score, _position, _sentence in scored)
+    # A documented scope bounds every statement of its passage, even when the
+    # passage shares no term with the question.
+    scope_sentences = [sentence for sentence in sentences if _is_scope_statement(sentence)]
     if best <= 0:
-        return []
+        return scope_sentences
     selected = [
         sentence for score, _position, sentence in scored
         if score == best
     ][:3]
-    # A documented scope bounds every statement of its passage.
-    selected.extend(
-        sentence for sentence in sentences
-        if _is_scope_statement(sentence) and sentence not in selected
-    )
+    selected.extend(sentence for sentence in scope_sentences if sentence not in selected)
     return selected[:8]
 def _claim_evidence_items(query, passage, *, full_procedure=False):
     """Keep exact claim spans and distinguish editorial text from OCR."""

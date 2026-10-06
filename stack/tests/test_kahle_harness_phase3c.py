@@ -512,3 +512,18 @@ def test_full_procedure_only_follows_document_overviews():
     source = TOOL_PATH.read_text(encoding="utf-8")
 
     assert 'full_procedure = bool(source.get("document_overview"))\n' in source
+
+
+def test_scope_sentences_survive_a_passage_without_query_overlap():
+    tool = load_tool()
+    header = (
+        "| Dokumenttyp | Interne Wissensbasis |\n"
+        "| Geltungsbereich | Servicebereiche der Standorte Hannover (HAN), Wunstorf (WUN) und Wedemark (WED) |"
+    )
+
+    spans = tool._claim_evidence_spans("Wie hinterlege ich einen Werbewiderspruch in Vaudis?", header)
+
+    assert spans == [
+        "| Geltungsbereich | Servicebereiche der Standorte Hannover (HAN), Wunstorf (WUN) und Wedemark (WED) |"
+    ]
+    assert tool._claim_evidence_spans("Wie hinterlege ich einen Werbewiderspruch?", "| Dokumenttyp | Wissen |") == []
