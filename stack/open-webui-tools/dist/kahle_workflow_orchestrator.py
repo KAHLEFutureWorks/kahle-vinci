@@ -649,77 +649,6 @@ def _metadata_only(point: dict[str, Any]) -> bool:
     inner = content[3:-3]
     lines = [line.strip() for line in inner.splitlines() if line.strip()]
     return bool(lines) and all(":" in line or line.startswith(("-", "#")) for line in lines)
-def is_temporary_survey_process(title: str) -> bool:
-    """Identify the scoped process document, never a generic Vaudis manual."""
-    folded = unicodedata.normalize("NFKD", title or "").encode("ascii", "ignore").decode().casefold()
-    return all(term in folded for term in ("tempor", "sperr")) and any(
-        term in folded for term in ("zufriedenheitsbefrag", "zufriedenheitsabfrag")
-    )
-def temporary_survey_process_intent(query: str) -> bool:
-    """Recognize a request for the specific marketing-survey opt-out process."""
-    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
-    is_manufacturer_survey = (
-        "zufriedenheitsbefrag" in folded
-        or "zufriedenheitsabfrag" in folded
-        or "herstellerbefrag" in folded
-    )
-    return is_manufacturer_survey and any(
-        term in folded for term in ("werb", "kontaktfreigab", "dse", "hersteller", "tempor", "sperr")
-    )
-_TEMPORARY_SURVEY_LOCATION_CODES = {
-    "hannover": "HAN",
-    "wunstorf": "WUN",
-    "wedemark": "WED",
-}
-def temporary_survey_location_scope(query: str) -> tuple[str, str]:
-    """Resolve the process scope without generating an answer."""
-    if not temporary_survey_process_intent(query):
-        return "", ""
-    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
-    matches = [
-        (match.start(), code)
-        for location, code in _TEMPORARY_SURVEY_LOCATION_CODES.items()
-        for match in re.finditer(rf"\b{re.escape(location)}\b", folded)
-    ]
-    if matches:
-        return "supported_location", max(matches)[1]
-    named_location = re.search(r"\b(?:am\s+standort|standort|in)\s+([a-z][\w-]*)", folded)
-    if named_location and named_location.group(1) not in {"vaudis", "personio", "sharepoint", "dse"}:
-        return "out_of_scope_location", ""
-    return "unspecified_location", ""
-def _temporary_survey_point_codes(point: dict[str, Any]) -> set[str]:
-    payload = point.get("payload") or {}
-    text = "\n".join((
-        str(payload.get("content") or ""),
-        " > ".join(str(item) for item in payload.get("heading_path") or ()),
-    ))
-    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
-    return {
-        code
-        for code in _TEMPORARY_SURVEY_LOCATION_CODES.values()
-        if re.search(
-            rf"(?:kd-sperrprozess-liste-{code.casefold()}|\b{code.casefold()}\s*[-:]?\s*loschen)",
-            folded,
-        )
-    }
-def _temporary_survey_scope_or_contact_point(point: dict[str, Any]) -> bool:
-    payload = point.get("payload") or {}
-    content = str(payload.get("content") or "").strip()
-    text = "\n".join((
-        content or str(payload.get("parent_content") or ""),
-        " > ".join(str(item) for item in payload.get("heading_path") or ()),
-    ))
-    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
-    has_scope = all(location in folded for location in _TEMPORARY_SURVEY_LOCATION_CODES)
-    return not _temporary_survey_point_codes(point) and (
-        "datenschutz@kahle.de" in folded or has_scope
-    )
-def temporary_survey_point_is_allowed(point: dict[str, Any], query: str) -> bool:
-    """Keep the complete approved process for its three shared locations."""
-    location_mode, location_code = temporary_survey_location_scope(query)
-    if not location_mode:
-        return True
-    return True
 KAHLE_LOCATIONS = (
     "Hannover",
     "Wunstorf",
@@ -784,30 +713,6 @@ def procedure_scope_companions(
     *, query: str = "",
 ) -> list[dict[str, Any]]:
     """Return missing scope and process passages from selected process documents."""
-    full_process_versions = {
-        (str(payload.get("document_id") or ""), str(payload.get("version_id") or ""))
-        for point in selected_points
-        if is_temporary_survey_process((payload := point.get("payload") or {}).get("title", ""))
-    } if "procedure" in required_evidence_capabilities(query) else set()
-    if full_process_versions:
-        seen = {
-            (str(payload.get("document_id") or ""), str(payload.get("version_id") or ""),
-             str(payload.get("parent_id") or point.get("id") or ""))
-            for point in selected_points for payload in [point.get("payload") or {}]
-        }
-        companions = []
-        for point in complete_points:
-            payload = point.get("payload") or {}
-            version = (str(payload.get("document_id") or ""), str(payload.get("version_id") or ""))
-            identity = (*version, str(payload.get("parent_id") or point.get("id") or ""))
-            if (version not in full_process_versions or identity in seen
-                    or payload.get("chunk_kind") == "retrieval_hint" or _metadata_only(point)):
-                continue
-            if temporary_survey_process_intent(query) and not temporary_survey_point_is_allowed(point, query):
-                continue
-            seen.add(identity)
-            companions.append(point)
-        return companions
     selected_documents = {
         str((point.get("payload") or {}).get("document_id") or "")
         for point in selected_points
@@ -854,15 +759,9 @@ def procedure_scope_companions(
             .casefold()
         )
 
-    def is_location_list(point: dict[str, Any]) -> bool:
-        heading = folded_heading(point)
-        return "sperrliste" in heading and "dokumentation" in heading
-
     def scope_rank(folded_text: str) -> int:
         rank = 2 if explicit_scope_markers.search(folded_text) else 0
-        if all(location in folded_text for location in ("hannover", "wunstorf", "wedemark")):
-            rank += 1
-        if "datenschutz@kahle.de" in folded_text:
+        if _has_restrictive_scope(folded_text):
             rank += 1
         return rank
 
@@ -875,8 +774,6 @@ def procedure_scope_companions(
             selected_kinds.setdefault(document_id, set()).add("scope")
         if process_summary_markers.search(folded_text) and not scope_markers.search(folded_text):
             selected_kinds.setdefault(document_id, set()).add("process")
-        if is_location_list(point):
-            selected_kinds.setdefault(document_id, set()).add("location_list")
 
     candidates_by_document: dict[str, dict[str, list[tuple[int, dict[str, Any]]]]] = {}
     for point in complete_points:
@@ -887,10 +784,8 @@ def procedure_scope_companions(
             continue
         folded_text = folded_point_text(point)
         buckets = candidates_by_document.setdefault(
-            document_id, {"scope": [], "process": [], "location_list": []}
+            document_id, {"scope": [], "process": []}
         )
-        if is_location_list(point):
-            buckets["location_list"].append((0, point))
         if scope_markers.search(folded_text):
             buckets["scope"].append((scope_rank(folded_text), point))
             continue
@@ -904,7 +799,7 @@ def procedure_scope_companions(
     for document_id in selected_documents:
         buckets = candidates_by_document.get(document_id, {})
         kinds = selected_kinds.get(document_id, set())
-        for kind in ("scope", "process", "location_list"):
+        for kind in ("scope", "process"):
             options = buckets.get(kind) or []
             if kind in kinds or not options:
                 continue
@@ -1241,10 +1136,9 @@ class QdrantHybridRetriever:
             ]
             if not candidates:
                 return []
-        temporary_process_intent = temporary_survey_process_intent(query)
         focused_ids = (
             focused_document_ids_for_query(query, candidates)
-            if not identifiers and not temporary_process_intent and not abbreviation_terms else set()
+            if not identifiers and not abbreviation_terms else set()
         )
         if focused_ids:
             candidates = [
@@ -1270,23 +1164,8 @@ class QdrantHybridRetriever:
         candidates = [point for point in candidates if (
             point["payload"].get("chunk_kind") != "functional_contact" and not point["payload"].get("functional_contact")
         ) or self._contact(point) is not None]
-        if temporary_process_intent:
-            candidates = [
-                point
-                for point in candidates
-                if not is_temporary_survey_process(
-                    str((point.get("payload") or {}).get("title") or "")
-                )
-                or temporary_survey_point_is_allowed(point, query)
-            ]
         if not candidates:
             return []
-        temporary_process_selection = [
-            (index, float(point.get("score") or 0))
-            for index, point in enumerate(candidates)
-            if temporary_process_intent
-            and is_temporary_survey_process(str((point.get("payload") or {}).get("title") or ""))
-        ]
         if abbreviation_terms:
             # Literal code-and-expansion evidence is already more specific than
             # a semantic rerank and must not fluctuate with that provider.
@@ -1363,12 +1242,6 @@ class QdrantHybridRetriever:
             ranked_selection = diversify_opening_hours_locations(
                 reranked, candidates, result_limit=result_limit,
             )
-        elif temporary_process_selection:
-            # The source title is an exact, ACL-filtered match for this narrow
-            # procedure. Keep one parent even if a provider returns only a
-            # short reranker list that omits it; companions restore its full
-            # version below.
-            ranked_selection = temporary_process_selection[:1]
         elif identifiers or focused_ids or abbreviation_terms:
             ranked_selection = eligible_reranked[:result_limit]
         else:

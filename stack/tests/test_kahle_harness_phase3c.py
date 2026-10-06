@@ -481,3 +481,34 @@ def test_middleware_has_no_own_customer_lock_branch():
 
     assert "customer_lock_clarification = (" not in source
     assert "customer_lock_followup_query(" in source
+
+
+@pytest.mark.parametrize("path", [TOOL_PATH, RETRIEVAL_PATH], ids=["rag_chat", "hybrid_retrieval"])
+def test_tool_special_filters_are_gone(path):
+    source = path.read_text(encoding="utf-8")
+
+    for name in (
+        "temporary_survey", "_marketing_opt_out_query", "_prioritize_marketing_opt_out_evidence",
+        "kd-sperrprozess", "sperrliste", "datenschutz@kahle.de",
+    ):
+        assert name not in source.casefold(), name
+
+
+def test_tool_texts_name_no_locations_or_contacts():
+    tool = load_tool()
+
+    instruction = tool._rag_final_response_instruction(
+        "Wie sperre ich einen Kunden für Zufriedenheitsbefragungen in Hannover?"
+    )
+    clarification = tool._clarification_for_query("Wie sperre ich einen Kunden bei KAHLE?")
+
+    for text in (instruction, clarification):
+        assert not tool._named_kahle_locations(text)
+    assert "Werbung und Befragungen" in clarification
+    assert "allgemeine Kundensperre in Vaudis" in clarification
+
+
+def test_full_procedure_only_follows_document_overviews():
+    source = TOOL_PATH.read_text(encoding="utf-8")
+
+    assert 'full_procedure = bool(source.get("document_overview"))\n' in source

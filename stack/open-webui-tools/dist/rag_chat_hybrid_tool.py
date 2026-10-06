@@ -646,77 +646,6 @@ def _metadata_only(point: dict[str, Any]) -> bool:
     inner = content[3:-3]
     lines = [line.strip() for line in inner.splitlines() if line.strip()]
     return bool(lines) and all(":" in line or line.startswith(("-", "#")) for line in lines)
-def is_temporary_survey_process(title: str) -> bool:
-    """Identify the scoped process document, never a generic Vaudis manual."""
-    folded = unicodedata.normalize("NFKD", title or "").encode("ascii", "ignore").decode().casefold()
-    return all(term in folded for term in ("tempor", "sperr")) and any(
-        term in folded for term in ("zufriedenheitsbefrag", "zufriedenheitsabfrag")
-    )
-def temporary_survey_process_intent(query: str) -> bool:
-    """Recognize a request for the specific marketing-survey opt-out process."""
-    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
-    is_manufacturer_survey = (
-        "zufriedenheitsbefrag" in folded
-        or "zufriedenheitsabfrag" in folded
-        or "herstellerbefrag" in folded
-    )
-    return is_manufacturer_survey and any(
-        term in folded for term in ("werb", "kontaktfreigab", "dse", "hersteller", "tempor", "sperr")
-    )
-_TEMPORARY_SURVEY_LOCATION_CODES = {
-    "hannover": "HAN",
-    "wunstorf": "WUN",
-    "wedemark": "WED",
-}
-def temporary_survey_location_scope(query: str) -> tuple[str, str]:
-    """Resolve the process scope without generating an answer."""
-    if not temporary_survey_process_intent(query):
-        return "", ""
-    folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
-    matches = [
-        (match.start(), code)
-        for location, code in _TEMPORARY_SURVEY_LOCATION_CODES.items()
-        for match in re.finditer(rf"\b{re.escape(location)}\b", folded)
-    ]
-    if matches:
-        return "supported_location", max(matches)[1]
-    named_location = re.search(r"\b(?:am\s+standort|standort|in)\s+([a-z][\w-]*)", folded)
-    if named_location and named_location.group(1) not in {"vaudis", "personio", "sharepoint", "dse"}:
-        return "out_of_scope_location", ""
-    return "unspecified_location", ""
-def _temporary_survey_point_codes(point: dict[str, Any]) -> set[str]:
-    payload = point.get("payload") or {}
-    text = "\n".join((
-        str(payload.get("content") or ""),
-        " > ".join(str(item) for item in payload.get("heading_path") or ()),
-    ))
-    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
-    return {
-        code
-        for code in _TEMPORARY_SURVEY_LOCATION_CODES.values()
-        if re.search(
-            rf"(?:kd-sperrprozess-liste-{code.casefold()}|\b{code.casefold()}\s*[-:]?\s*loschen)",
-            folded,
-        )
-    }
-def _temporary_survey_scope_or_contact_point(point: dict[str, Any]) -> bool:
-    payload = point.get("payload") or {}
-    content = str(payload.get("content") or "").strip()
-    text = "\n".join((
-        content or str(payload.get("parent_content") or ""),
-        " > ".join(str(item) for item in payload.get("heading_path") or ()),
-    ))
-    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
-    has_scope = all(location in folded for location in _TEMPORARY_SURVEY_LOCATION_CODES)
-    return not _temporary_survey_point_codes(point) and (
-        "datenschutz@kahle.de" in folded or has_scope
-    )
-def temporary_survey_point_is_allowed(point: dict[str, Any], query: str) -> bool:
-    """Keep the complete approved process for its three shared locations."""
-    location_mode, location_code = temporary_survey_location_scope(query)
-    if not location_mode:
-        return True
-    return True
 KAHLE_LOCATIONS = (
     "Hannover",
     "Wunstorf",
@@ -781,30 +710,6 @@ def procedure_scope_companions(
     *, query: str = "",
 ) -> list[dict[str, Any]]:
     """Return missing scope and process passages from selected process documents."""
-    full_process_versions = {
-        (str(payload.get("document_id") or ""), str(payload.get("version_id") or ""))
-        for point in selected_points
-        if is_temporary_survey_process((payload := point.get("payload") or {}).get("title", ""))
-    } if "procedure" in required_evidence_capabilities(query) else set()
-    if full_process_versions:
-        seen = {
-            (str(payload.get("document_id") or ""), str(payload.get("version_id") or ""),
-             str(payload.get("parent_id") or point.get("id") or ""))
-            for point in selected_points for payload in [point.get("payload") or {}]
-        }
-        companions = []
-        for point in complete_points:
-            payload = point.get("payload") or {}
-            version = (str(payload.get("document_id") or ""), str(payload.get("version_id") or ""))
-            identity = (*version, str(payload.get("parent_id") or point.get("id") or ""))
-            if (version not in full_process_versions or identity in seen
-                    or payload.get("chunk_kind") == "retrieval_hint" or _metadata_only(point)):
-                continue
-            if temporary_survey_process_intent(query) and not temporary_survey_point_is_allowed(point, query):
-                continue
-            seen.add(identity)
-            companions.append(point)
-        return companions
     selected_documents = {
         str((point.get("payload") or {}).get("document_id") or "")
         for point in selected_points
@@ -851,15 +756,9 @@ def procedure_scope_companions(
             .casefold()
         )
 
-    def is_location_list(point: dict[str, Any]) -> bool:
-        heading = folded_heading(point)
-        return "sperrliste" in heading and "dokumentation" in heading
-
     def scope_rank(folded_text: str) -> int:
         rank = 2 if explicit_scope_markers.search(folded_text) else 0
-        if all(location in folded_text for location in ("hannover", "wunstorf", "wedemark")):
-            rank += 1
-        if "datenschutz@kahle.de" in folded_text:
+        if _has_restrictive_scope(folded_text):
             rank += 1
         return rank
 
@@ -872,8 +771,6 @@ def procedure_scope_companions(
             selected_kinds.setdefault(document_id, set()).add("scope")
         if process_summary_markers.search(folded_text) and not scope_markers.search(folded_text):
             selected_kinds.setdefault(document_id, set()).add("process")
-        if is_location_list(point):
-            selected_kinds.setdefault(document_id, set()).add("location_list")
 
     candidates_by_document: dict[str, dict[str, list[tuple[int, dict[str, Any]]]]] = {}
     for point in complete_points:
@@ -884,10 +781,8 @@ def procedure_scope_companions(
             continue
         folded_text = folded_point_text(point)
         buckets = candidates_by_document.setdefault(
-            document_id, {"scope": [], "process": [], "location_list": []}
+            document_id, {"scope": [], "process": []}
         )
-        if is_location_list(point):
-            buckets["location_list"].append((0, point))
         if scope_markers.search(folded_text):
             buckets["scope"].append((scope_rank(folded_text), point))
             continue
@@ -901,7 +796,7 @@ def procedure_scope_companions(
     for document_id in selected_documents:
         buckets = candidates_by_document.get(document_id, {})
         kinds = selected_kinds.get(document_id, set())
-        for kind in ("scope", "process", "location_list"):
+        for kind in ("scope", "process"):
             options = buckets.get(kind) or []
             if kind in kinds or not options:
                 continue
@@ -1238,10 +1133,9 @@ class QdrantHybridRetriever:
             ]
             if not candidates:
                 return []
-        temporary_process_intent = temporary_survey_process_intent(query)
         focused_ids = (
             focused_document_ids_for_query(query, candidates)
-            if not identifiers and not temporary_process_intent and not abbreviation_terms else set()
+            if not identifiers and not abbreviation_terms else set()
         )
         if focused_ids:
             candidates = [
@@ -1267,23 +1161,8 @@ class QdrantHybridRetriever:
         candidates = [point for point in candidates if (
             point["payload"].get("chunk_kind") != "functional_contact" and not point["payload"].get("functional_contact")
         ) or self._contact(point) is not None]
-        if temporary_process_intent:
-            candidates = [
-                point
-                for point in candidates
-                if not is_temporary_survey_process(
-                    str((point.get("payload") or {}).get("title") or "")
-                )
-                or temporary_survey_point_is_allowed(point, query)
-            ]
         if not candidates:
             return []
-        temporary_process_selection = [
-            (index, float(point.get("score") or 0))
-            for index, point in enumerate(candidates)
-            if temporary_process_intent
-            and is_temporary_survey_process(str((point.get("payload") or {}).get("title") or ""))
-        ]
         if abbreviation_terms:
             # Literal code-and-expansion evidence is already more specific than
             # a semantic rerank and must not fluctuate with that provider.
@@ -1360,12 +1239,6 @@ class QdrantHybridRetriever:
             ranked_selection = diversify_opening_hours_locations(
                 reranked, candidates, result_limit=result_limit,
             )
-        elif temporary_process_selection:
-            # The source title is an exact, ACL-filtered match for this narrow
-            # procedure. Keep one parent even if a provider returns only a
-            # short reranker list that omits it; companions restore its full
-            # version below.
-            ranked_selection = temporary_process_selection[:1]
         elif identifiers or focused_ids or abbreviation_terms:
             ranked_selection = eligible_reranked[:result_limit]
         else:
@@ -1783,9 +1656,8 @@ def _clarification_for_query(query):
     )
     if customer_lock and not marketing_scope and not general_scope:
         return (
-            "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, "
-            "Wunstorf oder Wedemark zu sperren, oder um eine allgemeine "
-            "Kundensperre in Vaudis für einen anderen Standort?"
+            "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
+            "oder um eine allgemeine Kundensperre in Vaudis?"
         )
     if not re.search(r"\b(?:öffnungszeiten|oeffnungszeiten|öffnungszeit|oeffnungszeit)\b", value):
         return ""
@@ -1929,27 +1801,12 @@ def _filter_evidence_chunks(query, chunks):
     return selected
 def _rag_answer_instruction(query):
     """Return query-specific grounding rules without replacing retrieval."""
-    value = str(query or "").strip().casefold()
-    marketing_scope = re.search(
-        r"\b(?:werbung|werbesperre|werbewiderspruch|bewertung(?:en)?|befragung(?:en)?|"
-        r"zufriedenheitsbefragung(?:en)?|herstellerbefragung(?:en)?|"
-        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
-        value,
-    )
     instruction = (
         "Antworte nur aus CONTEXT. Belege jede konkrete interne Aussage mit ihrer "
         "Quellennummer in eckigen Klammern, z. B. [1] oder [1, 2]. "
         "Bei Konflikt nicht stillschweigend entscheiden. "
+        "Übertrage keine Schritte oder Standortwerte außerhalb des belegten Geltungsbereichs. "
     )
-    if marketing_scope:
-        instruction += (
-            "Nutze ausschließlich einschlägige Textstellen zu Werbewiderspruch, Werbung, "
-            "automatisierten Befragungen, DSE-Kontaktfreigaben und Sperrliste. "
-            "Übertrage keine Schritte oder Standortwerte außerhalb des belegten Geltungsbereichs. "
-            "Leite keine allgemeine Kundensperre und keine Felder, Register oder Datenkategorien "
-            "aus anderen Vaudis-Handbuchtreffern ab. Nenne insbesondere besondere Merkmale oder "
-            "Finanzdaten nur, wenn die einschlägige Quelle zum Werbewiderspruch dies ausdrücklich verlangt. "
-        )
     folded = (
         str(query or "").casefold()
         .replace("ä", "ae").replace("ö", "oe")
@@ -1967,16 +1824,8 @@ def _rag_answer_instruction(query):
         )
     return instruction
 def _rag_final_response_instruction(query, sources=()):
-    """Put a location boundary at the end of native tool context for the model."""
-    location_mode, _location_code = _temporary_survey_location_scope(query)
-    if location_mode:
-        instruction = (
-            "Unabdingbare Ausgabeform: Erkläre den vollständigen belegten Vorgang für die "
-            "Standorte Hannover, Wunstorf und Wedemark. Stelle klar, dass er ausschließlich "
-            "für diese drei Standorte gilt. Schließe genau einmal ab: 'Für alle anderen Standorte "
-            "wende dich bitte an datenschutz@kahle.de.' Erfinde keine weiteren Standortwerte."
-        )
-    elif re.search(r"\bwie\s+arbeit\w*\s+ich\b", _fold_evidence_text(query)):
+    """Put source-driven output rules at the end of native tool context for the model."""
+    if re.search(r"\bwie\s+arbeit\w*\s+ich\b", _fold_evidence_text(query)):
         instruction = (
             "Unabdingbare Ausgabeform: Erkläre jeden im Kontext belegten Hauptschritt "
             "in der dokumentierten Reihenfolge. Überspringe keinen dieser Schritte und "
@@ -1992,56 +1841,12 @@ def _rag_final_response_instruction(query, sources=()):
     return "\n\n".join(part for part in (
         instruction, outline_instruction
     ) if part)
-def _prioritize_marketing_opt_out_evidence(query, chunks):
-    """Put supported scope, contact and list passages before the procedure body."""
-    if not _marketing_opt_out_query(query):
-        return list(chunks or [])
-
-    def priority(chunk):
-        text = _fold_evidence_text("\n".join((
-            " > ".join(str(item) for item in getattr(chunk, "heading_path", ()) or ()),
-            str(getattr(chunk, "parent_content", "") or ""),
-        )))
-        location_lists = all(
-            marker in text
-            for marker in (
-                "kd-sperrprozess-liste-han",
-                "kd-sperrprozess-liste-wun",
-                "kd-sperrprozess-liste-wed",
-            )
-        )
-        explicit_scope = all(
-            location in text for location in ("hannover", "wunstorf", "wedemark")
-        ) and bool(re.search(r"\b(?:geltungsbereich|gilt\s+nur|andere\w*\s+standort)", text))
-        contact = "datenschutz@kahle.de" in text
-        return (
-            3 if contact else 0,
-            2 if explicit_scope else 0,
-            1 if location_lists else 0,
-        )
-
-    return sorted(list(chunks or []), key=priority, reverse=True)
 def _fold_evidence_text(value):
     return (
         str(value or "").casefold()
         .replace("ä", "ae").replace("ö", "oe")
         .replace("ü", "ue").replace("ß", "ss")
     )
-def _marketing_opt_out_query(query):
-    value = _fold_evidence_text(query)
-    marketing_scope = re.search(
-        r"\b(?:werbung|werbesperre|werbewiderspruch|bewertung(?:en)?|befragung(?:en)?|"
-        r"zufriedenheitsbefragung(?:en)?|herstellerbefragung(?:en)?|"
-        r"kontaktfreigabe(?:n)?|dse[- ]einstellung(?:en)?)\b",
-        value,
-    )
-    opt_out_action = re.search(
-        r"\b(?:sperr|deaktivier|hinterleg|abmeld|widerruf|werbewiderspruch|"
-        r"widerspruch|durchfuehr|entfern|"
-        r"keine\w*\s+werbung|nicht\s+mehr\s+erhalt)\w*\b",
-        value,
-    )
-    return bool(marketing_scope and opt_out_action)
 _KAHLE_LOCATIONS = (
     "Hannover",
     "Wunstorf",
@@ -2109,72 +1914,6 @@ def _trusted_contact_chunk(chunk):
         and getattr(chunk, "content", None) == contact["evidence_span"]
         and getattr(chunk, "parent_content", None) == contact["evidence_span"]
     )
-_TEMPORARY_SURVEY_LOCATION_CODES = {
-    "hannover": "HAN",
-    "wunstorf": "WUN",
-    "wedemark": "WED",
-}
-def _temporary_survey_location_scope(query):
-    folded = _fold_evidence_text(query)
-    is_manufacturer_survey = (
-        "zufriedenheitsbefrag" in folded
-        or "zufriedenheitsabfrag" in folded
-        or "herstellerbefrag" in folded
-    )
-    if not (is_manufacturer_survey and any(
-        marker in folded for marker in ("werb", "kontaktfreigab", "dse", "hersteller", "tempor", "sperr")
-    )):
-        return "", ""
-    matches = [
-        (match.start(), code)
-        for location, code in _TEMPORARY_SURVEY_LOCATION_CODES.items()
-        for match in re.finditer(rf"\b{re.escape(location)}\b", folded)
-    ]
-    if matches:
-        return "supported_location", max(matches)[1]
-    named_location = re.search(r"\b(?:am\s+standort|standort|in)\s+([a-z][\w-]*)", folded)
-    if named_location and named_location.group(1) not in {"vaudis", "personio", "sharepoint", "dse"}:
-        return "out_of_scope_location", ""
-    return "unspecified_location", ""
-def _temporary_survey_codes(text, heading_path=()):
-    folded = _fold_evidence_text(
-        "\n".join((str(text or ""), " > ".join(str(item) for item in heading_path or ())))
-    )
-    return {
-        code
-        for code in _TEMPORARY_SURVEY_LOCATION_CODES.values()
-        if re.search(
-            rf"(?:kd-sperrprozess-liste-{code.casefold()}|\b{code.casefold()}\s*[-–:]?\s*loschen)",
-            folded,
-        )
-    }
-def _is_temporary_survey_scope_or_contact(text):
-    folded = _fold_evidence_text(text)
-    return not _temporary_survey_codes(text) and (
-        "datenschutz@kahle.de" in folded
-        or all(location in folded for location in _TEMPORARY_SURVEY_LOCATION_CODES)
-    )
-def _temporary_survey_scope_or_contact_passage(text, *, include_contact):
-    """Keep only the scope and, when needed, contact sentences from broad evidence."""
-    fragments = re.split(r"(?<=[.!?])\s+|\n+", str(text or "").strip())
-    selected = []
-    for fragment in fragments:
-        candidate = fragment.strip()
-        folded = _fold_evidence_text(candidate)
-        if candidate and (
-            all(location in folded for location in _TEMPORARY_SURVEY_LOCATION_CODES)
-            or (include_contact and "datenschutz@kahle.de" in folded)
-        ):
-            selected.append(candidate)
-    return " ".join(dict.fromkeys(selected))
-def _context_passage_for_temporary_survey(chunk, query):
-    """Return the complete approved process shared by its three locations."""
-    location_mode, location_code = _temporary_survey_location_scope(query)
-    parent = str(getattr(chunk, "parent_content", "") or "").strip()
-    child = str(getattr(chunk, "content", "") or "").strip()
-    if not location_mode:
-        return parent
-    return parent or child
 def _procedural_evidence_intent(query):
     value = _fold_evidence_text(query)
     value = re.sub(
@@ -2291,55 +2030,6 @@ def _claim_evidence_spans(query, passage, *, full_procedure=False):
         sentence for sentence in sentences
         if _is_scope_statement(sentence) and sentence not in selected
     )
-    folded_query = _fold_evidence_text(query)
-    if all(
-        marker in folded_query
-        for marker in (
-            "werbewiderspruch",
-            "zufriedenheitsbefragung",
-            "dse-kontaktfreigaben",
-        )
-    ):
-        for sentence in sentences:
-            folded_sentence = _fold_evidence_text(sentence)
-            if (
-                "datenschutz@kahle.de" in folded_sentence
-                or re.search(
-                    r"\b(?:geltungsbereich|gilt\s+nur|gultig\s+fur|andere\w*\s+standort)",
-                    folded_sentence,
-                )
-                or re.search(
-                    r"kd-sperrprozess-liste-(?:han|wun|wed)",
-                    folded_sentence,
-                )
-            ) and sentence not in selected:
-                selected.append(sentence)
-        folded_passage = _fold_evidence_text(passage)
-        carries_scope_or_contact = (
-            all(
-                location in folded_passage
-                for location in ("hannover", "wunstorf", "wedemark")
-            )
-            and (
-                "datenschutz@kahle.de" in folded_passage
-                or re.search(
-                    r"\b(?:geltungsbereich|gilt\s+nur|gultig\s+fur|andere\w*\s+standort)",
-                    folded_passage,
-                )
-            )
-        )
-        carries_location_lists = all(
-            marker in folded_passage
-            for marker in (
-                "kd-sperrprozess-liste-han",
-                "kd-sperrprozess-liste-wun",
-                "kd-sperrprozess-liste-wed",
-            )
-        )
-        if carries_scope_or_contact or carries_location_lists:
-            exact_block = str(passage or "").strip()[:1000]
-            if exact_block and exact_block not in selected:
-                selected.append(exact_block)
     return selected[:8]
 def _claim_evidence_items(query, passage, *, full_procedure=False):
     """Keep exact claim spans and distinguish editorial text from OCR."""
@@ -2395,12 +2085,7 @@ def _evidence_bundle(query, context="", sources=None, missing_information=None):
                 })
             continue
         if number and passage:
-            full_procedure = bool(source.get("document_overview")) or (
-                _marketing_opt_out_query(query) and all(
-                    term in _fold_evidence_text(source.get("title", ""))
-                    for term in ("tempor", "sperr", "zufriedenheitsbefrag")
-                )
-            )
+            full_procedure = bool(source.get("document_overview"))
             if source.get("document_overview"):
                 evidence_items = _claim_evidence_items(
                     query, passage, full_procedure=full_procedure,
@@ -2612,7 +2297,6 @@ class Tools:
                     )
                 except Exception:
                     pass
-            chunks = _prioritize_marketing_opt_out_evidence(query, chunks)
         except Exception as exc:
             error_code = (
                 str(exc).strip()
@@ -2634,16 +2318,10 @@ class Tools:
             return _missing_rag_result(query, __chat_id__, __message_id__)
         context, sources = [], []
         seen_context_passages = set()
-        temporary_survey_location_mode, _temporary_survey_location_code = (
-            _temporary_survey_location_scope(query)
-        )
-        scope_context_added = False
         for chunk in chunks:
             heading = " > ".join(chunk.heading_path)
             contact_error = getattr(chunk, "contact_error", "")
             passage = "" if contact_error else chunk.parent_content
-            if passage and _temporary_survey_location_scope(query)[0]:
-                passage = _context_passage_for_temporary_survey(chunk, query)
             if not passage and not contact_error:
                 continue
             # Gapless numbering: OpenWebUI maps [N] to the N-th citation source.
@@ -2656,13 +2334,6 @@ class Tools:
                 context.append(f"[{index}] {chunk.title} | {heading}\n{passage}")
                 seen_context_passages.add(context_identity)
             evidence_passage = passage
-            if (
-                passage
-                and heading
-                and _marketing_opt_out_query(query)
-                and getattr(chunk, "functional_contact", None) is None
-            ):
-                evidence_passage = f"{heading}\n{passage}"
             source = {
                 "number": index, "title": chunk.title, "document_id": chunk.document_id,
                 "version_id": chunk.version_id, "valid_until": chunk.valid_until,

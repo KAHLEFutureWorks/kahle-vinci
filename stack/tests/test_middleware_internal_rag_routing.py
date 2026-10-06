@@ -2125,7 +2125,7 @@ def test_customer_lock_general_followup_reads_structured_clarification_content()
     )
 
 
-def test_customer_lock_clarification_names_marketing_locations_and_other_site_scope():
+def test_customer_lock_clarification_offers_both_choices_without_locations():
     tool_path = ROOT / "open-webui-tools" / "rag_chat_hybrid_tool.py"
     tree = ast.parse(tool_path.read_text(encoding="utf-8"))
     node = next(
@@ -2138,8 +2138,8 @@ def test_customer_lock_clarification_names_marketing_locations_and_other_site_sc
     exec(compile(module_ast, str(tool_path), "exec"), namespace)
 
     assert namespace["_clarification_for_query"]("Wie sperre ich einen Kunden bei KAHLE?") == (
-        "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, Wunstorf oder Wedemark zu sperren, "
-        "oder um eine allgemeine Kundensperre in Vaudis für einen anderen Standort?"
+        "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
+        "oder um eine allgemeine Kundensperre in Vaudis?"
     )
 
 
