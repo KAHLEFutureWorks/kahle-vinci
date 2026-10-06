@@ -694,6 +694,13 @@ def _customer_lock_followup_query(
     return ""
 
 
+def customer_lock_followup_query(
+    current: str, prior_user: str, prior_assistant: str,
+) -> str:
+    """Shared entry point for the middleware's clarification expansion."""
+    return _customer_lock_followup_query(current, prior_user, prior_assistant)
+
+
 def _requested_location(query: str) -> str:
     # Prefer the latest explicit location, including names outside the company list.
     # Application names following "in" are not locations.

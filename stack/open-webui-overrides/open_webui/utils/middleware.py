@@ -94,6 +94,7 @@ from open_webui.utils.filter import (
 from open_webui.utils.kahle_knowledge_harness import (
     build_decision as build_knowledge_harness_decision,
     classify_personio_directory_intent,
+    customer_lock_followup_query,
     knowledge_abstention_answer,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
@@ -1262,35 +1263,14 @@ def _expanded_internal_rag_query(messages: list[dict[str, Any]], user_text: str)
     prior_user = ''
     for message in reversed((messages or [])[:-1]):
         if isinstance(message, dict) and str(message.get('role') or '') == 'user':
-            prior_user = fold(str(message.get('content') or ''))
+            prior_user = str(message.get('content') or '')
             break
-    customer_lock_clarification = (
-        'werbung und befragungen' in previous
-        and 'allgemeine kundensperre' in previous
-        and 'vaudis' in previous
-    ) or bool(
-        re.search(r'\bkunden?(?:sperr\w*|\s+sperr\w*)\b', prior_user)
-        or ('kunde' in prior_user and 'sperr' in prior_user)
+    # One customer-lock behaviour for harness, middleware and guard.
+    customer_lock_query = customer_lock_followup_query(
+        current, prior_user, previous_assistant,
     )
-    if customer_lock_clarification:
-        if any(token in folded for token in (
-            'allgemein', 'kundensperre', 'komplett', 'vollstaendig',
-            'zweiteres', 'zweite option',
-        )):
-            return (
-                'Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? '
-                'Falls dafür keine freigegebene Anleitung vorliegt: Welche '
-                'freigegebene Datenschutz-Anlaufstelle nennt das KAHLE-Wissen '
-                'für Sperranfragen?'
-            )
-        if any(token in folded for token in (
-            'werbung', 'werbesperre', 'werbewiderspruch', 'befragung',
-            'kontaktfreigabe', 'ersteres', 'erste option',
-        )):
-            return (
-                'Wie sperre ich Werbung und automatisierte Befragungen für einen '
-                'Kunden in Vaudis über die DSE-Kontaktfreigaben?'
-            )
+    if customer_lock_query:
+        return customer_lock_query
     asks_for_all = any(token in folded for token in ('allgemein', 'alles', 'alle'))
     if asks_for_all and 'oeffnungszeiten' in previous and 'standort' in previous:
         return (

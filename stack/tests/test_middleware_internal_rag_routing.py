@@ -1617,6 +1617,7 @@ def load_function_from_middleware(name: str):
     namespace["_personio_directory_intent"] = (
         harness.classify_personio_directory_intent
     )
+    namespace["customer_lock_followup_query"] = harness.customer_lock_followup_query
     return namespace[name]
 
 
@@ -2051,8 +2052,7 @@ def test_customer_lock_marketing_followup_keeps_clarification_context():
     ]
 
     assert helper(messages, "Werbung") == (
-        "Wie sperre ich Werbung und automatisierte Befragungen für einen Kunden "
-        "in Vaudis über die DSE-Kontaktfreigaben?"
+        "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
     )
 
 
@@ -2106,11 +2106,15 @@ def test_customer_lock_general_followup_variants_resolve_identically(followup):
     )
 
 
-def test_customer_lock_general_followup_uses_prior_user_question_if_clarification_content_is_structured():
+def test_customer_lock_general_followup_reads_structured_clarification_content():
     helper = load_function_from_middleware("_expanded_internal_rag_query")
     messages = [
         {"role": "user", "content": "Wie sperre ich einen Kunden bei KAHLE?"},
-        {"role": "assistant", "content": [{"type": "text", "text": "Klärungsfrage"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": (
+            "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, Wunstorf oder "
+            "Wedemark zu sperren, oder um eine allgemeine Kundensperre in Vaudis für einen "
+            "anderen Standort?"
+        )}]},
         {"role": "user", "content": "allgemein"},
     ]
 

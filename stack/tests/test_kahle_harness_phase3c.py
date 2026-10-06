@@ -432,3 +432,52 @@ def test_retriever_adds_restrictive_scope_companions():
     source = RETRIEVAL_PATH.read_text(encoding="utf-8")
 
     assert "for companion in restrictive_scope_companions(" in source
+
+
+GUARD_PATH = ROOT / "open-webui-functions" / "kahle_toolcall_guard.py"
+LOCK_QUESTION = "Wie sperre ich einen Kunden in Vaudis?"
+LOCK_CLARIFICATION = (
+    "Geht es darum, Werbung und Befragungen für den Kunden in Hannover, Wunstorf oder "
+    "Wedemark zu sperren, oder um eine allgemeine Kundensperre in Vaudis für einen anderen Standort?"
+)
+LOCK_REPLIES = ("Werbung", "Werbung für Walsrode", "Nienburg", "allgemein")
+
+
+def _middleware_expansion():
+    tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_expanded_internal_rag_query")
+    import re as _re
+    namespace: dict[str, Any] = {
+        "Any": Any, "re": _re,
+        "customer_lock_followup_query": load_harness().customer_lock_followup_query,
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(MIDDLEWARE), "exec"), namespace)
+    return namespace["_expanded_internal_rag_query"]
+
+
+def _guard_module():
+    spec = importlib.util.spec_from_file_location("kahle_guard_phase3c", GUARD_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("reply", LOCK_REPLIES)
+def test_customer_lock_follow_up_is_one_behaviour(reply):
+    harness = load_harness()
+    expected = harness.customer_lock_followup_query(reply, LOCK_QUESTION, LOCK_CLARIFICATION)
+    history = [
+        {"role": "user", "content": LOCK_QUESTION},
+        {"role": "assistant", "content": LOCK_CLARIFICATION},
+    ]
+
+    assert expected
+    assert _middleware_expansion()([*history, {"role": "user", "content": reply}], reply) == expected
+    assert _guard_module()._expand_customer_lock_followup(reply, history) == expected
+
+
+def test_middleware_has_no_own_customer_lock_branch():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert "customer_lock_clarification = (" not in source
+    assert "customer_lock_followup_query(" in source
