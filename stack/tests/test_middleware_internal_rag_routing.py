@@ -493,87 +493,6 @@ def test_planned_rag_tool_call_is_not_forced_outside_the_preroute_contract():
     ) == []
 
 
-def test_mandatory_prerouted_rag_calls_the_bound_adapter_without_model_selection():
-    execute = load_function_from_middleware("_execute_prerouted_rag_tool")
-    captured = {}
-
-    async def rag_chat(*, query):
-        captured["query"] = query
-        return "KAHLE_RAG_RESULT\nFOUND: true\nSOURCES_JSON: []"
-
-    raw, sources = asyncio.run(execute({"callable": rag_chat}, "canonical query"))
-
-    assert captured == {"query": "canonical query"}
-    assert raw.startswith("KAHLE_RAG_RESULT")
-    assert sources[0]["source"]["name"] == "rag_chat/rag_chat"
-    assert sources[0]["document"] == [raw]
-
-
-def test_mandatory_prerouted_rag_preserves_the_bound_request_context():
-    execute = load_function_from_middleware("_execute_prerouted_rag_tool")
-    captured = {}
-
-    async def rag_chat(*, query, __user__, __chat_id__, __message_id__, __metadata__):
-        captured.update({
-            "query": query,
-            "user": __user__,
-            "chat_id": __chat_id__,
-            "message_id": __message_id__,
-            "metadata": __metadata__,
-        })
-        return "KAHLE_RAG_RESULT\nFOUND: true\nSOURCES_JSON: []"
-
-    raw, _sources = asyncio.run(execute(
-        {"callable": rag_chat},
-        "canonical query",
-        tool_context={
-            "__user__": {"id": "user-1"},
-            "__chat_id__": "chat-1",
-            "__message_id__": "message-1",
-            "__metadata__": {"scope": "internal"},
-        },
-    ))
-
-    assert raw.startswith("KAHLE_RAG_RESULT")
-    assert captured == {
-        "query": "canonical query",
-        "user": {"id": "user-1"},
-        "chat_id": "chat-1",
-        "message_id": "message-1",
-        "metadata": {"scope": "internal"},
-    }
-
-
-def test_prerouted_rag_context_recovers_the_authorized_user_id():
-    context_for = load_function_from_middleware("_prerouted_rag_tool_context")
-
-    context = context_for(
-        {"__user__": {}, "__chat_id__": "chat-1", "__message_id__": "message-1"},
-        {"user_id": "user-1", "role": "user"},
-        {"scope": "internal"},
-    )
-
-    assert context == {
-        "__user__": {"id": "user-1", "role": "user"},
-        "__chat_id__": "chat-1",
-        "__message_id__": "message-1",
-        "__metadata__": {"scope": "internal"},
-    }
-
-
-def test_temporary_survey_preroute_keeps_raw_evidence_private_for_model_context():
-    source = MIDDLEWARE.read_text(encoding="utf-8")
-    block = source[
-        source.index("async def retrieve_pre_route_rag()"):
-        source.index("retrieval = await _execute_kahle_retrieval_plan(")
-    ]
-
-    assert "'private_context_sources': direct_sources" in block
-    assert "pre_route_private_context_sources" in source
-    assert "model_context_sources" in source
-    assert "*pre_route_private_context_sources" in source
-
-
 def test_temporary_survey_preroute_prepares_empty_evidence_before_rag_returns():
     source = MIDDLEWARE.read_text(encoding="utf-8")
     force_block = source[
@@ -823,18 +742,13 @@ def test_actual_middleware_gate_plans_directory_and_mixed_queries_before_legacy_
         assert plan.required_tools == expected_tools
 
 
-def test_actual_middleware_gate_preroutes_temporary_survey_opt_out_without_legacy_keyword():
+def test_actual_middleware_gate_probes_a_natural_opt_out_question_without_legacy_keyword():
     gate = load_retrieval_gate()
     query = "Wie sperre ich einen Kunden vorübergehend für Hersteller-Zufriedenheitsbefragungen?"
-    canonical_query = (
-        "Wie wird ein Werbewiderspruch für Werbung und herstellerseitige "
-        "Zufriedenheitsbefragungen in Vaudis über die DSE-Kontaktfreigaben "
-        "durchgeführt?"
-    )
 
     plan = gate(
         query=query,
-        resolved_query=canonical_query,
+        resolved_query=query,
         messages=[{"role": "user", "content": query}],
         model_id="test-model",
         permission_scope={"user_id": "user-1", "role": "user"},
@@ -845,6 +759,7 @@ def test_actual_middleware_gate_preroutes_temporary_survey_opt_out_without_legac
 
     assert plan is not None
     assert plan.required_tools == ("rag_chat",)
+    assert plan.evidence_probe is True
 
 
 @pytest.mark.parametrize(
@@ -2752,13 +2667,13 @@ def test_stream_safe_output_hides_thinking_reasoning_for_unsupported_internal_an
     assert safe[1]["content"][0]["text"] == ""
 
 
-def test_temporary_survey_opt_out_preroutes_internal_rag_before_initial_stream():
+def test_internal_rag_preroute_runs_before_initial_stream():
     source = MIDDLEWARE.read_text(encoding="utf-8")
 
     assert "force_internal_rag = (" in source
     assert "if force_internal_rag:" in source
     force_block = source[source.index("force_internal_rag = ("):source.index("pre_routed_internal_rag = '")]
-    assert "temporary_survey_opt_out" in force_block
+    assert "temporary_survey_opt_out" not in force_block
     assert "pre_route_tools = {'rag_chat': tools_dict['rag_chat']}" in source
     assert "form_data, flags = await chat_completion_tools_handler(" in source
     assert "_should_suppress_initial_rag_response(" in source
@@ -2968,87 +2883,6 @@ def test_clarification_contract_receives_the_high_salience_final_answer_prompt()
     )
 
     assert final_prompt(clarification_decision) == "exact-rag-clarification"
-
-
-def test_repeated_location_prompt_normalization_keeps_one_modelled_response():
-    helper = load_function_from_middleware("_collapse_immediately_repeated_paragraph_sequence")
-    response = (
-        "Der Geltungsbereich gilt für Hannover, Wunstorf und Wedemark [1].\n\n"
-        "An welchem Standort arbeitest du?\n\n"
-        "Der Geltungsbereich gilt für Hannover, Wunstorf und Wedemark [1].\n\n"
-        "An welchem Standort arbeitest du?\n\n"
-        "Quellen:\n- [Prozessbeschreibung](/wissen/source)"
-    )
-
-    assert helper(response) == (
-        "Der Geltungsbereich gilt für Hannover, Wunstorf und Wedemark [1].\n\n"
-        "An welchem Standort arbeitest du?\n\n"
-        "Quellen:\n- [Prozessbeschreibung](/wissen/source)"
-    )
-
-
-def test_location_prompt_normalization_removes_only_an_exact_duplicate():
-    normalize = load_function_from_middleware("_normalize_repeated_location_prompt_output")
-    answer = (
-        "Die Prozessbeschreibung zur temporären Sperrung von Kunden für "
-        "Hersteller-Zufriedenheitsbefragungen gilt ausschließlich für die "
-        "Standorte Hannover, Wunstorf oder Wedemark [1].\n\n"
-        "An welchem Standort arbeitest du: Hannover, Wunstorf oder Wedemark?"
-    )
-    output = [
-        {"type": "function_call", "name": "rag_chat"},
-        {
-            "type": "message",
-            "content": [{"type": "output_text", "text": answer}],
-        },
-        {"type": "function_call_output", "output": []},
-        {
-            "type": "message",
-            "content": [{"type": "output_text", "text": f"{answer}\n\nQuellen:\n- [Prozess](/wissen/source)"}],
-        },
-    ]
-
-    assert normalize(output) == [
-        {"type": "function_call", "name": "rag_chat"},
-        {"type": "function_call_output", "output": []},
-        {
-            "type": "message",
-            "content": [{"type": "output_text", "text": f"{answer}\n\nQuellen:\n- [Prozess](/wissen/source)"}],
-        },
-    ]
-
-
-def test_location_prompt_normalization_preserves_an_earlier_answer_when_final_message_has_only_sources():
-    normalize = load_function_from_middleware("_normalize_repeated_location_prompt_output")
-    answer = (
-        "Die Prozessbeschreibung zur temporären Sperrung von Kunden für "
-        "Hersteller-Zufriedenheitsbefragungen gilt für Hannover, Wunstorf und Wedemark [1]."
-    )
-    sources_only = "\n\nQuellen:\n- [Prozess](/wissen/source)"
-    output = [
-        {"type": "function_call", "name": "rag_chat"},
-        {"type": "message", "content": [{"type": "output_text", "text": answer}]},
-        {"type": "function_call_output", "output": []},
-        {"type": "message", "content": [{"type": "output_text", "text": sources_only}]},
-    ]
-
-    assert normalize(output) == output
-
-
-def test_stream_safe_output_recognizes_the_temporary_survey_location_prompt():
-    source = MIDDLEWARE.read_text(encoding="utf-8")
-
-    assert "Zufriedenheitsbefragungen" in source
-    assert "_collapse_immediately_repeated_paragraph_sequence(text)" in source
-    assert "output = _normalize_repeated_location_prompt_output(output)" in source
-
-
-def test_shadow_harness_preserves_location_mode_for_stream_normalization():
-    source = MIDDLEWARE.read_text(encoding="utf-8")
-
-    assert "metadata['kahle_survey_location_mode']" in source
-    assert "or metadata.get('kahle_survey_location_mode')" in source
-    assert "temporary_survey_without_location" in source
 
 
 def test_unrelated_file_form_and_mail_direct_final_paths_remain_present():
