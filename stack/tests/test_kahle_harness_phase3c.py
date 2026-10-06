@@ -381,3 +381,54 @@ def test_rag_chat_completes_the_exception_path():
     assert "_exception_contact_chunks(chunks, scope_locations)" in source
     assert "_scope_exception_query(scope_locations)" in source
     assert '{"kind": "functional_contact", "evidence_capabilities": ["functional_contact"]}' in source
+
+
+RETRIEVAL_PATH = ROOT / "open-webui-tools" / "hybrid_retrieval.py"
+
+
+def load_retrieval():
+    spec = importlib.util.spec_from_file_location("hybrid_retrieval_phase3c", RETRIEVAL_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _point(point_id, document_id, text, heading=(), kind="text"):
+    return {"id": point_id, "payload": {
+        "document_id": document_id, "version_id": "v", "parent_id": point_id,
+        "parent_content": text, "content": text, "heading_path": list(heading), "chunk_kind": kind,
+        "title": "Prozess",
+    }}
+
+
+def test_retrieval_shares_the_location_list():
+    assert load_retrieval().KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
+
+
+def test_restrictive_scope_of_a_selected_document_is_added_for_any_question():
+    retrieval = load_retrieval()
+    step = _point("p5", "doc", "Die DSE-Einstellungen öffnen.", ("5. Durchführung",))
+    header = _point("p0", "doc", SCOPE_ROW, ("Datei",))
+    general = _point("q0", "other", "| Geltungsbereich | alle KAHLE-Standorte |")
+    unselected_doc = _point("x0", "elsewhere", SCOPE_ROW)
+    hint = _point("p9", "doc", SCOPE_ROW, kind="retrieval_hint")
+
+    companions = retrieval.restrictive_scope_companions(
+        [step, _point("q1", "other", "Text")], [step, header, general, unselected_doc, hint],
+    )
+
+    assert companions == [header]
+
+
+def test_no_companion_when_the_scope_is_already_selected():
+    retrieval = load_retrieval()
+    header = _point("p0", "doc", SCOPE_ROW)
+
+    assert retrieval.restrictive_scope_companions([header], [header]) == []
+
+
+def test_retriever_adds_restrictive_scope_companions():
+    source = RETRIEVAL_PATH.read_text(encoding="utf-8")
+
+    assert "for companion in restrictive_scope_companions(" in source

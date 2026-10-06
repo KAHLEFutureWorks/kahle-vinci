@@ -98,9 +98,11 @@ def test_contact_conflict_checks_all_pages_under_acl(monkeypatch):
     assert all(chunk.functional_contact is None for chunk in result)
     assert [chunk.contact_error for chunk in result] == ["functional_contact_conflict"]
     assert all("@" not in chunk.content + chunk.parent_content for chunk in result)
-    scrolls = [body for url, body in calls if url.endswith("/scroll")]
+    all_scrolls = [body for url, body in calls if url.endswith("/scroll")]
+    # Contact checks page with limit 100; the scope-companion scroll loads whole documents.
+    scrolls = [body for body in all_scrolls if body["limit"] == 100]
     assert len(scrolls) == 2 and scrolls[1]["offset"] == "page2"
-    assert all(body["limit"] == 100 for body in scrolls)
+    assert [body["limit"] for body in all_scrolls if body not in scrolls] == [256]
     assert {item["key"] for item in scrolls[0]["filter"]["must"]} >= {
         "knowledgebase_ids", "version_id", "status", "published", "valid_from", "valid_until", "functional_contact_key",
     }
@@ -935,7 +937,8 @@ def test_complete_workflow_recovers_full_document_after_transient_scroll_failure
         query="Wie arbeite ich im Teiledienst mit dem Digitalen Autohaus?",
     )
 
-    assert scroll_calls == 2
+    # One failed overview scroll, exactly one recovery, then the scope-companion scroll.
+    assert scroll_calls == 3
     assert len(result) == 6
     assert all(
         f"Redaktioneller Schritt {number}." in result[number - 1].parent_content

@@ -717,6 +717,65 @@ def temporary_survey_point_is_allowed(point: dict[str, Any], query: str) -> bool
     if not location_mode:
         return True
     return True
+KAHLE_LOCATIONS = (
+    "Hannover",
+    "Wunstorf",
+    "Wedemark",
+    "Walsrode",
+    "Neustadt",
+    "Nienburg",
+    "Stadthagen",
+)
+_EXPLICIT_SCOPE_STATEMENT = re.compile(
+    r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschlie\w*|lediglich)\s+fur\b"
+)
+def _has_restrictive_scope(text: str) -> bool:
+    """True when a scope statement names a strict subset of the KAHLE locations."""
+    folded = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().casefold()
+    for line in re.split(r"(?<=[.!?])\s+|\n+", folded):
+        if not _EXPLICIT_SCOPE_STATEMENT.search(line):
+            continue
+        named = [name for name in KAHLE_LOCATIONS if re.search(rf"\b{name.casefold()}\b", line)]
+        if 0 < len(named) < len(KAHLE_LOCATIONS):
+            return True
+    return False
+def restrictive_scope_companions(
+    selected_points: list[dict[str, Any]], complete_points: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the restrictive scope passage of each selected document, if missing.
+
+    A documented scope bounds every statement of its document, whatever the
+    question asks; the answer contract needs it to name the scope.
+    """
+    def identity(point: dict[str, Any]) -> str:
+        payload = point.get("payload") or {}
+        return str(payload.get("parent_id") or point.get("id") or "")
+
+    def text(point: dict[str, Any]) -> str:
+        payload = point.get("payload") or {}
+        return str(payload.get("parent_content") or payload.get("content") or "")
+
+    selected_documents = {
+        str((point.get("payload") or {}).get("document_id") or "") for point in selected_points
+    }
+    selected_documents.discard("")
+    covered = {
+        str((point.get("payload") or {}).get("document_id") or "")
+        for point in selected_points if _has_restrictive_scope(text(point))
+    }
+    seen = {identity(point) for point in selected_points}
+    companions: list[dict[str, Any]] = []
+    for point in complete_points:
+        payload = point.get("payload") or {}
+        document_id = str(payload.get("document_id") or "")
+        if (document_id not in selected_documents or document_id in covered
+                or identity(point) in seen or payload.get("chunk_kind") == "retrieval_hint"
+                or _metadata_only(point) or not _has_restrictive_scope(text(point))):
+            continue
+        covered.add(document_id)
+        seen.add(identity(point))
+        companions.append(point)
+    return companions
 def procedure_scope_companions(
     selected_points: list[dict[str, Any]], complete_points: list[dict[str, Any]],
     *, query: str = "",
@@ -1329,6 +1388,22 @@ class QdrantHybridRetriever:
                 ):
                     if _metadata_only(companion):
                         continue
+                    candidates.append(companion)
+                    ranked_selection.append((len(candidates) - 1, 1.0))
+        if ranked_selection:
+            scope_points = [candidates[index] for index, _score in ranked_selection]
+            scope_document_ids = {
+                str((point.get("payload") or {}).get("document_id") or "")
+                for point in scope_points
+            }
+            scope_document_ids.discard("")
+            if scope_document_ids:
+                complete_scope_points = self._validate_points(
+                    self._document_points(scope_document_ids, acl), scope, today
+                )
+                for companion in restrictive_scope_companions(
+                    scope_points, complete_scope_points
+                ):
                     candidates.append(companion)
                     ranked_selection.append((len(candidates) - 1, 1.0))
         selected: list[RetrievedChunk] = []
