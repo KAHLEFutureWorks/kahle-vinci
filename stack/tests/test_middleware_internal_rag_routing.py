@@ -1574,6 +1574,8 @@ def load_function_from_middleware(name: str):
         required_names.add("_prerouted_internal_tool_output")
     if name == "_routing_plan_for_execution":
         required_names.add("_model_led_preroute_disabled")
+    if name in {"_extract_kahle_rag_sources", "_extract_kahle_rag_citation_sources"}:
+        required_names.add("_kahle_rag_sources_json")
     nodes = [
         node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in required_names
@@ -1663,6 +1665,7 @@ def load_personio_directory_intent():
 def load_canonical_rag_source_helpers():
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
     wanted = {
+        "_kahle_rag_sources_json",
         "_extract_kahle_rag_sources",
         "_canonical_kahle_rag_source_events",
         "_append_canonical_rag_source_links",

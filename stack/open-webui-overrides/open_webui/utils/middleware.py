@@ -4126,7 +4126,8 @@ def get_reasoning_format(model: dict) -> str | None:
     return None
 
 
-def _extract_kahle_rag_sources(tool_result: Any) -> list[dict[str, Any]]:
+def _kahle_rag_sources_json(tool_result: Any) -> list[Any]:
+    """The raw SOURCES_JSON list of a rag_chat result, or [] if absent or broken."""
     text = tool_result if isinstance(tool_result, str) else ''
     match = re.search(r'SOURCES_JSON:\s*(\[.*?\])\s*(?:\n|$)', text, re.DOTALL)
     if not match:
@@ -4135,6 +4136,11 @@ def _extract_kahle_rag_sources(tool_result: Any) -> list[dict[str, Any]]:
         sources = json.loads(match.group(1))
     except (TypeError, ValueError):
         return []
+    return sources if isinstance(sources, list) else []
+
+
+def _extract_kahle_rag_sources(tool_result: Any) -> list[dict[str, Any]]:
+    sources = _kahle_rag_sources_json(tool_result)
     return [
         source
         for source in sources
@@ -4145,14 +4151,7 @@ def _extract_kahle_rag_sources(tool_result: Any) -> list[dict[str, Any]]:
 
 def _extract_kahle_rag_citation_sources(tool_result: Any) -> list[dict[str, Any]]:
     """Return every numbered RAG passage in marker order, trusted link or not."""
-    text = tool_result if isinstance(tool_result, str) else ''
-    match = re.search(r'SOURCES_JSON:\s*(\[.*?\])\s*(?:\n|$)', text, re.DOTALL)
-    if not match:
-        return []
-    try:
-        sources = json.loads(match.group(1))
-    except (TypeError, ValueError):
-        return []
+    sources = _kahle_rag_sources_json(tool_result)
     numbered = [
         source for source in sources
         if isinstance(source, dict) and isinstance(source.get('number'), int)

@@ -605,3 +605,25 @@ def test_fallback_claims_keep_every_step_of_a_procedure():
 
     for step in steps:
         assert step in claims
+
+
+def test_middleware_parses_sources_json_once():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+
+    assert source.count("re.search(r'SOURCES_JSON:") == 1
+    namespace = {}
+    tree = ast.parse(source)
+    nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {
+        "_kahle_rag_sources_json", "_extract_kahle_rag_sources", "_extract_kahle_rag_citation_sources"}]
+    import re as _re
+    namespace.update({"Any": Any, "re": _re, "json": json})
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(MIDDLEWARE), "exec"), namespace)
+    result = (
+        'SOURCES_JSON: [{"number": 2, "source_url": "/wissen/api/portal/sources/b"}, '
+        '{"number": 1, "source_url": "https://evil.invalid"}, "x"]\n'
+    )
+
+    assert [s["number"] for s in namespace["_extract_kahle_rag_sources"](result)] == [2]
+    assert [s["number"] for s in namespace["_extract_kahle_rag_citation_sources"](result)] == [1, 2]
+    assert namespace["_extract_kahle_rag_sources"]("no marker") == []
+    assert namespace["_extract_kahle_rag_citation_sources"]("SOURCES_JSON: [kaputt\n") == []
