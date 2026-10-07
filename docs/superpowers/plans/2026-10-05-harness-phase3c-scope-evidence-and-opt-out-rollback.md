@@ -241,3 +241,9 @@ $P -m pytest eval/harness/tests -q -p no:cacheprovider   # Ausgang: 41 passed
 - Werbewiderspruch-Begriffe bleiben im Rückfrage-Erkenner `_clarification_for_query` und in der Kundensperren-Rückfrage (Harness/Guard), weil sie zwei echte Prozesse unterscheiden.
 - In `_filter_evidence_chunks` bleiben zwei frühere Fachfilter (Systemlandkarte, allgemeine Kundensperre).
 - Mistrals Korrekturquote stieg von 9 % (Phase 3b) auf 17 %. Wie sich das auf die Codes verteilt, ist nicht ausgewertet.
+
+### Nachprüfung (07.10.)
+
+- **Qwen-`RuntimeError` („Dialogannahme“):** nicht reproduzierbar. In der Wiederholung der Kategorie `procedure` waren beide Fälle korrekt, ohne Fehler im Log. Die Logs vom 06.10. waren nach dem Neustart nicht mehr vorhanden, daher ist ein vorübergehender Ausfall die wahrscheinliche, aber nicht belegte Ursache.
+- **Qwen-Inhalts-Probe auf dem vollen Lauf:** 5 von 5 ohne Hannover.
+- **Mistral-Korrekturen:** Stichprobe aus `organization_contact`, `personio_person` und `scope_location` mit 23 Antworten; 7 wurden korrigiert. Erste Prüfung: 5× `citation_missing` (bekanntes Mistral-Muster), 2× `required_scope_missing` (beabsichtigt). Kein neuer Fehlercode.
