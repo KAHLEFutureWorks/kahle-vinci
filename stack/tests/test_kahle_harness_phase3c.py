@@ -678,3 +678,12 @@ def test_blocked_search_notice_markers_live_in_one_place_per_unit():
 ])
 def test_export_titles_agree_between_orchestrator_and_guard(content):
     assert _orchestrator_module()._previous_result_title(content) == _guard_module()._export_title_from_content(content)
+
+
+def test_procedure_verbs_are_identical_in_harness_and_tool():
+    """Separate deploy units (Open WebUI override vs. tool bundle) keep one list."""
+    assert load_tool()._PROCEDURE_ACTION_PATTERNS == load_harness()._PROCEDURE_ACTION_PATTERNS
+
+
+def test_scope_statement_pattern_is_identical_in_harness_and_retrieval():
+    assert load_harness()._SCOPE_STATEMENT.pattern == load_retrieval()._EXPLICIT_SCOPE_STATEMENT.pattern
