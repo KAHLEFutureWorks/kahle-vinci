@@ -527,3 +527,36 @@ def test_scope_sentences_survive_a_passage_without_query_overlap():
         "| Geltungsbereich | Servicebereiche der Standorte Hannover (HAN), Wunstorf (WUN) und Wedemark (WED) |"
     ]
     assert tool._claim_evidence_spans("Wie hinterlege ich einen Werbewiderspruch?", "| Dokumenttyp | Wissen |") == []
+
+
+def test_every_kahle_compose_variable_is_in_the_production_template():
+    """ADR-002: production variables live in compose and the template together."""
+    import re as _re
+
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    template = (ROOT / "env.production.template").read_text(encoding="utf-8")
+    names = sorted(set(_re.findall(r"\$\{(KAHLE_[A-Z_]+)", compose)))
+
+    assert "KAHLE_ANSWER_ENFORCEMENT" in names
+    missing = [name for name in names if not _re.search(rf"(?m)^{name}=", template)]
+    assert missing == []
+
+
+def test_template_keeps_the_answer_enforcement_in_observe_mode():
+    template = (ROOT / "env.production.template").read_text(encoding="utf-8")
+
+    assert "\nKAHLE_ANSWER_ENFORCEMENT=observe\n" in template
+    assert "\nKAHLE_KNOWLEDGE_ROUTING_MODE=legacy\n" in template
+    assert "\nKAHLE_KNOWLEDGE_HARNESS_MODE=active\n" in template
+
+
+def test_retry_timeouts_reach_the_container():
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    template = (ROOT / "env.production.template").read_text(encoding="utf-8")
+
+    assert "KAHLE_ANSWER_RETRY_TIMEOUTS: ${KAHLE_ANSWER_RETRY_TIMEOUTS:-}" in compose
+    assert "\nKAHLE_ANSWER_RETRY_TIMEOUTS=\n" in template
+
+
+def test_guard_shares_the_location_list():
+    assert _guard_module()._KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS

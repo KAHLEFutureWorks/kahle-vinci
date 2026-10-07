@@ -1742,6 +1742,13 @@ def _call_rag_chat_tool(
         return ""
 
 
+# Mirrors the harness location list; test_kahle_harness_phase3c pins all copies.
+_KAHLE_LOCATIONS = (
+    "Hannover", "Wunstorf", "Wedemark", "Walsrode",
+    "Neustadt", "Nienburg", "Stadthagen",
+)
+
+
 def _expand_customer_lock_followup(
     query: str, messages: list[dict[str, Any]],
 ) -> str:
@@ -1782,10 +1789,7 @@ def _expand_customer_lock_followup(
     location = next(
         (
             name
-            for name in (
-                "Hannover", "Wunstorf", "Wedemark", "Walsrode",
-                "Neustadt", "Nienburg", "Stadthagen",
-            )
+            for name in _KAHLE_LOCATIONS
             if re.search(rf"\b{fold(name)}\b", folded)
         ),
         "",

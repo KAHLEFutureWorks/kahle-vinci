@@ -259,3 +259,86 @@ Implications:
 - Dokumentierte Kontaktwege und aktuelle Personio-Kontakte werden in gemischten
   Antworten getrennt ausgewiesen. Explizit verlangte E-Mail-Adressen oder
   Telefonnummern benötigen weiterhin einen exakten freigegebenen Wert.
+- Ein Kontaktwert, der wörtlich in einer belegten, redaktionellen RAG-Aussage
+  der aktuellen Anfrage steht, gilt als an deren Quelle gebunden und darf mit
+  dieser Quelle genannt werden (Nutzerentscheidung 2026-09-30). Aussagen, die
+  eine Person benennen, sind davon ausgenommen. Personio-Kontaktfelder werden
+  nur auf eine ausdrückliche Kontaktfrage genannt.
+
+## ADR-009: Knowledge answers are validated before delivery
+
+Status: Confirmed
+
+Decision:
+Antworten mit Evidenz aus `rag_chat` oder `personio_directory` werden vor der
+Auslieferung gegen den Antwortvertrag geprüft. Verstöße haben einen
+Schweregrad: `blocking` (unter anderem unbekannte Quellen-ID, fehlendes Zitat,
+ungebundener Kontakt oder Link, fehlende Pflichtabschnitte, fehlender
+Geltungsbereich) oder `advisory`. Bei einem blockierenden Verstoß folgt genau
+ein Korrekturaufruf ohne Tools mit derselben Evidenz und einer Zeitgrenze je
+Basismodell; scheitert auch er, wird eine neutrale Enthaltung ausgeliefert.
+`KAHLE_ANSWER_ENFORCEMENT` steuert das Verhalten: `observe` misst nur
+(Compose- und Produktions-Default), `enforce` puffert und korrigiert.
+
+Evidence:
+
+- `stack/open-webui-overrides/open_webui/utils/kahle_knowledge_harness.py`
+- `stack/open-webui-overrides/open_webui/utils/middleware.py`
+- `stack/docker-compose.yml`, `stack/docker-compose.local-edge.yml`,
+  `stack/env.production.template`
+- `stack/tests/test_kahle_harness_phase2.py`
+- `docs/superpowers/plans/2026-09-30-harness-phase2-answer-enforcement.md`
+
+Rationale:
+Prompt-Regeln allein halten die Modelle nicht zuverlässig an Quellen und
+Kontaktwerte. Eine deterministische Prüfung mit einem Korrekturversuch
+verhindert, dass ein blockierender Verstoß den Nutzer erreicht, ohne Antworten
+grundlos zu verwerfen.
+
+Implications:
+
+- Neue blockierende Prüfungen werden in `BLOCKING_VIOLATION_CODES` des Harness
+  und in `eval/harness/harness_eval.py` gemeinsam gepflegt.
+- Ein Wechsel der Produktion auf `enforce` ist eine ausdrückliche
+  Freigabeentscheidung und nicht Teil einer Codeänderung.
+- Die Zeitgrenzen des Korrekturaufrufs sind über
+  `KAHLE_ANSWER_RETRY_TIMEOUTS` je Basismodell-Präfix einstellbar.
+
+## ADR-010: A restrictive document scope is an evidence obligation
+
+Status: Confirmed
+
+Decision:
+Nennt eine belegte, redaktionelle Aussage einen einschränkenden
+Geltungsbereich (eine echte Teilmenge der KAHLE-Standorte), muss die Antwort
+diesen Geltungsbereich nennen. Gibt es einen typisierten Funktionskontakt,
+dessen Gültigkeitsfeld genau diese Standorte ausnimmt, muss die Antwort ihn als
+Weg für alle anderen Fälle nennen. Die Pflicht wird bei jeder Prüfung aus der
+Evidenz berechnet (`required_scope`, Verstoß `required_scope_missing`);
+Enthaltungen sind ausgenommen. Die Suche liefert dafür den
+Geltungsbereich-Abschnitt jedes gewählten Dokuments und den passenden
+Funktionskontakt. Fest eingebaute Prozess-, Standort- oder Kontakttexte für
+einzelne Dokumente sind nicht zulässig (Nutzerentscheidung 2026-10-05: Pflicht
+für alle Dokumente mit einschränkendem Geltungsbereich).
+
+Evidence:
+
+- `stack/open-webui-overrides/open_webui/utils/kahle_knowledge_harness.py`
+- `stack/open-webui-tools/rag_chat_hybrid_tool.py`
+- `stack/open-webui-tools/hybrid_retrieval.py`
+- `stack/tests/test_kahle_harness_phase3c.py`
+- `docs/superpowers/plans/2026-10-05-harness-phase3c-scope-evidence-and-opt-out-rollback.md`
+
+Rationale:
+Der frühere Werbewiderspruch-Sonderpfad nannte Standorte und Kontakt aus
+festem Code. Die allgemeine Regel leitet beides aus den Dokumenten ab und gilt
+damit auch für künftige standortgebundene Prozesse.
+
+Implications:
+
+- Die KAHLE-Standortliste existiert in Harness, Tool, Hybridsuche und Guard;
+  Tests koppeln die Kopien. Ein neuer Standort wird in allen Kopien zugleich
+  ergänzt.
+- Ein Dokument mit einschränkendem Geltungsbereich braucht für den Weg „alle
+  anderen Standorte“ einen typisierten Funktionskontakt mit passendem
+  Gültigkeitsfeld.
