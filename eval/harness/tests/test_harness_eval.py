@@ -189,6 +189,7 @@ def test_score_answer_keeps_only_blocking_codes_and_no_text():
 
     assert score == {
         "blocking_violations": ["unknown_source_id"],
+        "attempt_blocking_violations": ["unknown_source_id"],
         "validation_status": "retry_required",
         "abstained": True,
         "abstention_correct": True,
@@ -273,3 +274,18 @@ def test_score_and_summary_count_evidence_probes():
 
     assert [row["evidence_probe"] for row in rows] == ["bound", "released", ""]
     assert (summary["probe_bound"], summary["probe_released"]) == (1, 1)
+
+
+def test_abstention_counts_as_delivered_without_violation():
+    """Phase-2 acceptance: an abstention is delivered without a violation."""
+    message = _message(text="Dazu habe ich keine verlässliche freigegebene Information.",
+                       violations=("citation_missing",), status="retry_required")
+    message["kahle_harness_metrics"].update({"retry_count": 1, "fallback_used": True, "delivery_status": "abstained"})
+
+    score = score_answer(_case(), message)
+    summary = summarize_answers([{"model": "m", **score, "wall_ms": 10}])["m"]
+
+    assert score["blocking_violations"] == []
+    assert score["attempt_blocking_violations"] == ["citation_missing"]
+    assert summary["blocking_violation_rate"] == 0.0
+    assert summary["fallback_rate"] == 1.0

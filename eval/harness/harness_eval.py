@@ -230,8 +230,11 @@ def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
     abstained = bool(_ABSTENTION.search(text))
     metrics = message.get("kahle_harness_metrics") or {}
     latency = metrics.get("latency_ms")
+    # A fallback abstention replaces the failed draft: delivered without violation.
+    delivered_blocking = [] if metrics.get("fallback_used") else blocking
     return {
-        "blocking_violations": blocking,
+        "blocking_violations": delivered_blocking,
+        "attempt_blocking_violations": blocking,
         "validation_status": str(attempt.get("status") or "not_run"),
         "abstained": abstained,
         "abstention_correct": (
