@@ -892,11 +892,14 @@ def _is_substantive_file_content(content: str) -> bool:
     return True
 
 
+# Mirrors the orchestrator's prefixes; test_kahle_harness_phase3c pins both.
+_BLOCKED_NOTICE_PREFIXES = ("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr")
+
+
 def _blocked_export_source(content: str) -> bool:
-    return bool(re.search(
-        r"(?im)^\s*(?:ich kann die websuche nicht ausf|ausgabe wurde aus sicherheitsgr)",
-        content or "",
-    ))
+    """Any line of the source starts with a blocked web-search notice."""
+    pattern = "|".join(re.escape(prefix) for prefix in _BLOCKED_NOTICE_PREFIXES)
+    return bool(re.search(rf"(?im)^\s*(?:{pattern})", content or ""))
 
 
 def _write_file_response(message: dict[str, Any], source_content: str, output_format: str, request_text: str, messages: list[dict[str, Any]] | None = None) -> bool:

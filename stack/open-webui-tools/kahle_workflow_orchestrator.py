@@ -29,6 +29,14 @@ except Exception:  # pragma: no cover - local test fallback without OpenWebUI de
         return default
 
 
+# Notices of a blocked web search; the guard pins the same prefixes.
+_BLOCKED_NOTICE_PREFIXES = ("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr")
+
+
+def _is_blocked_notice(text: str) -> bool:
+    return str(text or "").strip().lower().startswith(_BLOCKED_NOTICE_PREFIXES)
+
+
 def _env(*names: str, default: str = "") -> str:
     for name in names:
         value = os.environ.get(name)
@@ -88,7 +96,7 @@ def _looks_like_non_result_assistant(text: str) -> bool:
         return True
     if _looks_like_generated_file_claim(lower):
         return True
-    if lower.startswith(("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr")):
+    if _is_blocked_notice(lower):
         return True
     if any(
         marker in lower
@@ -138,7 +146,7 @@ def _latest_chat_message(chat_id: str | None, role: str, *, require_result: bool
             continue
         if require_result and role == "assistant" and _looks_like_non_result_assistant(text):
             lower = text.lower()
-            if lower.startswith(("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr")) or any(
+            if _is_blocked_notice(lower) or any(
                 marker in lower for marker in ("benötige ich weitere details", "benoetige ich weitere details", "bitte präzisiere", "bitte praezisiere")
             ):
                 return ""
@@ -651,7 +659,7 @@ def parse_web_result(raw: str) -> dict[str, Any]:
     sources = data.get("sources") if isinstance(data.get("sources"), list) else []
     top_links = data.get("topLinks") if isinstance(data.get("topLinks"), list) else []
     ok = bool(data.get("ok", False))
-    blocked_notice = str(summary).strip().lower().startswith(("ich kann die websuche nicht ausf", "ausgabe wurde aus sicherheitsgr"))
+    blocked_notice = _is_blocked_notice(summary)
     if blocked_notice:
         ok = False
     if not ok and not blocked_notice and (str(summary).strip() or sources or top_links) and not data.get("error") and not data.get("blocked"):

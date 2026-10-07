@@ -642,3 +642,39 @@ def test_tool_uses_the_retrieval_scope_helpers_of_its_bundle():
     assert retrieval.named_kahle_locations("Wunstorf, dann Hannover") == ("Wunstorf", "Hannover")
     assert retrieval.scope_excludes_locations("Alle KAHLE-Standorte außer Hannover")
     assert not retrieval.scope_excludes_locations("gruppenweit")
+
+
+ORCHESTRATOR_PATH = ROOT / "open-webui-tools" / "kahle_workflow_orchestrator.py"
+
+
+def _orchestrator_module():
+    sys.path.insert(0, str(ORCHESTRATOR_PATH.parent))
+    try:
+        spec = importlib.util.spec_from_file_location("orchestrator_phase3c", ORCHESTRATOR_PATH)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(ORCHESTRATOR_PATH.parent))
+    return module
+
+
+def test_blocked_search_notice_markers_live_in_one_place_per_unit():
+    source = ORCHESTRATOR_PATH.read_text(encoding="utf-8")
+    orchestrator, guard = _orchestrator_module(), _guard_module()
+
+    assert source.count('"ich kann die websuche nicht ausf"') == 1
+    assert orchestrator._BLOCKED_NOTICE_PREFIXES == guard._BLOCKED_NOTICE_PREFIXES
+    assert orchestrator._is_blocked_notice("Ich kann die Websuche nicht ausführen.")
+    assert not orchestrator._is_blocked_notice("Hier ist die Zusammenfassung.")
+    assert guard._blocked_export_source("Einleitung\nAusgabe wurde aus Sicherheitsgründen blockiert.")
+
+
+@pytest.mark.parametrize("content", [
+    "# Werbewiderspruch in Vaudis\nText",
+    "**Ablauf der Dialogannahme**\nText",
+    "Kurze Zusammenfassung ohne Punkt\nText",
+    "Ein Satz mit Punkt.\nText",
+    "| Tabelle |\n",
+])
+def test_export_titles_agree_between_orchestrator_and_guard(content):
+    assert _orchestrator_module()._previous_result_title(content) == _guard_module()._export_title_from_content(content)
