@@ -658,14 +658,28 @@ KAHLE_LOCATIONS = (
 _EXPLICIT_SCOPE_STATEMENT = re.compile(
     r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschlie\w*|lediglich)\s+fur\b"
 )
+_SCOPE_EXCLUSION = re.compile(r"\b(?:ausser|auer|ausgenommen|alle\s+anderen?)\b")
+def _fold_scope_text(text: str) -> str:
+    return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().casefold()
+def is_scope_statement(text: str) -> bool:
+    """"Geltungsbereich ..." or "gilt nur / ausschließlich für ..."."""
+    return bool(_EXPLICIT_SCOPE_STATEMENT.search(_fold_scope_text(text)))
+def named_kahle_locations(text: str) -> tuple[str, ...]:
+    """KAHLE locations named in ``text``, in order of appearance."""
+    folded = _fold_scope_text(text)
+    hits = []
+    for name in KAHLE_LOCATIONS:
+        match = re.search(rf"\b{re.escape(name.casefold())}\b", folded)
+        if match:
+            hits.append((match.start(), name))
+    return tuple(name for _position, name in sorted(hits))
+def scope_excludes_locations(text: str) -> bool:
+    """A contact scope phrased as an exclusion ("außer", "alle anderen")."""
+    return bool(_SCOPE_EXCLUSION.search(_fold_scope_text(text)))
 def _has_restrictive_scope(text: str) -> bool:
     """True when a scope statement names a strict subset of the KAHLE locations."""
-    folded = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().casefold()
-    for line in re.split(r"(?<=[.!?])\s+|\n+", folded):
-        if not _EXPLICIT_SCOPE_STATEMENT.search(line):
-            continue
-        named = [name for name in KAHLE_LOCATIONS if re.search(rf"\b{name.casefold()}\b", line)]
-        if 0 < len(named) < len(KAHLE_LOCATIONS):
+    for line in re.split(r"(?<=[.!?])\s+|\n+", str(text or "")):
+        if is_scope_statement(line) and 0 < len(named_kahle_locations(line)) < len(KAHLE_LOCATIONS):
             return True
     return False
 def restrictive_scope_companions(
@@ -1847,30 +1861,6 @@ def _fold_evidence_text(value):
         .replace("ä", "ae").replace("ö", "oe")
         .replace("ü", "ue").replace("ß", "ss")
     )
-_KAHLE_LOCATIONS = (
-    "Hannover",
-    "Wunstorf",
-    "Wedemark",
-    "Walsrode",
-    "Neustadt",
-    "Nienburg",
-    "Stadthagen",
-)
-_SCOPE_STATEMENT = re.compile(
-    r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschliesslich|lediglich)\s+fuer\b"
-)
-_SCOPE_EXCLUSION = re.compile(r"\b(?:ausser|ausgenommen|alle\s+anderen?)\b")
-def _named_kahle_locations(text):
-    """KAHLE locations named in ``text``, in order of appearance."""
-    folded = _fold_evidence_text(text)
-    hits = []
-    for name in _KAHLE_LOCATIONS:
-        match = re.search(rf"\b{re.escape(name.casefold())}\b", folded)
-        if match:
-            hits.append((match.start(), name))
-    return tuple(name for _position, name in sorted(hits))
-def _is_scope_statement(text):
-    return bool(_SCOPE_STATEMENT.search(_fold_evidence_text(text)))
 def _restrictive_scope_locations(chunks):
     """Locations of the first scope statement that names a strict subset of KAHLE."""
     for chunk in chunks or ():
@@ -1878,10 +1868,10 @@ def _restrictive_scope_locations(chunks):
             continue
         passage = str(getattr(chunk, "parent_content", "") or "")
         for line in re.split(r"(?<=[.!?])\s+|\n+", passage):
-            if not _is_scope_statement(line):
+            if not is_scope_statement(line):
                 continue
-            locations = _named_kahle_locations(line)
-            if locations and len(locations) < len(_KAHLE_LOCATIONS):
+            locations = named_kahle_locations(line)
+            if locations and len(locations) < len(KAHLE_LOCATIONS):
                 return locations
     return ()
 def _exception_contact_chunks(chunks, locations):
@@ -1895,8 +1885,8 @@ def _exception_contact_chunks(chunks, locations):
         scope = str(contact.get("scope") or "")
         if (
             wanted
-            and _SCOPE_EXCLUSION.search(_fold_evidence_text(scope))
-            and frozenset(_named_kahle_locations(scope)) == wanted
+            and scope_excludes_locations(scope)
+            and frozenset(named_kahle_locations(scope)) == wanted
         ):
             selected.append(chunk)
     return selected
@@ -2021,7 +2011,7 @@ def _claim_evidence_spans(query, passage, *, full_procedure=False):
     best = max(score for score, _position, _sentence in scored)
     # A documented scope bounds every statement of its passage, even when the
     # passage shares no term with the question.
-    scope_sentences = [sentence for sentence in sentences if _is_scope_statement(sentence)]
+    scope_sentences = [sentence for sentence in sentences if is_scope_statement(sentence)]
     if best <= 0:
         return scope_sentences
     selected = [

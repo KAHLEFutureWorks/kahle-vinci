@@ -221,8 +221,6 @@ def load_tool_helpers(*names):
     dependencies = set()
     if set(names).intersection({"_filter_evidence_chunks", "_claim_evidence_spans"}):
         dependencies.add("_fold_evidence_text")
-    if "_claim_evidence_spans" in names:
-        dependencies.add("_is_scope_statement")
     if "_rag_final_response_instruction" in names:
         dependencies.add("_fold_evidence_text")
     nodes = [
@@ -232,9 +230,8 @@ def load_tool_helpers(*names):
     ]
     namespace = {
         "re": re,
-        "_SCOPE_STATEMENT": re.compile(
-            r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschliesslich|lediglich)\s+fuer\b"
-        ),
+        # The bundle inlines hybrid_retrieval; its helpers are in scope.
+        "is_scope_statement": module.is_scope_statement,
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source_path), "exec"), namespace)
     return tuple(namespace[name] for name in names)

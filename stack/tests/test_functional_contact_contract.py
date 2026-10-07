@@ -219,3 +219,24 @@ def test_contract_override_mount_is_read_only():
     matching = [mount for mount in mounts if isinstance(mount, str) and f":{target}:" in mount]
     assert len(matching) == 1
     assert matching[0].endswith(":" + target + ":ro")
+
+
+def test_bundle_strips_imports_of_every_embedded_module(tmp_path, monkeypatch):
+    builder = load_builder()
+    (tmp_path / "shared_helpers.py").write_text(
+        "def shout(text):\n    return text.upper()\n", encoding="utf-8",
+    )
+    (tmp_path / "example_tool.py").write_text(
+        "from shared_helpers import shout\n"
+        "import json\n"
+        "def answer(text):\n    return json.dumps(shout(text))\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(builder, "TOOLS_DIR", tmp_path)
+
+    bundle = builder.build("example_tool.py", ("shared_helpers.py",))
+
+    assert "from shared_helpers import" not in bundle
+    assert "import json" in bundle
+    namespace = {"__name__": "isolated_tool"}
+    exec(compile(bundle, "isolated_tool", "exec"), namespace)
+    assert namespace["answer"]("ok") == '"OK"'

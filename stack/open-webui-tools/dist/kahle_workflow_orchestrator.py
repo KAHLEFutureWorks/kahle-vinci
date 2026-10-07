@@ -661,14 +661,28 @@ KAHLE_LOCATIONS = (
 _EXPLICIT_SCOPE_STATEMENT = re.compile(
     r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschlie\w*|lediglich)\s+fur\b"
 )
+_SCOPE_EXCLUSION = re.compile(r"\b(?:ausser|auer|ausgenommen|alle\s+anderen?)\b")
+def _fold_scope_text(text: str) -> str:
+    return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().casefold()
+def is_scope_statement(text: str) -> bool:
+    """"Geltungsbereich ..." or "gilt nur / ausschließlich für ..."."""
+    return bool(_EXPLICIT_SCOPE_STATEMENT.search(_fold_scope_text(text)))
+def named_kahle_locations(text: str) -> tuple[str, ...]:
+    """KAHLE locations named in ``text``, in order of appearance."""
+    folded = _fold_scope_text(text)
+    hits = []
+    for name in KAHLE_LOCATIONS:
+        match = re.search(rf"\b{re.escape(name.casefold())}\b", folded)
+        if match:
+            hits.append((match.start(), name))
+    return tuple(name for _position, name in sorted(hits))
+def scope_excludes_locations(text: str) -> bool:
+    """A contact scope phrased as an exclusion ("außer", "alle anderen")."""
+    return bool(_SCOPE_EXCLUSION.search(_fold_scope_text(text)))
 def _has_restrictive_scope(text: str) -> bool:
     """True when a scope statement names a strict subset of the KAHLE locations."""
-    folded = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().casefold()
-    for line in re.split(r"(?<=[.!?])\s+|\n+", folded):
-        if not _EXPLICIT_SCOPE_STATEMENT.search(line):
-            continue
-        named = [name for name in KAHLE_LOCATIONS if re.search(rf"\b{name.casefold()}\b", line)]
-        if 0 < len(named) < len(KAHLE_LOCATIONS):
+    for line in re.split(r"(?<=[.!?])\s+|\n+", str(text or "")):
+        if is_scope_statement(line) and 0 < len(named_kahle_locations(line)) < len(KAHLE_LOCATIONS):
             return True
     return False
 def restrictive_scope_companions(

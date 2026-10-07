@@ -41,8 +41,14 @@ GENERATED_NOTE = (
 )
 
 
-def split_source(path: Path) -> tuple[str | None, list[str], str]:
-    """Zerlegt eine Datei in Docstring, Importzeilen und uebrigen Rumpf."""
+def split_source(
+    path: Path, embedded: frozenset[str] = frozenset(),
+) -> tuple[str | None, list[str], str]:
+    """Zerlegt eine Datei in Docstring, Importzeilen und uebrigen Rumpf.
+
+    Importe aus Modulen, die in denselben Bundle eingebettet werden
+    (``embedded``), entfallen; ihre Namen stehen im Bundle bereits bereit.
+    """
     source = path.read_text(encoding="utf-8")
     lines = source.splitlines(keepends=True)
     tree = ast.parse(source)
@@ -62,8 +68,10 @@ def split_source(path: Path) -> tuple[str | None, list[str], str]:
         for decorator in getattr(node, "decorator_list", []):
             first = min(first, decorator.lineno)
         segment = "".join(lines[first - 1:node.end_lineno])
-        # This one module is embedded in every bundle. Other imports remain intact.
-        if isinstance(node, ast.ImportFrom) and node.module == "functional_contact_contract":
+        # Embedded modules are part of the bundle. Other imports remain intact.
+        if isinstance(node, ast.ImportFrom) and (
+            node.module == "functional_contact_contract" or node.module in embedded
+        ):
             if node.level or any(alias.asname for alias in node.names):
                 raise ValueError("Embedded contract imports must be absolute and unaliased")
             continue
@@ -75,11 +83,12 @@ def split_source(path: Path) -> tuple[str | None, list[str], str]:
 
 
 def build(tool_name: str, shared: tuple[str, ...]) -> str:
-    docstring, imports, tool_body = split_source(TOOLS_DIR / tool_name)
+    embedded = frozenset(Path(module).stem for module in shared)
+    docstring, imports, tool_body = split_source(TOOLS_DIR / tool_name, embedded)
 
     shared_bodies, all_imports = [], list(imports)
     for module in shared:
-        _, module_imports, module_body = split_source(TOOLS_DIR / module)
+        _, module_imports, module_body = split_source(TOOLS_DIR / module, embedded)
         all_imports = module_imports + all_imports
         shared_bodies.append(module_body)
 

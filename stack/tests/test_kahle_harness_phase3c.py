@@ -316,7 +316,7 @@ def load_tool():
 
 
 def test_tool_and_harness_share_the_location_list():
-    assert load_tool()._KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
+    assert load_tool().KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
 
 
 def test_scope_sentences_always_reach_the_claims():
@@ -503,7 +503,7 @@ def test_tool_texts_name_no_locations_or_contacts():
     clarification = tool._clarification_for_query("Wie sperre ich einen Kunden bei KAHLE?")
 
     for text in (instruction, clarification):
-        assert not tool._named_kahle_locations(text)
+        assert not tool.named_kahle_locations(text)
     assert "Werbung und Befragungen" in clarification
     assert "allgemeine Kundensperre in Vaudis" in clarification
 
@@ -627,3 +627,18 @@ def test_middleware_parses_sources_json_once():
     assert [s["number"] for s in namespace["_extract_kahle_rag_citation_sources"](result)] == [1, 2]
     assert namespace["_extract_kahle_rag_sources"]("no marker") == []
     assert namespace["_extract_kahle_rag_citation_sources"]("SOURCES_JSON: [kaputt\n") == []
+
+
+def test_tool_uses_the_retrieval_scope_helpers_of_its_bundle():
+    tool_source = TOOL_PATH.read_text(encoding="utf-8")
+
+    for own in ("_KAHLE_LOCATIONS = (", "_SCOPE_STATEMENT = re.compile", "_SCOPE_EXCLUSION = re.compile",
+                "def _named_kahle_locations", "def _is_scope_statement"):
+        assert own not in tool_source, own
+    retrieval = load_retrieval()
+    assert retrieval.is_scope_statement("| Geltungsbereich | Standorte Hannover und Wunstorf |")
+    assert retrieval.is_scope_statement("Diese Anleitung gilt ausschließlich für Walsrode.")
+    assert not retrieval.is_scope_statement("In Hannover gibt es eine Annahme.")
+    assert retrieval.named_kahle_locations("Wunstorf, dann Hannover") == ("Wunstorf", "Hannover")
+    assert retrieval.scope_excludes_locations("Alle KAHLE-Standorte außer Hannover")
+    assert not retrieval.scope_excludes_locations("gruppenweit")
