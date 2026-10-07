@@ -191,3 +191,53 @@ $P -m pytest eval/harness/tests -q -p no:cacheprovider   # Ausgang: 41 passed
 - **„am Standort Hannover“** findet das Standortdokument statt der Prozessbeschreibung (allgemeine Standortlogik der Suche, eigener Folgeschritt).
 - **Pflicht gilt für alle 17 Dokumente.** Die Geltungsbereich-Pflicht greift nicht nur beim Werbewiderspruch, sondern bei jedem Dokument mit einschränkendem Geltungsbereich. Das ist gewollt, kann aber für dort belegte Antworten zusätzliche Korrekturaufrufe auslösen. Task 3 misst `procedure` und `internal_knowledge` deshalb mit.
 - **Korpuslücken** (HU-Anmeldung, Rechnungsstorno, Garantieanfrage) bleiben Inhaltsarbeit.
+
+## Ergebnis und Abschluss (06./07.10.)
+
+**Umgesetzt:**
+
+| Commit | Inhalt |
+| --- | --- |
+| `529ef5d`, `cb4f3d6`, `11fc0dd` | Geltungsbereich erkennen, im Vertrag führen, vor Auslieferung prüfen (`required_scope_missing`) |
+| `426e29f` | `rag_chat`: Geltungsbereich-Sätze immer in den Aussagen, Ausnahmekontakt per zweiter, auf Funktionskontakte beschränkter Suche |
+| `e0e807c` | Hybridsuche: einschränkender Geltungsbereich-Abschnitt jedes gewählten Dokuments für jede Frage |
+| `c3c3c6d` | Rückbau Harness, Middleware, Guard |
+| `493967f` | Kundensperren-Rückfrage: Middleware nutzt die Harness-Funktion, Guard per Tabellentest gleich |
+| `b344193` | Tool-Sonderfilter entfernt, Rückfrage ohne Standortnamen, allgemeine Geltungsbereich-Anweisung |
+| `29069bb` | Geltungsbereich-Sätze auch aus Abschnitten ohne Überschneidung mit der Frage |
+
+**Gates:**
+
+| Gate | Inhalt (ohne Hannover) | Routing | Ausgelieferte blockierende Verstöße | Walsrode |
+| --- | --- | --- | --- | --- |
+| Task 4b | 15 von 15 | wie 3b | 0 | 893–1.246 Zeichen |
+| Task 6 (nach `29069bb`) | 15 von 15 | wie 3b | 0 | 791–1.428 Zeichen |
+
+**Full Verify:** 13/13 bestanden.
+
+**Voller Laufzeit-Eval** (`eval/harness/results/2026-10-06-runtime-phase3c.json`, ohne Sonderpfad):
+
+| Modell | korrekt | Phase 3b | Fehler | ausgelieferte blockierende Verstöße | Korrekturquote |
+| --- | --- | --- | --- | --- | --- |
+| Mistral | 99/106 | 98 | 0 | 0 | 17 % |
+| gpt-oss | 97/106 | 97 | 0 | 0 | 7 % |
+| Qwen | 96/106 | 98 | 2 (`RuntimeError`, beide „Dialogannahme“) | 0 | 9 % |
+
+- Qwen ohne die beiden Fehler: −1 „Leasingrückläufer“ (zusätzlich Personio), +1 „Übergabe“.
+
+**Abnahme:**
+
+| Kriterium | Ergebnis |
+| --- | --- |
+| Keine fest eingebauten Werbewiderspruch-Texte, Marker, Standortlisten in Harness, Middleware, Guard, Tool | erfüllt für Sonderpfad, Standortvertrag, Tool-Filter und Anweisungen |
+| Inhalts-Probe ≥ 15 von 18 (Hannover getrennt) | erfüllt, 15 von 15 |
+| Routing ±2, keine ausgelieferten blockierenden Verstöße | erfüllt |
+| Walsrode deutlich kürzer | erfüllt |
+
+**Offen:**
+
+- Die beiden Qwen-`RuntimeError` sind nicht diagnostiziert, Docker fiel vor der Log-Prüfung aus.
+- Die Inhalts-Probe auf den Qwen-Chats des vollen Laufs steht aus.
+- Werbewiderspruch-Begriffe bleiben im Rückfrage-Erkenner `_clarification_for_query` und in der Kundensperren-Rückfrage (Harness/Guard), weil sie zwei echte Prozesse unterscheiden.
+- In `_filter_evidence_chunks` bleiben zwei frühere Fachfilter (Systemlandkarte, allgemeine Kundensperre).
+- Mistrals Korrekturquote stieg von 9 % (Phase 3b) auf 17 %. Wie sich das auf die Codes verteilt, ist nicht ausgewertet.

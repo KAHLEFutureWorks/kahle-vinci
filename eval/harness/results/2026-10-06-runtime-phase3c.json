@@ -1,0 +1,387 @@
+{
+  "schema_version": "kahle.harness-eval.v1",
+  "mode": "runtime",
+  "generated_at": "2026-10-06T12:07:21+00:00",
+  "base_url": "http://localhost:3004",
+  "models": {
+    "vinci-2-clone-clone-clone": {
+      "base_model_id": "mistralai/Mistral-Small-24B-Instruct",
+      "tool_ids": [
+        "personio_directory",
+        "rag_chat",
+        "kahle_tasks",
+        "kahle_workflow",
+        "zeit_berechnung",
+        "owui_productivity",
+        "safe_webcaller",
+        "server:doc-worker"
+      ]
+    },
+    "kahle-vinci-thinking": {
+      "base_model_id": "openai/gpt-oss-120b",
+      "tool_ids": [
+        "personio_directory",
+        "rag_chat",
+        "kahle_tasks",
+        "kahle_workflow",
+        "zeit_berechnung",
+        "owui_productivity",
+        "safe_webcaller",
+        "server:doc-worker"
+      ]
+    },
+    "kahle-vinci-max-thinking": {
+      "base_model_id": "Qwen/Qwen3.5-397B-A17B",
+      "tool_ids": [
+        "personio_directory",
+        "rag_chat",
+        "kahle_tasks",
+        "kahle_workflow",
+        "safe_webcaller",
+        "zeit_berechnung",
+        "owui_productivity",
+        "server:doc-worker"
+      ]
+    }
+  },
+  "case_count": 106,
+  "assembled_from": "Drei Einzelläufe je Modell am 06.10. (Zeitlimit für Hintergrundaufgaben)",
+  "routing": {
+    "kahle-vinci-max-thinking": {
+      "total": 106,
+      "correct": 96,
+      "accuracy": 0.9057,
+      "outcomes": {
+        "correct": 96,
+        "error": 2,
+        "extra_source": 2,
+        "missing_source": 4,
+        "wrong_source": 2
+      },
+      "by_category": {
+        "abbreviation": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "followup": {
+          "total": 6,
+          "correct": 5,
+          "accuracy": 0.8333
+        },
+        "functional_contact": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "internal_knowledge": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "no_knowledge_tool": {
+          "total": 14,
+          "correct": 14,
+          "accuracy": 1.0
+        },
+        "onboarding_people": {
+          "total": 3,
+          "correct": 3,
+          "accuracy": 1.0
+        },
+        "onboarding_process": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        },
+        "organization_contact": {
+          "total": 9,
+          "correct": 9,
+          "accuracy": 1.0
+        },
+        "person_process": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "personio_list": {
+          "total": 8,
+          "correct": 6,
+          "accuracy": 0.75
+        },
+        "personio_person": {
+          "total": 8,
+          "correct": 8,
+          "accuracy": 1.0
+        },
+        "procedure": {
+          "total": 16,
+          "correct": 10,
+          "accuracy": 0.625
+        },
+        "responsibility": {
+          "total": 8,
+          "correct": 7,
+          "accuracy": 0.875
+        },
+        "scope_location": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "supervisor": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "unanswerable": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        }
+      },
+      "procedural_checked": 0,
+      "procedural_accuracy": 0.0
+    },
+    "kahle-vinci-thinking": {
+      "total": 106,
+      "correct": 97,
+      "accuracy": 0.9151,
+      "outcomes": {
+        "correct": 97,
+        "missing_source": 7,
+        "wrong_source": 2
+      },
+      "by_category": {
+        "abbreviation": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "followup": {
+          "total": 6,
+          "correct": 5,
+          "accuracy": 0.8333
+        },
+        "functional_contact": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "internal_knowledge": {
+          "total": 6,
+          "correct": 5,
+          "accuracy": 0.8333
+        },
+        "no_knowledge_tool": {
+          "total": 14,
+          "correct": 14,
+          "accuracy": 1.0
+        },
+        "onboarding_people": {
+          "total": 3,
+          "correct": 3,
+          "accuracy": 1.0
+        },
+        "onboarding_process": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        },
+        "organization_contact": {
+          "total": 9,
+          "correct": 9,
+          "accuracy": 1.0
+        },
+        "person_process": {
+          "total": 4,
+          "correct": 3,
+          "accuracy": 0.75
+        },
+        "personio_list": {
+          "total": 8,
+          "correct": 6,
+          "accuracy": 0.75
+        },
+        "personio_person": {
+          "total": 8,
+          "correct": 8,
+          "accuracy": 1.0
+        },
+        "procedure": {
+          "total": 16,
+          "correct": 12,
+          "accuracy": 0.75
+        },
+        "responsibility": {
+          "total": 8,
+          "correct": 8,
+          "accuracy": 1.0
+        },
+        "scope_location": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "supervisor": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "unanswerable": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        }
+      },
+      "procedural_checked": 0,
+      "procedural_accuracy": 0.0
+    },
+    "vinci-2-clone-clone-clone": {
+      "total": 106,
+      "correct": 99,
+      "accuracy": 0.934,
+      "outcomes": {
+        "correct": 99,
+        "missing_source": 5,
+        "wrong_source": 2
+      },
+      "by_category": {
+        "abbreviation": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "followup": {
+          "total": 6,
+          "correct": 5,
+          "accuracy": 0.8333
+        },
+        "functional_contact": {
+          "total": 4,
+          "correct": 4,
+          "accuracy": 1.0
+        },
+        "internal_knowledge": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "no_knowledge_tool": {
+          "total": 14,
+          "correct": 14,
+          "accuracy": 1.0
+        },
+        "onboarding_people": {
+          "total": 3,
+          "correct": 3,
+          "accuracy": 1.0
+        },
+        "onboarding_process": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        },
+        "organization_contact": {
+          "total": 9,
+          "correct": 9,
+          "accuracy": 1.0
+        },
+        "person_process": {
+          "total": 4,
+          "correct": 3,
+          "accuracy": 0.75
+        },
+        "personio_list": {
+          "total": 8,
+          "correct": 6,
+          "accuracy": 0.75
+        },
+        "personio_person": {
+          "total": 8,
+          "correct": 8,
+          "accuracy": 1.0
+        },
+        "procedure": {
+          "total": 16,
+          "correct": 13,
+          "accuracy": 0.8125
+        },
+        "responsibility": {
+          "total": 8,
+          "correct": 8,
+          "accuracy": 1.0
+        },
+        "scope_location": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "supervisor": {
+          "total": 6,
+          "correct": 6,
+          "accuracy": 1.0
+        },
+        "unanswerable": {
+          "total": 2,
+          "correct": 2,
+          "accuracy": 1.0
+        }
+      },
+      "procedural_checked": 0,
+      "procedural_accuracy": 0.0
+    }
+  },
+  "answers": {
+    "kahle-vinci-max-thinking": {
+      "total": 104,
+      "answer_present_rate": 1.0,
+      "blocking_violation_rate": 0.0,
+      "blocking_violation_codes": {},
+      "abstention_checked": 2,
+      "abstention_accuracy": 0.5,
+      "retry_rate": 0.0865,
+      "fallback_rate": 0.0,
+      "latency_p50_ms": 7578,
+      "latency_p95_ms": 25363,
+      "wall_p50_ms": 8328,
+      "wall_p95_ms": 25468,
+      "probe_bound": 6,
+      "probe_released": 8
+    },
+    "kahle-vinci-thinking": {
+      "total": 106,
+      "answer_present_rate": 1.0,
+      "blocking_violation_rate": 0.0094,
+      "blocking_violation_codes": {
+        "citation_missing": 1
+      },
+      "abstention_checked": 2,
+      "abstention_accuracy": 0.0,
+      "retry_rate": 0.066,
+      "fallback_rate": 0.0094,
+      "latency_p50_ms": 4293,
+      "latency_p95_ms": 9051,
+      "wall_p50_ms": 5109,
+      "wall_p95_ms": 11187,
+      "probe_bound": 8,
+      "probe_released": 8
+    },
+    "vinci-2-clone-clone-clone": {
+      "total": 106,
+      "answer_present_rate": 1.0,
+      "blocking_violation_rate": 0.0,
+      "blocking_violation_codes": {},
+      "abstention_checked": 2,
+      "abstention_accuracy": 0.5,
+      "retry_rate": 0.1698,
+      "fallback_rate": 0.0,
+      "latency_p50_ms": 5369,
+      "latency_p95_ms": 23451,
+      "wall_p50_ms": 6093,
+      "wall_p95_ms": 24343,
+      "probe_bound": 8,
+      "probe_released": 8
+    }
+  }
+}
