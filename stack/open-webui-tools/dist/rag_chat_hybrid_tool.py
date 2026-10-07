@@ -2295,7 +2295,10 @@ class Tools:
                         if chunk not in chunks
                     )
                 except Exception:
-                    pass
+                    # The main result stays valid; the gap is reported as a
+                    # technical code without query text or document content.
+                    _hybrid_record_event(self.valves.PORTAL_API_URL, internal_key, user_id, query,
+                                         False, 0, started_at, "scope_exception_lookup_failed")
         except Exception as exc:
             error_code = (
                 str(exc).strip()

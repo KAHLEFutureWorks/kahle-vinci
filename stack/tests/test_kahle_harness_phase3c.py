@@ -560,3 +560,12 @@ def test_retry_timeouts_reach_the_container():
 
 def test_guard_shares_the_location_list():
     assert _guard_module()._KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
+
+
+def test_failed_exception_lookup_reports_a_technical_error_code():
+    source = TOOL_PATH.read_text(encoding="utf-8")
+    block = source[source.index("exception_query = _scope_exception_query(scope_locations)"):]
+    block = block[:block.index("chunks = _filter_evidence_chunks") if "chunks = _filter_evidence_chunks" in block[:2000] else 2000]
+
+    assert "except Exception:\n                    pass" not in block
+    assert '"scope_exception_lookup_failed"' in block
