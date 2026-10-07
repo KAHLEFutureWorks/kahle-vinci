@@ -637,7 +637,7 @@ def _contact_values(evidence: EvidenceBundle) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _customer_lock_followup_query(
+def customer_lock_followup_query(
     current: str, prior_user: str, prior_assistant: str,
 ) -> str:
     """Resolve the two safe choices from the customer-lock clarification."""
@@ -692,13 +692,6 @@ def _customer_lock_followup_query(
         return f"{str(prior_user or '').strip()} Standort {location}"
 
     return ""
-
-
-def customer_lock_followup_query(
-    current: str, prior_user: str, prior_assistant: str,
-) -> str:
-    """Shared entry point for the middleware's clarification expansion."""
-    return _customer_lock_followup_query(current, prior_user, prior_assistant)
 
 
 def _requested_location(query: str) -> str:
@@ -1924,7 +1917,7 @@ def resolve_request(query: str, messages: list[dict[str, Any]]) -> ResolvedConte
     )
     ambiguities: tuple[str, ...] = ()
     clarification_question = ""
-    customer_lock_followup = _customer_lock_followup_query(
+    customer_lock_followup = customer_lock_followup_query(
         original, prior_user, prior_assistant,
     )
 

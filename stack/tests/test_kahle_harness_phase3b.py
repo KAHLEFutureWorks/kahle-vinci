@@ -255,7 +255,7 @@ def test_customer_lock_choice_resolves_to_a_natural_question():
     )
 
     def follow(reply):
-        return harness._customer_lock_followup_query(reply, prior_user, prior_assistant)
+        return harness.customer_lock_followup_query(reply, prior_user, prior_assistant)
 
     assert follow("Werbung") == "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
     assert follow("Werbung für Walsrode") == (
