@@ -1634,18 +1634,24 @@ def _latest_chat_message(chat_id: str | None, role: str, *, require_result: bool
         return text
     return ""
 def _looks_like_previous_result_request(text: str) -> bool:
+    """Does a file request refer to the previous result instead of new content?
+
+    Kept word for word in kahle_workflow_orchestrator and kahle_toolcall_guard;
+    test_kahle_harness_phase3c pins both on one phrase table.
+    """
     lower = (text or "").lower()
     asks_new_research = re.search(r"\b(recherchiere|suche|finde)\b", lower)
     negates_research = re.search(r"\b(?:recherchiere|suche|finde)\s+nicht\b|\bohne\s+(?:neue\s+)?recherche\b", lower)
     if asks_new_research and not negates_research:
         return False
-    if re.search(r"\b(?:vorherigen|vorherigem|letzten)\s+chat\b", lower) and re.search(r"\b(pdf|docx|word|datei)\b", lower):
+    file_word = re.search(r"\b(pdf|docx|word|markdown|datei|download)\b|-datei\b", lower)
+    if re.search(r"\b(?:vorherigen|vorherigem|letzten)\s+chat\b", lower) and file_word:
         return True
     if any(
         marker in lower
         for marker in (
             "aus dem ergebnis",
-            "das ergebnis als",
+            "das ergebnis",
             "ergebnis als",
             "aus dem vorherigen",
             "aus deiner antwort",
@@ -1653,7 +1659,7 @@ def _looks_like_previous_result_request(text: str) -> bool:
             "daraus eine datei",
             "daraus als",
             "aus dem text",
-            "die recherche als",
+            "die recherche",
             "recherche als",
             "rechercheergebnis",
         )
@@ -1661,14 +1667,11 @@ def _looks_like_previous_result_request(text: str) -> bool:
         return True
     if re.search(r"\b(erstelle)\b", lower) and not re.search(r"\b(das|dieses|diese|daraus)\b", lower):
         return False
-    if re.search(r"\b(das|dieses|diese|tabellen?)\b", lower) and re.search(
-        r"\b(pdf|docx|word|markdown|datei)\b", lower
-    ) and re.search(r"\b(nochmal|erneut|als|ausgeben|erstellen|speichern)\b", lower):
+    if re.search(r"\b(das|dieses|diese|daraus|tabellen?)\b", lower) and file_word and re.search(
+        r"\b(nochmal|erneut|als|ausgeben|gib|erstell\w*|speicher\w*|mach\w*|export\w*)\b", lower
+    ):
         return True
-    return bool(
-        re.search(r"\b(ergebnis|antwort|recherche)\b", lower)
-        and re.search(r"\b(pdf|docx|word|powerpoint|pptx|markdown|datei|download)\b", lower)
-    )
+    return bool(re.search(r"\b(ergebnis|antwort|recherche)\b", lower) and file_word)
 def _looks_like_direct_document_request(text: str, output_format: str) -> bool:
     """Detect file requests whose content is supplied by the user, not researched."""
     if output_format not in {"pdf", "docx", "md"}:

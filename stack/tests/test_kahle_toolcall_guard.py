@@ -2270,3 +2270,26 @@ if __name__ == "__main__":
     test_file_saved_source_payload_overrides_mutated_model_download_token()
     test_download_host_is_normalized_to_configured_vinci_host()
     print("kahle toolcall guard tests passed")
+
+
+def test_blocked_previous_result_never_exports_the_models_own_notice():
+    """Live finding: after a blocked web search the workflow reports
+    previous_result_unavailable; the guard must not turn that notice into a PDF."""
+    module = load_module()
+    original_create = module._create_file
+    try:
+        module._create_file = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no file"))
+        body = {"messages": [
+            {"role": "user", "content": "Recherchiere aktuelle News zum VW ID.7."},
+            {"role": "assistant", "content": "Ich kann die Websuche nicht ausführen. Bitte versuche es später erneut."},
+            {"role": "user", "content": "Speichere das bitte als PDF."},
+            {"role": "assistant", "content": (
+                "Die vorherige Antwort ist nicht eindeutig verfügbar. "
+                "Bitte gib an, welche Antwort exportiert werden soll."
+            )},
+        ]}
+        result = module.Filter().outlet(body)
+        assert "Kein vorheriger Ergebnistext" in result["messages"][-1]["content"]
+        assert "Download-Link" not in result["messages"][-1]["content"]
+    finally:
+        module._create_file = original_create

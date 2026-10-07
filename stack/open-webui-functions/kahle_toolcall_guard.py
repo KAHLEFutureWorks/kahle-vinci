@@ -826,8 +826,20 @@ def _blocked_safe_webcaller_notice(message: dict[str, Any]) -> str:
 
 
 def _is_previous_result_file_request(text: str) -> bool:
+    """Does a file request refer to the previous result instead of new content?
+
+    Kept word for word in kahle_workflow_orchestrator and kahle_toolcall_guard;
+    test_kahle_harness_phase3c pins both on one phrase table.
+    """
     lower = (text or "").lower()
-    return any(
+    asks_new_research = re.search(r"\b(recherchiere|suche|finde)\b", lower)
+    negates_research = re.search(r"\b(?:recherchiere|suche|finde)\s+nicht\b|\bohne\s+(?:neue\s+)?recherche\b", lower)
+    if asks_new_research and not negates_research:
+        return False
+    file_word = re.search(r"\b(pdf|docx|word|markdown|datei|download)\b|-datei\b", lower)
+    if re.search(r"\b(?:vorherigen|vorherigem|letzten)\s+chat\b", lower) and file_word:
+        return True
+    if any(
         marker in lower
         for marker in (
             "aus dem ergebnis",
@@ -836,11 +848,22 @@ def _is_previous_result_file_request(text: str) -> bool:
             "aus dem vorherigen",
             "aus deiner antwort",
             "vorherige antwort",
-            "daraus",
+            "daraus eine datei",
+            "daraus als",
+            "aus dem text",
             "die recherche",
+            "recherche als",
             "rechercheergebnis",
         )
-    )
+    ):
+        return True
+    if re.search(r"\b(erstelle)\b", lower) and not re.search(r"\b(das|dieses|diese|daraus)\b", lower):
+        return False
+    if re.search(r"\b(das|dieses|diese|daraus|tabellen?)\b", lower) and file_word and re.search(
+        r"\b(nochmal|erneut|als|ausgeben|gib|erstell\w*|speicher\w*|mach\w*|export\w*)\b", lower
+    ):
+        return True
+    return bool(re.search(r"\b(ergebnis|antwort|recherche)\b", lower) and file_word)
 
 
 def _strip_file_creation_promises(content: str) -> str:
@@ -2112,6 +2135,11 @@ class Filter:
                 previous_answer = _latest_previous_assistant(messages, index)
                 if previous_answer and (_is_previous_result_file_request(request_text) or _has_download_claim(content)):
                     source_content = previous_answer
+                if not source_content and _is_previous_result_file_request(request_text):
+                    # The current reply only reports that nothing is exportable;
+                    # it is never the document the user asked for.
+                    _set_message_content(message, "Tool-Fehler: Kein vorheriger Ergebnistext gefunden, aus dem eine Datei erstellt werden kann.")
+                    continue
                 if not source_content:
                     source_content = _strip_file_creation_promises(content)
                 if not _is_substantive_file_content(source_content):

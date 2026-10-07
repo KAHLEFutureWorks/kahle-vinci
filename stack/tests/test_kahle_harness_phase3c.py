@@ -687,3 +687,33 @@ def test_procedure_verbs_are_identical_in_harness_and_tool():
 
 def test_scope_statement_pattern_is_identical_in_harness_and_retrieval():
     assert load_harness()._SCOPE_STATEMENT.pattern == load_retrieval()._EXPLICIT_SCOPE_STATEMENT.pattern
+
+
+PREVIOUS_RESULT_PHRASES = {
+    "Speichere das bitte als PDF.": True,
+    "Erstelle mir daraus bitte eine PDF.": True,
+    "Kannst du mir das Ergebnis bitte als PDF ausgeben?": True,
+    "Gib mir die vorherige Antwort als Word-Datei.": True,
+    "Mach daraus eine Markdown-Datei.": True,
+    "Exportiere die Recherche als PDF.": True,
+    "Recherchiere aktuelle News zum VW ID.7 und speichere sie als PDF.": False,
+    "Erstelle mir eine PDF über Leasingrückläufer.": False,
+    "Wie lege ich einen Kunden in Vaudis an?": False,
+}
+
+
+@pytest.mark.parametrize("phrase, expected", PREVIOUS_RESULT_PHRASES.items())
+def test_previous_result_recognition_is_one_rule_in_orchestrator_and_guard(phrase, expected):
+    assert _orchestrator_module()._looks_like_previous_result_request(phrase) is expected
+    assert _guard_module()._is_previous_result_file_request(phrase) is expected
+
+
+def test_previous_result_rule_is_a_word_for_word_copy():
+    def body(path, name):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+        return ast.dump(ast.Module(body=node.body, type_ignores=[]))
+
+    assert body(ORCHESTRATOR_PATH, "_looks_like_previous_result_request") == body(
+        GUARD_PATH, "_is_previous_result_file_request"
+    )
