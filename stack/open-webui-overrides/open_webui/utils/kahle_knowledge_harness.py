@@ -2202,15 +2202,17 @@ def _supported_claims(context: str) -> tuple[str, ...]:
         lines = [line.strip() for line in block.splitlines() if line.strip()]
         if len(lines) > 1:
             text = " ".join(lines[1:])
-            if "sperrprozess-liste-" in _fold(text):
-                # Procedure chapters must retain every step, including the middle.
+            if _procedure_is_supported(text):
+                # Procedure passages must retain every step, including the middle.
                 claims.extend(part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip())
                 continue
             excerpts = [text[:500]]
             folded = _fold(text)
+            # Scope statements and contact values bound every statement of a
+            # passage, so they survive the excerpt limit wherever they stand.
             focus = re.compile(
-                r"datenschutz@kahle\.de|geltungsbereich|gilt\s+nur|gultig\s+fur|"
-                r"andere\w*\s+standort|kd-sperrprozess-liste-(?:han|wun|wed)"
+                r"[\w.+-]+@[\w-]+\.[\w.]+|geltungsbereich|gilt\s+nur|gultig\s+fur|"
+                r"andere\w*\s+standort"
             )
             last_end = 0
             for match in focus.finditer(folded):

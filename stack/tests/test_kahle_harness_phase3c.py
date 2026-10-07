@@ -569,3 +569,39 @@ def test_failed_exception_lookup_reports_a_technical_error_code():
 
     assert "except Exception:\n                    pass" not in block
     assert '"scope_exception_lookup_failed"' in block
+
+
+def test_harness_has_no_opt_out_markers_left():
+    source = HARNESS.read_text(encoding="utf-8").casefold()
+
+    for marker in ("sperrprozess", "datenschutz@kahle", "zufriedenheitsbefrag", "herstellerbefrag"):
+        assert marker not in source, marker
+
+
+def test_fallback_claims_keep_scope_and_any_contact_from_a_long_passage():
+    harness = load_harness()
+    context = (
+        "[1] Prozessbeschreibung\n"
+        + ("Ablaufbeschreibung ohne Kontakt. " * 25)
+        + "Diese Anleitung gilt nur für Walsrode. "
+        + "Andere Standorte wenden sich an service@example.invalid."
+    )
+
+    joined = " ".join(harness._supported_claims(context))
+
+    assert "gilt nur für Walsrode" in joined
+    assert "service@example.invalid" in joined
+
+
+def test_fallback_claims_keep_every_step_of_a_procedure():
+    harness = load_harness()
+    steps = [
+        "Kunden in Vaudis aufrufen.", "Die DSE-Einstellungen öffnen.", "Die Haken entfernen.",
+        "Die Änderung dokumentieren.", "Den Kunden in die Liste eintragen.",
+    ]
+    context = "[1] Prozess\n" + ("Einleitung ohne Schritte. " * 30) + " ".join(steps)
+
+    claims = harness._supported_claims(context)
+
+    for step in steps:
+        assert step in claims
