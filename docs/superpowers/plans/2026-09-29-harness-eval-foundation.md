@@ -1887,3 +1887,9 @@ git commit -m "test(eval): record runtime harness baseline per model and routing
   ausdrücklich als blockiert durch IONOS vermerkt.
 - Danach startet Phase 0 mit einem eigenen TDD-Plan. Ziel: Offline-Accuracy
   und `procedural_accuracy` steigen, Laufzeitwerte werden nicht schlechter.
+
+## Begleitänderung
+
+- `2fce087`: Das Abfragen der Open-WebUI-Chat-Aufgabe in `eval/rag/run_runtime_eval.py` wurde in den `OpenWebUIRuntimeClient` herausgelöst.
+- Der Laufzeit-Client des Harness-Evals (`eval/harness/runtime_harness_eval.py`) erbt davon, statt die Logik zu kopieren.
+- Das Verhalten des RAG-Evals ist unverändert.

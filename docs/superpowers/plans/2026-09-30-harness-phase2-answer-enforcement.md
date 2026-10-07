@@ -782,3 +782,8 @@ def test_score_and_summary_include_correction_metrics():
 - Retry-Rate, Fallback-Rate und p50/p95-Latenz je Modell sind dokumentiert. Erwartung aus dem Prototyp: Retry-Rate ≈ Blocking-Rate aus 0b (Mistral ≈ 27 %, gpt-oss ≈ 21 %, Qwen ≈ 11 %), Fallback deutlich darunter, Mehrlatenz im Retry-Fall ≈ 1–2 s bzw. 10–70 s bei Qwen.
 - Routing-Trefferquote nicht schlechter als 0b.
 - Ist die Fallback-Rate eines Modells über 10 %: Befund dokumentieren und Nachschärfung des Korrektur-Prompts als eigenen Task planen, statt den Validator aufzuweichen.
+
+## Begleitänderung
+
+- `809fd84`: Für die Laufzeitmessung musste der Open-WebUI-Container neu erstellt werden. Unter Windows PowerShell 5.1 gab `ConvertFrom-Json` das Docker-JSON-Array als ein einziges Objekt zurück, und `scripts/start-stack.ps1` hielt deshalb alle Container für fremd.
+- `scripts/StackRuntime.psm1` zählt die Elemente jetzt einzeln auf; abgesichert ist das durch einen Test in `stack/tests/test_stack_runtime.py`.

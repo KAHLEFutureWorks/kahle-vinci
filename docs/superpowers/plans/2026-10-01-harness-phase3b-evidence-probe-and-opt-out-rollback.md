@@ -128,6 +128,12 @@ $P -m pytest eval/harness/tests -q -p no:cacheprovider
 - [ ] `stack/tests` vollständig → PASS
 - [ ] Commit `feat(middleware): bind or release the evidence-gated pre-search by its result`
 
+**Abweichung bei der Umsetzung (02.10., `375d312`):**
+
+- Der Hinweis bei verworfener Vorabsuche wird nicht per `add_or_update_system_message(..., append=True)` an die Systemnachricht angehängt.
+- Stattdessen geht er über `metadata['_kahle_final_answer_prompt']`, der den Text an die Systemnachricht und direkt an die letzte Nutzernachricht hängt.
+- Grund: Am Ende des langen System-Prompts hat Mistral den Hinweis ignoriert und eine Rechnungsstornierung mit allgemeinen Schritten beantwortet. Neben der Nutzernachricht nennt Mistral zuerst die fehlende interne Evidenz.
+
 ### Task 4: Eval-Auswertung
 
 **Files:** `eval/harness/harness_eval.py`; Tests `eval/harness/tests`

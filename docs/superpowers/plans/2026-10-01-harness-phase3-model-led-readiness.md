@@ -374,3 +374,22 @@ Kundensperre Werbung, Werbewiderspruch in Vaudis
 - Messung A zeigt keine Regression gegenüber Phase 2.
 - Messung B ist dokumentiert. Die Freigabe je Modell ist entschieden und im Overlay umgesetzt oder begründet zurückgestellt.
 - Task 6 ist erledigt oder als offener Inhaltsschritt dokumentiert.
+
+## Ergebnis (01.10.)
+
+Full Verify: 13/13 bestanden. Messungen über 102 Fälle (`eval/harness/results/2026-10-01-runtime-phase3-hybrid.json` und `…-phase3-model-led.json`):
+
+| Modell | Messung A, mit Vorplanung | Messung B, ohne Vorplanung | Phase 2 (99 Fälle) |
+| --- | --- | --- | --- |
+| Mistral | 91/102 | 70/102 | 91/99 |
+| gpt-oss | 95/102 | 73/102 | 90/99 |
+| Qwen | 94/102 | 88/102 | 94/99 |
+
+- Messung A zeigt keine Regression gegenüber Phase 2. Auf den 99 gemeinsamen Fällen: Mistral −3, gpt-oss +2, Qwen −3. Ein Qwen-Fall war ein DNS-Ausfall bei IONOS.
+- In beiden Messungen gab es keine ausgelieferten blockierenden Verstöße.
+- **Freigabe je Modell (Nutzerentscheidung 01.10.):** Die Vorplanung bleibt für alle drei Modelle aktiv, der Schalter `KAHLE_MODEL_LED_PREROUTE_OFF_MODELS` bleibt leer. Ohne Vorplanung verliert jedes Modell deutlich; besonders schwach sind Organisationskontakte (1/9, 0/9, 6/9), Folgefragen und Abkürzungen.
+- Weiterführung in Phase 3b: Prozessfragen, die die Schlagwortsperre nicht erfasst, sollen über die evidenzgesteuerte Vorabsuche gebunden werden.
+- **Nicht umgesetzt aus der Roadmap:**
+  - „eine Vertragsnachricht“ (R2, Befund K6)
+  - UI-Abnahme und Release B
+  Beides bleibt offen; R2 ist ein eigener Schritt.
