@@ -103,7 +103,7 @@ from open_webui.utils.kahle_knowledge_harness import (
     resolve_query_aliases,
     validate_answer as validate_knowledge_harness_answer,
 )
-from open_webui.utils.kahle_locations import KAHLE_LOCATION_FULL_NAMES, KAHLE_LOCATIONS
+from open_webui.utils.kahle_locations import KAHLE_LOCATION_CODES, KAHLE_LOCATION_FULL_NAMES, KAHLE_LOCATIONS
 from open_webui.utils.kahle_internal_knowledge import (
     _supervisor_candidate_query,
     bind_internal_knowledge_tools,
@@ -1145,7 +1145,8 @@ def _looks_like_internal_rag_request(text: str) -> bool:
     if _looks_like_user_supplied_code_help(text):
         return False
 
-    if re.search(r"(?<![A-Za-z0-9])(?:TD|VK|HAN|WUN|WED|WAL|NEU|NIE|STA|SHG)(?![A-Za-z0-9])", str(text or "")):
+    internal_codes = ('TD', 'VK', *(code for code, _ in KAHLE_LOCATION_CODES))
+    if re.search(rf"(?<![A-Za-z0-9])(?:{'|'.join(internal_codes)})(?![A-Za-z0-9])", str(text or "")):
         return True
 
     if (

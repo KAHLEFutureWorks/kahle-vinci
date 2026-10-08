@@ -65,6 +65,18 @@ def load_python_module(path: Path, name: str):
 def load_planned_retrieval_executor():
     return load_function_from_middleware("_execute_kahle_retrieval_plan")
 
+
+def _location_names() -> dict[str, Any]:
+    """Names the middleware imports from open_webui.utils.kahle_locations."""
+    module = load_python_module(
+        Path(__file__).resolve().parents[1] / "open-webui-tools" / "kahle_locations.py",
+        "kahle_locations_for_middleware_loaders",
+    )
+    return {
+        name: getattr(module, name)
+        for name in ("KAHLE_LOCATIONS", "KAHLE_LOCATION_FULL_NAMES", "KAHLE_LOCATION_CODES")
+    }
+
 def load_retrieval_gate():
     tree = ast.parse(MIDDLEWARE.read_text(encoding="utf-8"))
     node = next(
@@ -1479,7 +1491,8 @@ def load_rag_routing_helpers():
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"re": re, "unicodedata": unicodedata}
+    namespace = {"re": re,
+        **_location_names(), "unicodedata": unicodedata}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_looks_like_internal_rag_request"]
 
@@ -1497,7 +1510,8 @@ def load_mail_redirect_helper():
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"Any": Any, "re": re, "unicodedata": unicodedata}
+    namespace = {"Any": Any, "re": re,
+        **_location_names(), "unicodedata": unicodedata}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_general_vinci_mail_redirect"]
 
@@ -1513,7 +1527,8 @@ def load_mailer_initial_question_helper():
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"Any": Any, "re": re, "unicodedata": unicodedata}
+    namespace = {"Any": Any, "re": re,
+        **_location_names(), "unicodedata": unicodedata}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_mailer_initial_question_response"]
 
@@ -1529,7 +1544,8 @@ def load_mailer_followup_routing_helper():
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"Any": Any, "re": re, "unicodedata": unicodedata}
+    namespace = {"Any": Any, "re": re,
+        **_location_names(), "unicodedata": unicodedata}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace["_mailer_followup_uses_supplied_drafting_context"]
 
@@ -1555,6 +1571,7 @@ def load_native_rag_fallback():
         "Any": Any,
         "asyncio": asyncio,
         "re": re,
+        **_location_names(),
         "unicodedata": unicodedata,
         "uuid4": lambda: type("FixedUuid", (), {"hex": "a" * 32})(),
         "json": __import__("json"),
@@ -1598,6 +1615,7 @@ def load_function_from_middleware(name: str):
         "os": __import__("os"),
         "output_id": lambda prefix: f"{prefix}-fixed",
         "re": re,
+        **_location_names(),
         "unicodedata": unicodedata,
         "get_updated_tool_function": lambda *, function, extra_params: _identity_tool_context(
             function, extra_params
@@ -1679,7 +1697,8 @@ def load_canonical_rag_source_helpers():
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"Any": Any, "re": re, "json": __import__("json")}
+    namespace = {"Any": Any, "re": re,
+        **_location_names(), "json": __import__("json")}
     exec(compile(module, str(MIDDLEWARE), "exec"), namespace)
     return namespace
 
@@ -2511,6 +2530,7 @@ def load_fallback_tool_helpers(
         "Any": Any,
         "Optional": Optional,
         "re": re,
+        **_location_names(),
         "unicodedata": unicodedata,
         "tools": tools_override or {"kahle_workflow_execute": object()},
         "metadata": metadata_override or {},

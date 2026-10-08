@@ -17,7 +17,7 @@ KAHLE_LOCATION_TABLE = (
     ("Walsrode", "Walsrode", ("WAL",)),
     ("Neustadt", "Neustadt am Rübenberge", ("NEU",)),
     ("Nienburg", "Nienburg", ("NIE",)),
-    ("Stadthagen", "Stadthagen", ("STA", "SHG")),
+    ("Stadthagen", "Stadthagen", ("SHG",)),
 )
 KAHLE_LOCATIONS = tuple(name for name, _, _ in KAHLE_LOCATION_TABLE)
 KAHLE_LOCATION_FULL_NAMES = tuple(full_name for _, full_name, _ in KAHLE_LOCATION_TABLE)

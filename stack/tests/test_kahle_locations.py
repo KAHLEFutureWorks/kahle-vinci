@@ -56,7 +56,7 @@ def test_canonical_table_describes_every_location_once():
     )
     assert dict(table.KAHLE_LOCATION_CODES) == {
         "HAN": "Hannover", "WUN": "Wunstorf", "WED": "Wedemark", "WAL": "Walsrode",
-        "NEU": "Neustadt am Rübenberge", "NIE": "Nienburg", "STA": "Stadthagen", "SHG": "Stadthagen",
+        "NEU": "Neustadt am Rübenberge", "NIE": "Nienburg", "SHG": "Stadthagen",
     }
     assert "Neustadt am Rübenberge" in table.KAHLE_LOCATION_FULL_NAMES
     assert len(set(table.KAHLE_LOCATIONS)) == len(table.KAHLE_LOCATIONS)
@@ -68,6 +68,9 @@ def test_no_consumer_keeps_its_own_location_names(path):
 
     for name in canonical().KAHLE_LOCATIONS:
         assert name.casefold() not in source, f"{path.name} nennt {name} selbst"
+    raw = BLOCK.sub("", path.read_text(encoding="utf-8"))
+    for code, _ in canonical().KAHLE_LOCATION_CODES:
+        assert not re.search(rf"[|(:'\"]{code}[|)'\"]", raw), f"{path.name} nennt das Kürzel {code} selbst"
 
 
 def test_runtime_copy_and_guard_block_match_the_canonical_file():
@@ -103,7 +106,9 @@ def test_harness_reads_names_and_codes_from_the_table():
     assert harness.KAHLE_LOCATIONS == table.KAHLE_LOCATIONS
     for code, full_name in table.KAHLE_LOCATION_CODES:
         assert harness.KNOWN_ALIASES[code] == full_name
-    assert harness.resolve_query_aliases("Öffnungszeiten STA") == "Öffnungszeiten Stadthagen"
+    assert harness.resolve_query_aliases("Öffnungszeiten SHG") == "Öffnungszeiten Stadthagen"
+    # UI acceptance 08.10.: Stadthagen is SHG; STA is no KAHLE code.
+    assert harness.resolve_query_aliases("Öffnungszeiten STA") == "Öffnungszeiten STA"
 
 
 def test_tool_bundle_expands_every_code_and_knows_every_location():

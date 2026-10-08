@@ -93,7 +93,7 @@ cases:
   - {id: abbreviation_da, category: abbreviation, question: "Wofür steht DA bei KAHLE?", expected_tools: [rag_chat]}
   - {id: abbreviation_vk, category: abbreviation, question: "Was ist die Abkürzung VK?", expected_tools: [rag_chat]}
   - {id: abbreviation_wps, category: abbreviation, question: "Was bedeutet WPS?", expected_tools: [rag_chat]}
-  - {id: abbreviation_location_sta, category: abbreviation, question: "Wann hat der Service in STA geöffnet?", expected_tools: [rag_chat]}
+  - {id: abbreviation_location_shg, category: abbreviation, question: "Wann hat der Service in SHG geöffnet?", expected_tools: [rag_chat]}
   # --- RAG: allgemeines internes Wissen ---
   - {id: internal_service_systems, category: internal_knowledge, question: "Welche Systeme nutzt KAHLE im Service?", expected_tools: [rag_chat]}
   - {id: internal_wps_locations, category: internal_knowledge, question: "An welchen Standorten wird WPS eingesetzt?", expected_tools: [rag_chat]}

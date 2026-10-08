@@ -866,9 +866,9 @@ def test_sales_and_stadthagen_abbreviations_are_expanded_before_clarification():
 def test_all_supported_location_codes_expand_as_standalone_tokens_only():
     (expand,) = load_tool_helpers("_expand_kahle_query_aliases")
 
-    assert expand("HAN WUN WED WAL NEU NIE STA SHG") == (
+    assert expand("HAN WUN WED WAL NEU NIE SHG") == (
         "HAN (Hannover) WUN (Wunstorf) WED (Wedemark) WAL (Walsrode) "
-        "NEU (Neustadt am Rübenberge) NIE (Nienburg) STA (Stadthagen) "
+        "NEU (Neustadt am Rübenberge) NIE (Nienburg) "
         "SHG (Stadthagen)"
     )
     assert expand("STATUS und NEUigkeit") == "STATUS und NEUigkeit"
