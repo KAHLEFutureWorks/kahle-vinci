@@ -185,9 +185,10 @@ def test_both_contract_paths_carry_the_scope(build):
     assert decision.answer_contract.required_scope == EXPECTED_SCOPE
     prompt = decision.answer_prompt()
     assert (
-        "Die Quellen begrenzen ihren Geltungsbereich auf Hannover, Wunstorf und Wedemark [#1]. "
-        "Nenne diesen Geltungsbereich und für alle anderen Fälle den dokumentierten Weg "
-        "(datenschutz@kahle.de)."
+        "Wenn du Quelle [1] verwendest, nenne ihren Geltungsbereich: Hannover, Wunstorf "
+        "und Wedemark, und für alle anderen Fälle den dokumentierten Weg "
+        "(datenschutz@kahle.de). Passt Quelle [1] nicht zur Frage, lass sie und ihren "
+        "Geltungsbereich weg."
     ) in prompt
 
 
@@ -211,7 +212,11 @@ def test_scope_without_exception_path_asks_only_for_the_scope():
 
     prompt = _model_led_decision(harness, rag).answer_prompt()
 
-    assert "Die Quellen begrenzen ihren Geltungsbereich auf Walsrode [#1]. Nenne diesen Geltungsbereich." in prompt
+    assert (
+        "Wenn du Quelle [1] verwendest, nenne ihren Geltungsbereich: Walsrode. "
+        "Passt Quelle [1] nicht zur Frage, lass sie und ihren Geltungsbereich weg."
+    ) in prompt
+    assert "Die Quellen begrenzen ihren Geltungsbereich" not in prompt
 
 
 def test_scope_contract_is_repeated_right_before_the_answer():
@@ -258,6 +263,20 @@ def test_missing_location_or_contact_blocks_delivery(build):
     assert violation["missing_contacts"] == []
     [violation] = [v for v in no_contact.violations if v["code"] == "required_scope_missing"]
     assert violation["missing_contacts"] == ["datenschutz@kahle.de"]
+
+
+@pytest.mark.parametrize("build", [_pre_route_decision, _model_led_decision], ids=["pre_route", "model_led"])
+def test_scope_is_only_required_when_the_answer_cites_the_scoped_source(build):
+    """UI acceptance 08.10.: an unrelated scoped document found by the search
+    must not force its scope into the answer."""
+    harness = load_harness()
+    decision = build(harness, _scoped_rag_result())
+
+    unrelated = harness.validate_answer("Für allgemeine Fragen gibt es ein Funktionspostfach [2].", decision.to_dict())
+    cited = harness.validate_answer("Kunden in Vaudis aufrufen [1].", decision.to_dict())
+
+    assert "required_scope_missing" not in _codes(unrelated)
+    assert "required_scope_missing" in _codes(cited)
 
 
 def test_abstention_is_exempt():

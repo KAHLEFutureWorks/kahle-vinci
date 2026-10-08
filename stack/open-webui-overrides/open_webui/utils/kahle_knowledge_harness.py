@@ -1017,6 +1017,10 @@ def validate_answer(
 
     # The scope obligation is recomputed from the evidence; the serialized
     # contract is not an authority. An abstention states no process at all.
+    answer_citations = {
+        _citation_identifier(value)
+        for value in re.findall(r"\[(?:#\s*|Quelle\s*)?((?:[PR]\s*)?\d+)\]", text, re.IGNORECASE)
+    }
     if text and _ABSTENTION_TEXT not in text:
         scope_evidence = EvidenceBundle(
             status=evidence.get("status", "unsupported"),
@@ -1025,6 +1029,9 @@ def validate_answer(
         )
         folded_answer = _fold(text)
         for requirement in _scope_requirements(scope_evidence):
+            # Only an answer that uses the scoped document has to state its scope.
+            if _citation_identifier(str(requirement["source_id"])) not in answer_citations:
+                continue
             missing_locations = [
                 name for name in requirement["locations"]
                 if not re.search(rf"\b{re.escape(_fold(name))}\b", folded_answer)
@@ -2668,17 +2675,22 @@ def _scope_instruction(requirements: tuple[dict[str, Any], ...]) -> str:
         locations = tuple(requirement.get("locations") or ())
         if not locations:
             continue
+        source = f"[{_citation_identifier(str(requirement.get('source_id') or ''))}]"
+        # A search can return an unrelated scoped document; only its use obliges.
         sentence = (
-            f"Die Quellen begrenzen ihren Geltungsbereich auf {_german_list(locations)} "
-            f"[{requirement.get('source_id')}]. Nenne diesen Geltungsbereich"
+            f"Wenn du Quelle {source} verwendest, nenne ihren Geltungsbereich: "
+            f"{_german_list(locations)}"
         )
         contacts = tuple(requirement.get("exception_contacts") or ())
         if contacts:
             sentence += (
-                " und für alle anderen Fälle den dokumentierten Weg "
+                ", und für alle anderen Fälle den dokumentierten Weg "
                 f"({', '.join(contacts)})"
             )
-        sentences.append(sentence + ".")
+        sentences.append(
+            sentence + f". Passt Quelle {source} nicht zur Frage, lass sie und ihren "
+            "Geltungsbereich weg."
+        )
     return ("KAHLE_KNOWLEDGE_SCOPE\n" + " ".join(sentences) + "\n") if sentences else ""
 
 
