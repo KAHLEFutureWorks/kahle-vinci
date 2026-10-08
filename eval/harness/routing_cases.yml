@@ -47,6 +47,9 @@ cases:
   - {id: procedure_slot_ascii, category: procedure, question: "Wie waehle ich im WPS einen freien Termin aus?", expected_tools: [rag_chat], findings: [K1], expected_procedural: true}
   # --- RAG: Anleitungen außerhalb der geschlossenen Verbliste (K3) ---
   - {id: procedure_new_customer, category: procedure, question: "Wie lege ich einen Neukunden in Vaudis an?", expected_tools: [rag_chat], findings: [K3], expected_procedural: true}
+  # --- RAG: Prozesse zu Mahnung und Beschwerde (Review U3, Entscheidung 07.10.) ---
+  - {id: procedure_create_dunning, category: procedure, question: "Wie erstelle ich eine Mahnung?", expected_tools: [rag_chat], findings: [U3], expected_procedural: true}
+  - {id: procedure_handle_complaint, category: procedure, question: "Wie bearbeite ich eine Kundenbeschwerde?", expected_tools: [rag_chat], findings: [U3], expected_procedural: true}
   - {id: procedure_cancel_invoice, category: procedure, question: "Wie storniere ich eine Rechnung?", expected_tools: [rag_chat], findings: [K3], expected_procedural: true}
   - {id: procedure_courtesy_car, category: procedure, question: "Wie reserviere ich einen Leihwagen für einen Werkstattkunden?", expected_tools: [rag_chat], findings: [K3], expected_procedural: true}
   - {id: procedure_test_drive_imperative, category: procedure, question: "Anleitung: Probefahrt in EVA erfassen", expected_tools: [rag_chat], expected_procedural: true}
@@ -61,6 +64,10 @@ cases:
   - {id: responsibility_work_instruction_approval, category: responsibility, question: "Wer ist für die Freigabe von Arbeitsanweisungen verantwortlich?", expected_tools: [rag_chat], findings: [K2]}
   - {id: responsibility_vehicle_prep, category: responsibility, question: "Welche Rolle ist für die Fahrzeugaufbereitung verantwortlich?", expected_tools: [rag_chat], findings: [K2]}
   - {id: responsibility_data_access, category: responsibility, question: "Wer ist zuständig, wenn ein Kunde eine Datenauskunft verlangt?", expected_tools: [rag_chat], findings: [K2]}
+  # Ansprechpartner für ein Prozessthema: Dokumente, Namen nur mit Personio-Bestätigung (Entscheidung 08.10.)
+  - {id: responsibility_contact_warranty, category: responsibility, question: "Wer ist der Ansprechpartner für Garantieanträge?", expected_tools: [rag_chat], findings: [K2]}
+  - {id: responsibility_contact_complaints, category: responsibility, question: "Wer ist der Ansprechpartner für Kundenbeschwerden?", expected_tools: [rag_chat], findings: [K2, U3]}
+  - {id: responsibility_external_support, category: responsibility, question: "Wer hilft bei Problemen mit dem Herstellerportal?", expected_tools: [rag_chat]}
   # --- RAG: Funktionspostfächer; Funktionsthemen-Kontakte sind gemischt (ADR-008) ---
   - {id: functional_applications_mailbox, category: functional_contact, question: "Wie lautet das Funktionspostfach für Bewerbungen?", expected_tools: [rag_chat]}
   - {id: functional_sick_note, category: organization_contact, question: "Wohin schicke ich eine Krankmeldung?", expected_tools: [personio_directory, rag_chat]}
@@ -86,6 +93,7 @@ cases:
   - {id: abbreviation_da, category: abbreviation, question: "Wofür steht DA bei KAHLE?", expected_tools: [rag_chat]}
   - {id: abbreviation_vk, category: abbreviation, question: "Was ist die Abkürzung VK?", expected_tools: [rag_chat]}
   - {id: abbreviation_wps, category: abbreviation, question: "Was bedeutet WPS?", expected_tools: [rag_chat]}
+  - {id: abbreviation_location_sta, category: abbreviation, question: "Wann hat der Service in STA geöffnet?", expected_tools: [rag_chat]}
   # --- RAG: allgemeines internes Wissen ---
   - {id: internal_service_systems, category: internal_knowledge, question: "Welche Systeme nutzt KAHLE im Service?", expected_tools: [rag_chat]}
   - {id: internal_wps_locations, category: internal_knowledge, question: "An welchen Standorten wird WPS eingesetzt?", expected_tools: [rag_chat]}
