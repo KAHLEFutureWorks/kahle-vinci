@@ -76,8 +76,24 @@ def _table_row(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
+_MARKDOWN_LINK = re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")
+# Characters the PDF base font (Helvetica, WinAnsi) cannot draw.
+_PDF_CHARACTER_MAP = str.maketrans({
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2212": "-",
+    "\u00ad": "", "\u200b": "", "\u2009": " ", "\u200a": " ", "\u202f": " ", "\u2007": " ",
+})
+
+
+def _readable_links(text: str) -> str:
+    """Documents cannot follow chat-relative links: keep the label, show web addresses."""
+    def replace(match: re.Match) -> str:
+        label, target = match.group(1), match.group(2)
+        return f"{label} ({target})" if re.match(r"https?://", target, re.IGNORECASE) else label
+    return _MARKDOWN_LINK.sub(replace, text or "")
+
+
 def parse_markdown(content: str, title: str) -> list[dict[str, Any]]:
-    raw = (content or "").splitlines()
+    raw = _readable_links(content or "").splitlines()
     blocks: list[dict[str, Any]] = []
     index = 0
     duplicate_title_skipped = False
@@ -695,7 +711,10 @@ def render_docx(content: str, title: str, template_path: Path, logo_path: Path, 
 
 
 def _rl_inline(text: str) -> str:
-    safe = html.escape(text or "")
+    text = (text or "").translate(_PDF_CHARACTER_MAP)
+    # Anything else outside WinAnsi would also render as a black box.
+    text = "".join(char if char.encode("cp1252", "ignore") else "" for char in text)
+    safe = html.escape(text)
     safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
     safe = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", safe)
     return safe

@@ -361,7 +361,14 @@ def _slugify(value: str, default: str = "kahle_vinci_ergebnis") -> str:
     return (text[:80].strip("_") or default)
 
 
-def _export_title_from_content(content: str) -> str:
+def _export_content(text: str) -> str:
+    """A document keeps the answer but not the chat-only feedback link."""
+    text = re.sub(r"(?im)^[ \t]*\[Wissensfehler melden\]\([^)]*\)[ \t]*$\n?", "", text or "")
+    return text.rstrip()
+
+
+# Mirrors the orchestrator's _previous_result_title; test_kahle_harness_phase3c pins both.
+def _export_title_from_content(content: str, request_context: str = "") -> str:
     for raw in (content or "").splitlines():
         line = raw.strip()
         if not line:
@@ -375,7 +382,24 @@ def _export_title_from_content(content: str) -> str:
         if 8 <= len(line) <= 120 and not line.startswith(("|", "-", "*", ">")) and not line.endswith((".", ":")):
             return line
         break
+    context = re.sub(r"(?i)^bitte\s+", "", request_context.strip())
+    context = re.sub(r"(?i)^(?:liste|zähl|zaehl)\s+mir\s+auf,?\s*", "", context)
+    context = context.strip(" .?!")
+    if 8 <= len(context) <= 120:
+        return context[0].upper() + context[1:]
     return "KAHLE-Vinci Ergebnis"
+
+
+def _previous_user_request(messages: list[dict[str, Any]], current_index: int) -> str:
+    """The question whose answer precedes the current export request."""
+    seen_answer = False
+    for item in reversed(messages[:current_index]):
+        role = item.get("role")
+        if role == "assistant":
+            seen_answer = True
+        elif role == "user" and seen_answer:
+            return str(item.get("content") or "").strip()
+    return ""
 
 
 def _filename_from_request(request_text: str, fmt: str, source_content: str = "") -> str:
@@ -1432,7 +1456,8 @@ def _synthesize_requested_file_content(request_text: str) -> str:
 
 
 
-def _create_file(content: str, output_format: str, filename: str) -> dict[str, Any]:
+def _create_file(content: str, output_format: str, filename: str, title: str = "") -> dict[str, Any]:
+    content = _export_content(content)
     if _blocked_export_source(content):
         return {"ok": False, "error": "blocked_export_source"}
     if requests is None:
@@ -1454,7 +1479,7 @@ def _create_file(content: str, output_format: str, filename: str) -> dict[str, A
 
     payload: dict[str, Any] = {"filename": filename, "content": content}
     if output_format in {"pdf", "docx"}:
-        payload["title"] = _export_title_from_content(content)
+        payload["title"] = title or _export_title_from_content(content)
 
     try:
         response = requests.post(
@@ -2008,7 +2033,8 @@ class Filter:
                     _write_file_response(message, content, form_format, request_text, messages)
                     continue
                 source_content = str(visible_workflow_call.get("content") or "").strip()
-                if not _is_substantive_file_content(source_content) and _is_previous_result_file_request(request_text):
+                previous_result = _is_previous_result_file_request(request_text)
+                if not _is_substantive_file_content(source_content) and previous_result:
                     source_content = _latest_previous_assistant(messages, index)
                 if not _is_substantive_file_content(source_content):
                     _set_message_content(
@@ -2016,10 +2042,18 @@ class Filter:
                         "Tool-Fehler: Der sichtbare Datei-Aufruf enthielt keinen verwertbaren Inhalt.",
                     )
                     continue
+                export_format = str(visible_workflow_call["output_format"])
+                export_filename = str(visible_workflow_call["filename"])
+                export_title = ""
+                if previous_result:
+                    # Title and name follow the exported answer's question, never a model guess.
+                    export_title = _export_title_from_content(
+                        source_content, _previous_user_request(messages, index),
+                    )
+                    export_filename = f"{_slugify(export_title)}.{export_format}"
                 result = _create_file(
-                    source_content,
-                    str(visible_workflow_call["output_format"]),
-                    str(visible_workflow_call["filename"]),
+                    _export_content(source_content), export_format, export_filename,
+                    **({"title": export_title} if export_title else {}),
                 )
                 if result.get("download_url"):
                     _set_message_content(message, _download_format(result))

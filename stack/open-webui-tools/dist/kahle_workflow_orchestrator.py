@@ -1984,6 +1984,10 @@ def suggest_output_filename(auftrag: str, output_format: str) -> str:
         stem = f"{stem}_recherche"
     ext = "md" if output_format == "md" else output_format
     return f"{stem}.{ext}"
+def _export_content(text: str) -> str:
+    """A document keeps the answer but not the chat-only feedback link."""
+    text = re.sub(r"(?im)^[ \t]*\[Wissensfehler melden\]\([^)]*\)[ \t]*$\n?", "", text or "")
+    return text.rstrip()
 def _previous_result_title(content: str, request_context: str = "") -> str:
     for raw in (content or "").splitlines():
         line = raw.strip()
@@ -2567,7 +2571,7 @@ class Tools:
                 document_title = _previous_result_title(previous_answer, source_request)
                 out_name = str(filename or "").strip() or suggest_output_filename(document_title, download_format)
                 file_result = create_downloadable_file(
-                    previous_answer,
+                    _export_content(previous_answer),
                     download_format,
                     out_name,
                     title=document_title,

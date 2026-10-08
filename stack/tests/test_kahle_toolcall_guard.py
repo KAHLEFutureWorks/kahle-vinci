@@ -2293,3 +2293,36 @@ def test_blocked_previous_result_never_exports_the_models_own_notice():
         assert "Download-Link" not in result["messages"][-1]["content"]
     finally:
         module._create_file = original_create
+
+
+def test_previous_result_export_takes_title_and_name_from_the_question():
+    """UI acceptance 08.10.: the model chose 'gebt_einmal_ab.pdf', the PDF was titled
+    'KAHLE-Vinci Ergebnis' and still contained the chat-only feedback link."""
+    module = load_module()
+    calls = []
+    original_create = module._create_file
+    answer = (
+        "Die Dialogannahme ist ein Schritt im Auftragseingang [1].\n\n"
+        "[Wissensfehler melden](/wissen/?feedback=1&chat_id=c&message_id=m)"
+    )
+    try:
+        module._create_file = lambda content, fmt, filename, title="": calls.append(
+            (content, fmt, filename, title)
+        ) or {"download_url": "/files/x", "filename": filename, "sha256": "0", "size_bytes": 1}
+        body = {"messages": [
+            {"role": "user", "content": "Wie läuft die Dialogannahme ab?"},
+            {"role": "assistant", "content": answer},
+            {"role": "user", "content": "Erstelle mir daraus bitte eine PDF."},
+            {"role": "assistant", "content": json.dumps({
+                "tool": "kahle_workflow_execute",
+                "params": {"output_format": "pdf", "filename": "gebt_einmal_ab.pdf", "content": answer},
+            })},
+        ]}
+        module.Filter().outlet(body)
+    finally:
+        module._create_file = original_create
+
+    [(content, fmt, filename, title)] = calls
+    assert (fmt, filename, title) == ("pdf", "wie_laeuft_dialogannahme_ab.pdf", "Wie läuft die Dialogannahme ab")
+    assert "Wissensfehler melden" not in content
+    assert content.startswith("Die Dialogannahme ist ein Schritt")

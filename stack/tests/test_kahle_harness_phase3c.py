@@ -724,3 +724,20 @@ def test_previous_result_rule_is_a_word_for_word_copy():
     assert body(ORCHESTRATOR_PATH, "_looks_like_previous_result_request") == body(
         GUARD_PATH, "_is_previous_result_file_request"
     )
+
+
+@pytest.mark.parametrize("context", ["", "Wie läuft die Dialogannahme ab?", "Bitte liste mir auf, welche Standorte es gibt"])
+@pytest.mark.parametrize("content", ["Ein Satz mit Punkt.\nText", "# Überschrift\nText"])
+def test_export_titles_with_question_agree_between_orchestrator_and_guard(content, context):
+    assert (
+        _orchestrator_module()._previous_result_title(content, context)
+        == _guard_module()._export_title_from_content(content, context)
+    )
+
+
+def test_export_content_drops_the_chat_feedback_link_in_both_units():
+    answer = "Text [1].\n\nQuellen:\n- [Doc](/wissen/api/portal/sources/x)\n\n[Wissensfehler melden](/wissen/?feedback=1&chat_id=c)"
+    expected = "Text [1].\n\nQuellen:\n- [Doc](/wissen/api/portal/sources/x)"
+
+    assert _orchestrator_module()._export_content(answer) == expected
+    assert _guard_module()._export_content(answer) == expected
