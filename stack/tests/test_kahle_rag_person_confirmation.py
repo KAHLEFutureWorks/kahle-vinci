@@ -283,3 +283,49 @@ def test_pre_route_passes_the_confirmations_to_the_harness():
 ])
 def test_company_product_and_common_words_are_no_names(text):
     assert load_harness()._person_name_mentions(text) == ()
+
+
+EXTERNAL_CONTACTS = [
+    "Bei Problemen mit VaudisX wende dich an Peter Beispiel von der Vaudis GmbH unter support@vaudis.example.",
+    "Ansprechpartner beim Hersteller ist Anna Probe (anna.probe@hersteller.example).",
+    "Externer Ansprechpartner: Max Muster, Muster IT AG.",
+    "Für Rückfragen zum Portal ist Erika Beispiel zuständig: erika.beispiel@partner.example.",
+]
+
+
+@pytest.mark.parametrize("text", EXTERNAL_CONTACTS)
+def test_external_contacts_need_no_personio_confirmation(text):
+    """Decision 2026-10-08 (A): Personio only knows KAHLE staff; external people stay."""
+    harness = load_harness()
+    query = "Wer hilft bei Problemen mit VaudisX?"
+    decision = _pre_route(harness, _rag(text), query=query)
+
+    assert _texts(decision) == [text]
+    assert decision.answer_contract.withheld_person_names == ()
+
+
+@pytest.mark.parametrize("text", [
+    "Max Muster bearbeitet Garantieanträge (max.muster@kahle.de).",
+    "Max Muster von der KAHLE GmbH & Co. KG bearbeitet Garantieanträge.",
+    "Anträge prüft Erika Beispiel, erreichbar unter https://intranet.kahle.de/team.",
+    "Max Muster bearbeitet Garantieanträge.",
+])
+def test_internal_or_unmarked_people_still_need_a_confirmation(text):
+    decision = _pre_route(load_harness(), _rag(text))
+
+    assert _texts(decision) == []
+    assert decision.answer_contract.withheld_person_names
+
+
+def test_external_label_itself_is_no_name():
+    assert load_harness()._person_name_mentions("Externer Ansprechpartner: Max Muster.") == ("Max Muster",)
+
+
+@pytest.mark.parametrize("text", [
+    "Max Muster von der KAHLE GmbH & Co. KG bearbeitet Garantieanträge.",
+    "Anträge bearbeitet z. B. Max Muster.",
+    "Für Garantieanträge ist Dr. Erika Beispiel zuständig.",
+    "Garantieanträge bzw. Kulanzanträge bearbeitet Max Muster.",
+])
+def test_abbreviations_do_not_split_a_name_from_its_responsibility(text):
+    assert load_harness()._responsible_person_names({"text": text})

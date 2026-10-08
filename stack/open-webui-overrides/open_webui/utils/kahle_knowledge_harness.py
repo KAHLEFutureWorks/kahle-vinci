@@ -10,7 +10,7 @@ import json
 import re
 import unicodedata
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 try:
     from open_webui.utils.functional_contact_contract import extract_contact_literals, functional_contact_key, validate_functional_contact
@@ -2409,6 +2409,7 @@ _PERSON_NAME_LEADING_WORDS = frozenset({
     "beim", "haben", "vielen", "andere", "weitere", "neue", "wichtige",
     "digitale", "direkter", "klare", "melde", "nennen", "reine", "zentrale",
     "begrenztes", "mitarbeiter",
+    "externe", "externer", "externen", "interne", "interner", "internen",
 })
 # Company, product and common words that never form a personal name.
 _PERSON_NAME_NON_NAME_TOKENS = frozenset({"kahle", "vinci", "service", "fragen", "sie", "ihnen"})
@@ -2452,14 +2453,48 @@ def _person_name_mentions(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
+# Sentence ends, but not after abbreviations such as "Co.", "Dr." or "z. B.".
+_PERSON_SENTENCE_END = re.compile(
+    r"(?<!\bCo)(?<!\bDr)(?<!\bProf)(?<!\bbzw)(?<!\bggf)(?<!\binkl)(?<!\bca)(?<!\bNr)"
+    # A single letter before the dot is an initial or part of "z. B.", "d. h.", "u. a.".
+    r"(?<!\b[A-Za-z])(?<!\busw)(?<!\bevtl)"
+    r"[.!?](?=\s|$)|;|\n+"
+)
+_EXTERNAL_ORGANIZATION = re.compile(
+    r"\b(?:hersteller\w*|extern\w*|dienstleister\w*|lieferant\w*|partnerfirma\w*|\w*anbieter\w*)\b"
+)
+_LEGAL_FORM = re.compile(r"\b(?:GmbH|AG|KG|SE|OHG|GbR|UG|Ltd|Inc|LLC)\b")
+
+
+def _person_sentences(text: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in _PERSON_SENTENCE_END.split(text) if part and part.strip())
+
+
+def _names_an_external_party(sentence: str) -> bool:
+    """Personio only knows KAHLE staff; other companies and domains are external."""
+    folded = _fold(sentence)
+    if _EXTERNAL_ORGANIZATION.search(folded):
+        return True
+    for _, value in extract_contact_literals(sentence):
+        domain = value.rsplit("@", 1)[-1] if "@" in value else (urlsplit(value).hostname or "")
+        if domain and "kahle" not in domain.casefold():
+            return True
+    # A legal form belongs to KAHLE when the company name right before it says so.
+    return any(
+        "kahle" not in _fold(sentence[max(0, match.start() - 40):match.start()])
+        for match in _LEGAL_FORM.finditer(sentence)
+    )
+
+
 def _responsible_person_names(claim: Any) -> tuple[str, ...]:
-    """Names a document states as handling, owning or answering for something."""
+    """KAHLE people a document states as handling, owning or answering for something."""
     text = str(claim.get("text") or "") if isinstance(claim, dict) else str(claim or "")
     return tuple(dict.fromkeys(
         name
-        for clause in _claim_clauses(text)
-        if _PERSON_RESPONSIBILITY_RELATION.search(_fold(clause))
-        for name in _person_name_mentions(clause)
+        for sentence in _person_sentences(text)
+        if _PERSON_RESPONSIBILITY_RELATION.search(_fold(sentence))
+        and not _names_an_external_party(sentence)
+        for name in _person_name_mentions(sentence)
     ))
 
 

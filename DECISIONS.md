@@ -267,6 +267,11 @@ Implications:
   Antwort den Namen dennoch, ist das der blockierende Verstoß
   `unconfirmed_person_name`. „Ansprechpartner für <Thema>“ ohne Personen- oder
   Einheitsbezug ist eine Dokumentenfrage (Nutzerentscheidung 2026-10-08).
+- Externe Ansprechpartner sind davon ausgenommen, weil Personio nur KAHLE-Personal
+  kennt. Extern ist ein Satz mit einer fremden Firma (Rechtsform ohne KAHLE,
+  „Hersteller“, „extern“, „Dienstleister“, „Lieferant“, „Anbieter“) oder mit
+  einer E-Mail-Adresse bzw. URL außerhalb der KAHLE-Domains. Ein externer Name
+  ohne solchen Hinweis bleibt blockiert, bis das Dokument die Firma nennt.
 - Dokumentierte Kontaktwege und aktuelle Personio-Kontakte werden in gemischten
   Antworten getrennt ausgewiesen. Explizit verlangte E-Mail-Adressen oder
   Telefonnummern benötigen weiterhin einen exakten freigegebenen Wert.
