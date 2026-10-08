@@ -3939,3 +3939,23 @@ def test_leadership_ranking_is_unsupported_on_both_paths(path):
     decision = _supervisor_decisions(payload, "Wer sind die wichtigsten Führungskräfte?")[path]
 
     assert decision.evidence_bundle.status == "unsupported"
+
+
+@pytest.mark.parametrize("path", ["pre_route", "model_led"])
+def test_supervisor_claim_states_its_relation_to_the_request(path):
+    """UI acceptance 08.10.: models must not have to guess that the record is the answer."""
+    decision = _supervisor_decisions(_supervisor_payload(("p-1001", "Max Beispiel")))[path]
+
+    [claim] = decision.evidence_bundle.supported_claims
+    assert claim["relation"] == "ist laut Personio die Führungskraft der angefragten Person"
+    assert "ist laut Personio die Führungskraft der angefragten Person" in decision.answer_prompt()
+
+
+def test_group_supervisor_claim_names_the_group_relation():
+    payload = _supervisor_payload(("p-1001", "Max Beispiel"))
+    payload["claims"][0]["supervisor_scope"] = "organizational_unit"
+
+    decision = _supervisor_decisions(payload, "Wer ist der Chef der Serviceberater in Wunstorf?")["pre_route"]
+
+    [claim] = decision.evidence_bundle.supported_claims
+    assert claim["relation"] == "ist laut Personio die gemeinsame Führungskraft der angefragten Gruppe"

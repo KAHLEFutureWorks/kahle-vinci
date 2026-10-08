@@ -3249,7 +3249,13 @@ def _apply_directory_safety_rules(
             stale=evidence.stale,
         )
     if classify_personio_directory_intent(query) != "supervisor_lookup":
-        return evidence
+        # Personio marks a group's consensus supervisor; keep that relation visible.
+        return replace(evidence, supported_claims=tuple(
+            {**claim, "relation": "ist laut Personio die gemeinsame Führungskraft der angefragten Gruppe"}
+            if isinstance(claim, dict) and claim.get("supervisor_scope") == "organizational_unit"
+            else claim
+            for claim in evidence.supported_claims
+        ))
     personio_claims = tuple(
         claim
         for claim in evidence.supported_claims
@@ -3270,9 +3276,15 @@ def _apply_directory_safety_rules(
             sync_completed_at=evidence.sync_completed_at,
             stale=evidence.stale,
         )
+    # The record is the answer; say so instead of letting the model infer it.
+    relation = (
+        "ist laut Personio die gemeinsame Führungskraft der angefragten Gruppe"
+        if any(claim.get("supervisor_scope") == "organizational_unit" for claim in personio_claims)
+        else "ist laut Personio die Führungskraft der angefragten Person"
+    )
     return replace(
         evidence,
-        supported_claims=personio_claims,
+        supported_claims=tuple({**claim, "relation": relation} for claim in personio_claims),
         sources=tuple(
             source
             for source in evidence.sources
