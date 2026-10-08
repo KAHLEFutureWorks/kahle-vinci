@@ -31,6 +31,7 @@ BLOCKING_VIOLATION_CODES = frozenset(
         "required_document_sections_missing",
         "required_scope_missing",
         "unconfirmed_person_name",
+        "release_notice_missing",
     }
 )
 _ABSTENTION = re.compile(

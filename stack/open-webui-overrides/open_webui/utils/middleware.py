@@ -97,6 +97,7 @@ from open_webui.utils.kahle_knowledge_harness import (
     customer_lock_followup_query,
     knowledge_abstention_answer,
     person_confirmation_names,
+    released_decision_payload,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
     resolve_request,
@@ -1408,7 +1409,6 @@ def _release_evidence_probe(
         if not isinstance(target, dict):
             continue
         for key in (
-            'kahle_knowledge_harness_active',
             'kahle_answer_contract',
             'kahle_knowledge_harness_shadow',
             '_kahle_final_answer_prompt',
@@ -1416,16 +1416,29 @@ def _release_evidence_probe(
         ):
             target.pop(key, None)
         target['kahle_retrieval_tools'] = []
-    setattr(request.state, '_kahle_knowledge_harness_payload', None)
+        # Decision 2026-10-08 (A): the general answer is still held and checked.
+        target['kahle_knowledge_harness_active'] = True
+    query = next(
+        (
+            str(message.get('content') or '')
+            for message in reversed(form_data.get('messages', []) or [])
+            if isinstance(message, dict) and message.get('role') == 'user'
+        ),
+        '',
+    )
+    setattr(
+        request.state,
+        '_kahle_knowledge_harness_payload',
+        released_decision_payload(query, {'user_id': str((metadata.get('user_id') or ''))}),
+    )
 
 
 def _evidence_probe_release_prompt() -> str:
     return (
         'Die Suche in den freigegebenen KAHLE-Dokumenten hat zu dieser Frage nichts ergeben. '
-        'Betrifft die Frage einen KAHLE-internen Ablauf, ein internes System oder eine interne '
-        'Zuständigkeit, sage das im ersten Satz und kennzeichne allgemeine Hinweise ausdrücklich '
-        'als allgemein, nicht als KAHLE-Vorgabe. Andernfalls beantworte die Frage normal, ohne '
-        'die Suche zu erwähnen.'
+        'Beginne mit dem Satz: Dazu gibt es kein KAHLE-Dokument. Kennzeichne alles Weitere '
+        'als allgemeinen Hinweis, nicht als KAHLE-Vorgabe. Nenne keine KAHLE-Anschrift, '
+        '-Telefonnummer, -E-Mail-Adresse oder -Webadresse; dafür gibt es keine Quelle.'
     )
 
 

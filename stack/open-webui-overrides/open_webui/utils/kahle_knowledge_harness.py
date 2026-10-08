@@ -37,6 +37,7 @@ BLOCKING_VIOLATION_CODES = frozenset(
         "required_document_sections_missing",
         "required_scope_missing",
         "unconfirmed_person_name",
+        "release_notice_missing",
     }
 )
 
@@ -235,10 +236,15 @@ class AnswerValidation:
                 instructions.append(
                     "Belege jede interne Aussage mit einer Quellen-ID aus allowed_source_ids."
                 )
+        if "release_notice_missing" in codes:
+            instructions.append(
+                "Beginne mit dem Satz: Dazu gibt es kein KAHLE-Dokument. Kennzeichne alles "
+                "Weitere als allgemeinen Hinweis, nicht als KAHLE-Vorgabe."
+            )
         if codes & {"unbound_contact_literal", "unbound_link_target", "contact_link_mismatch"}:
             instructions.append(
-                "Entferne jede E-Mail-Adresse, Telefonnummer und jeden Link, der nicht wörtlich "
-                "in der Evidenz steht."
+                "Entferne jede E-Mail-Adresse, Telefonnummer, Anschrift und jeden Link, der nicht "
+                "wörtlich in der Evidenz steht."
             )
         if "unconfirmed_person_name" in codes:
             instructions.append(
@@ -967,6 +973,57 @@ def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+_RELEASE_NOTICE = re.compile(
+    r"\bkein\w*\b[^.!?\n]{0,80}\b(?:dokument\w*|vorgabe\w*|quelle\w*|unterlage\w*|anleitung\w*|information\w*)"
+    r"|\bnicht\b[^.!?\n]{0,40}\bkahle\W?vorgabe"
+    r"|\b(?:kahle|freigegeben)\w*\W?dokument\w*\b[^.!?\n]{0,60}\bnichts\b"
+    r"|\bnichts\b[^.!?\n]{0,60}\b(?:kahle|freigegeben)\w*\W?dokument"
+)
+_POSTAL_ADDRESS = re.compile(
+    r"\b[\wäöüß.-]+(?:stra(?:ss|ß)e|str\.|weg|allee|platz|ring|damm)\s+\d+\w?\b"
+    r"|\b\d{5}\s+[A-ZÄÖÜ][a-zäöüß]+"
+)
+
+
+def released_decision_payload(query: str, permission_scope: dict[str, Any]) -> dict[str, Any]:
+    """Validation contract for a general answer after an empty evidence probe."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "resolved_context": {"retrieval_query": str(query or "")},
+        "retrieval_plan": {
+            "mode": "released",
+            "required_tools": [],
+            "permission_scope": dict(permission_scope or {}),
+        },
+        "evidence_bundle": {"status": "unsupported", "supported_claims": [], "sources": []},
+        "answer_contract": {},
+    }
+
+
+def _check_released_answer(text: str, add: Any) -> None:
+    """First sentence discloses the missing document; no invented KAHLE contact data."""
+    if not text or _ABSTENTION_TEXT in text:
+        return
+    opening = _fold(re.sub(r"[*_#>`]", "", text))[:250]
+    if not _RELEASE_NOTICE.search(opening):
+        add(
+            "release_notice_missing",
+            "Die allgemeine Antwort sagt nicht zuerst, dass es dazu kein KAHLE-Dokument gibt.",
+        )
+    # Per sentence: the notice itself names KAHLE and must not taint other contacts.
+    for line in _person_sentences(text):
+        kahle_line = "kahle" in _fold(line) or "autohaus" in _fold(line)
+        for channel, value in extract_contact_literals(line):
+            domain = (
+                value.rsplit("@", 1)[-1] if "@" in value
+                else (urlsplit(value).hostname or "") if channel == "url" else ""
+            )
+            if "kahle" in domain.casefold() or (channel == "phone" and kahle_line):
+                add("unbound_contact_literal", "Die Antwort enthält einen Kontakt ohne aktuelle Quellenbindung.")
+        if kahle_line and _POSTAL_ADDRESS.search(line):
+            add("unbound_contact_literal", "Die Antwort enthält einen Kontakt ohne aktuelle Quellenbindung.")
+
+
 def validate_answer(
     answer: str,
     decision: HarnessDecision | dict[str, Any],
@@ -999,6 +1056,18 @@ def validate_answer(
 
     if not text:
         add("answer_missing", "Die Antwort ist leer.")
+
+    if retrieval_plan.get("mode") == "released":
+        _check_released_answer(text, add)
+        return AnswerValidation(
+            schema_version="kahle.answer-validation.v1",
+            status=(
+                "retry_required"
+                if any(item["severity"] == "blocking" for item in violations)
+                else "accepted"
+            ),
+            violations=tuple(violations),
+        )
 
     required_sections = tuple(
         str(section or "").strip()

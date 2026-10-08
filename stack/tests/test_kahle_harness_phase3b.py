@@ -133,9 +133,10 @@ def test_release_prompt_separates_internal_and_general_questions():
     prompt = load_middleware_functions("_evidence_probe_release_prompt")["_evidence_probe_release_prompt"]()
 
     assert "Die Suche in den freigegebenen KAHLE-Dokumenten hat zu dieser Frage nichts ergeben." in prompt
-    assert "Betrifft die Frage einen KAHLE-internen Ablauf" in prompt
-    assert "kennzeichne allgemeine Hinweise ausdrücklich als allgemein" in prompt
-    assert "Andernfalls beantworte die Frage normal" in prompt
+    # Decision 2026-10-08 (A): always say so first, never invent KAHLE contact data.
+    assert "Beginne mit dem Satz: Dazu gibt es kein KAHLE-Dokument." in prompt
+    assert "nicht als KAHLE-Vorgabe" in prompt
+    assert "keine KAHLE-Anschrift, -Telefonnummer, -E-Mail-Adresse oder -Webadresse" in prompt
 
 
 def test_probe_plans_do_not_announce_the_search_upfront():
@@ -189,7 +190,10 @@ def test_routing_metrics_report_the_probe():
 def test_release_clears_a_contract_the_pre_route_refresh_installed():
     from types import SimpleNamespace
 
-    release = load_middleware_functions("_release_evidence_probe")["_release_evidence_probe"]
+    harness = load_harness()
+    release = load_middleware_functions(
+        "_release_evidence_probe", released_decision_payload=harness.released_decision_payload,
+    )["_release_evidence_probe"]
     request = SimpleNamespace(state=SimpleNamespace(_kahle_knowledge_harness_payload={"x": 1}))
     copied = {
         "kahle_knowledge_harness_active": True,
@@ -212,11 +216,14 @@ def test_release_clears_a_contract_the_pre_route_refresh_installed():
 
     assert [m["content"] for m in form_data["messages"]] == ["Basis", "Wie koche ich Nudeln?"]
     for md in (metadata, form_data["metadata"]):
-        assert "kahle_knowledge_harness_active" not in md
         assert "kahle_answer_contract" not in md
         assert "_kahle_final_answer_prompt" not in md
         assert md["kahle_retrieval_tools"] == []
-    assert request.state._kahle_knowledge_harness_payload is None
+    # Decision 2026-10-08 (A): the general answer is still held and checked.
+    assert metadata["kahle_knowledge_harness_active"] is True
+    payload = request.state._kahle_knowledge_harness_payload
+    assert payload["retrieval_plan"]["mode"] == "released"
+    assert payload["resolved_context"]["retrieval_query"] == "Wie koche ich Nudeln?"
 
 
 def test_release_path_uses_the_cleanup():
