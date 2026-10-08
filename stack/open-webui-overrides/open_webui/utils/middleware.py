@@ -4293,6 +4293,36 @@ def _append_canonical_rag_feedback_link(output: list[dict[str, Any]], feedback_l
     text_part['text'] = f"{text}\n\n[Wissensfehler melden]({feedback_link})"
 
 
+def _present_personio_citations(output: list[dict[str, Any]], harness_payload: Any) -> None:
+    """Show Personio evidence by name; "[P1]" has no citation chip (decision 2026-10-08).
+
+    Runs after validation, which still checks the [P1] markers.
+    """
+    message = next((item for item in reversed(output) if item.get('type') == 'message'), None)
+    if not message:
+        return
+    parts = message.get('content') or []
+    text_part = next((part for part in reversed(parts) if part.get('type') == 'output_text'), None)
+    if not text_part:
+        return
+    text = str(text_part.get('text') or '')
+    if not re.search(r'\[P\d+\]', text):
+        return
+    text = re.sub(r'(?:\s*\(Personio\))?(?:\s*\[P\d+\])+', ' (Personio)', text)
+    evidence = (harness_payload or {}).get('evidence_bundle') if isinstance(harness_payload, dict) else None
+    synced = str((evidence or {}).get('sync_completed_at') or '')
+    match = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})T[\d:.]+Z', synced)
+    line = 'Quelle: Personio-Mitarbeiterverzeichnis' + (
+        f', Stand {match.group(3)}.{match.group(2)}.{match.group(1)}' if match else ''
+    )
+    footer = re.search(r'\n\n(?:Quellen:\n|\[Wissensfehler melden\])', text)
+    if footer:
+        text = f'{text[:footer.start()].rstrip()}\n\n{line}{text[footer.start():]}'
+    else:
+        text = f'{text.rstrip()}\n\n{line}'
+    text_part['text'] = text
+
+
 def _last_kahle_answer_text(output: list[dict[str, Any]]) -> str:
     for item in reversed(output or []):
         if item.get('type') != 'message':
@@ -8512,6 +8542,7 @@ async def streaming_chat_response_handler(response, ctx):
                 if not shadow_validation:
                     _append_canonical_rag_source_links(output, canonical_rag_sources)
                     _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
+                _present_personio_citations(output, harness_payload)
 
 
                 # Mark all in-progress items as completed
