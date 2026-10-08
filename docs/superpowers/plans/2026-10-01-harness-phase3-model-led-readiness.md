@@ -392,4 +392,4 @@ Full Verify: 13/13 bestanden. Messungen über 102 Fälle (`eval/harness/results/
 - **Nicht umgesetzt aus der Roadmap:**
   - „eine Vertragsnachricht“ (R2, Befund K6)
   - UI-Abnahme und Release B
-  Beides bleibt offen; R2 ist ein eigener Schritt.
+  Beides bleibt offen. R2 wird mit Phase 4 (Modellführung) umgesetzt, weil der Vertrag dort ohnehin umgebaut wird (Nutzerentscheidung 07.10.).
