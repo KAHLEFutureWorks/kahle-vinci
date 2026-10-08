@@ -3038,12 +3038,11 @@ def _apply_directory_safety_rules(
         if isinstance(claim, dict)
         and _citation_identifier(str(claim.get("source_id") or "")).startswith("P")
     )
-    names = {
-        str(claim.get("display_name") or "").strip()
-        for claim in personio_claims
-        if str(claim.get("display_name") or "").strip()
+    # Uniqueness is the stable Personio ID; equal names can be different people.
+    personio_ids = {
+        str(claim.get("personio_id") or "").strip() for claim in personio_claims
     }
-    if len(names) != 1:
+    if len(personio_ids) != 1 or "" in personio_ids:
         return EvidenceBundle(
             status="unsupported",
             missing_information=(
@@ -3231,6 +3230,10 @@ def build_result_driven_decision(
             personio_result,
             result_driven=True,
         )
+
+    if "personio_directory" in actual_tools:
+        # Same supervisor and ranking rule as the pre-route.
+        evidence = _apply_directory_safety_rules(resolved_context.retrieval_query, evidence)
 
     retrieval_plan = RetrievalPlan(
         required_tools=actual_tools,

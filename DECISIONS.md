@@ -256,6 +256,9 @@ Implications:
 - Sichtbare RAG-Fortschrittsanzeigen erscheinen nur, wenn `rag_chat` tatsächlich
   Teil des Retrieval-Plans ist.
 - Ohne eindeutige Supervisor-Evidenz wird keine Führungskraft genannt.
+  Eindeutig heißt: alle Personio-Claims tragen dieselbe `personio_id`;
+  gleiche Namen genügen nicht. Die Regel gilt für die Vorabsuche und für
+  modellgeführte Personio-Aufrufe (Nutzerentscheidung 2026-10-07).
 - Dokumentierte Kontaktwege und aktuelle Personio-Kontakte werden in gemischten
   Antworten getrennt ausgewiesen. Explizit verlangte E-Mail-Adressen oder
   Telefonnummern benötigen weiterhin einen exakten freigegebenen Wert.

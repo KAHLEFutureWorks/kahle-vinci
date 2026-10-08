@@ -2744,6 +2744,7 @@ def test_personio_supervisor_consensus_metadata_reaches_the_evidence_bundle():
         permission_scope={"user_id": "user-1", "role": "user", "groups": []},
         personio_result=_result_driven_personio_payload(
             extra_claim_fields={
+                "personio_id": "p-1001",
                 "supervisor_scope": "organizational_unit",
                 "candidate_count": 10,
                 "support_count": 9,
@@ -3872,3 +3873,69 @@ def test_opt_out_unknown_location_followup_keeps_process_and_current_location():
     ])
     assert 'Berlin' in resolved.retrieval_query
     assert 'Wie sperre ich Werbung' in resolved.retrieval_query
+
+
+SUPERVISOR_QUESTION = "Wer ist die Führungskraft von Erika Beispiel?"
+
+
+def _supervisor_payload(*people):
+    """Personio claims as (personio_id, display_name); an empty id omits the field."""
+    claims, sources = [], []
+    for number, (personio_id, name) in enumerate(people, start=1):
+        claim = {"display_name": name, "position": "Leitung Service", "source_id": f"P{number}"}
+        if personio_id:
+            claim["personio_id"] = personio_id
+        claims.append(claim)
+        sources.append({"id": f"P{number}", "kind": "personio_directory"})
+    return {"status": "ok", "claims": claims, "sources": sources,
+            "sync_completed_at": "2026-10-07T10:15:00Z", "stale": False}
+
+
+def _supervisor_decisions(personio_result, query=SUPERVISOR_QUESTION):
+    """The same Personio evidence through the pre-route and the model-led path."""
+    harness = load_harness()
+    scope = {"user_id": "user-1", "role": "user", "groups": []}
+    return {
+        "pre_route": harness.build_decision(
+            query=query, resolved_query=query, messages=[], model_id="kahle-vinci",
+            permission_scope=scope, rag_result="", personio_result=personio_result,
+        ),
+        "model_led": harness.build_result_driven_decision(
+            called_tools=("personio_directory",), query=query, messages=[],
+            model_id="kahle-vinci", permission_scope=scope, personio_result=personio_result,
+        ),
+    }
+
+
+@pytest.mark.parametrize("path", ["pre_route", "model_led"])
+@pytest.mark.parametrize(
+    "people",
+    [
+        (("p-1001", "Max Beispiel"), ("p-2002", "Max Beispiel")),
+        (("p-1001", "Max Beispiel"), ("p-2002", "Moritz Beispiel")),
+        (("", "Max Beispiel"),),
+    ],
+    ids=["same_name_two_ids", "two_people", "no_id"],
+)
+def test_supervisor_answer_needs_exactly_one_personio_id(path, people):
+    """Review Q5 (decision 2026-10-07): uniqueness is the Personio ID, not the name."""
+    decision = _supervisor_decisions(_supervisor_payload(*people))[path]
+
+    assert decision.evidence_bundle.status == "unsupported"
+    assert decision.evidence_bundle.supported_claims == ()
+
+
+@pytest.mark.parametrize("path", ["pre_route", "model_led"])
+def test_supervisor_answer_with_one_personio_id_is_supported(path):
+    decision = _supervisor_decisions(_supervisor_payload(("p-1001", "Max Beispiel")))[path]
+
+    assert decision.evidence_bundle.status == "supported"
+    assert [c["personio_id"] for c in decision.evidence_bundle.supported_claims] == ["p-1001"]
+
+
+@pytest.mark.parametrize("path", ["pre_route", "model_led"])
+def test_leadership_ranking_is_unsupported_on_both_paths(path):
+    payload = _supervisor_payload(("p-1001", "Max Beispiel"))
+    decision = _supervisor_decisions(payload, "Wer sind die wichtigsten Führungskräfte?")[path]
+
+    assert decision.evidence_bundle.status == "unsupported"

@@ -128,7 +128,7 @@ def _personio(*names):
     return {
         "status": "ok",
         "claims": [
-            {"display_name": name, "position": "Leitung", "source_id": f"P{index}"}
+            {"personio_id": f"p-{index}", "display_name": name, "position": "Leitung", "source_id": f"P{index}"}
             for index, name in enumerate(names, 1)
         ],
         "sources": [{"id": f"P{index}", "kind": "personio_directory"} for index in range(1, len(names) + 1)],

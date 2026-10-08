@@ -13,6 +13,9 @@ STACK_ROOT = Path(__file__).resolve().parents[1]
 MODULE_DIRS = (
     STACK_ROOT / "kb-admin-api" / "app",
     STACK_ROOT / "kb-sync" / "app",
+    # Kanonische Tool-Module (z. B. `kahle_locations`) fuer isoliert geladene
+    # Harness- und Tool-Quellen; im Container liegen sie unter open_webui.utils.
+    STACK_ROOT / "open-webui-tools",
 )
 
 for module_dir in MODULE_DIRS:

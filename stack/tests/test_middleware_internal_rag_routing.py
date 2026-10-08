@@ -310,7 +310,7 @@ def test_named_supervisor_evidence_is_not_blocked_as_a_leadership_ranking():
     personio = {
         "status": "ok",
         "claims": [
-            {"display_name": "Max Leitung", "position": "Bereichsleitung", "source_id": "P1"}
+            {"personio_id": "p-1", "display_name": "Max Leitung", "position": "Bereichsleitung", "source_id": "P1"}
         ],
         "sources": [{"id": "P1", "kind": "personio_directory"}],
         "sync_completed_at": "2026-08-26T15:44:00Z",
