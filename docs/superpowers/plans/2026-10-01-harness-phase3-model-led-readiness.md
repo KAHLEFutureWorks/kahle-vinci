@@ -393,3 +393,48 @@ Full Verify: 13/13 bestanden. Messungen über 102 Fälle (`eval/harness/results/
   - „eine Vertragsnachricht“ (R2, Befund K6)
   - UI-Abnahme und Release B
   Beides bleibt offen. R2 wird mit Phase 4 (Modellführung) umgesetzt, weil der Vertrag dort ohnehin umgebaut wird (Nutzerentscheidung 07.10.).
+
+## Abschlussmessung nach den Review-Fixes (08.10.)
+
+Grundlage:
+- Container neu erstellt, Tools und Guard neu eingespielt.
+- 112 Fälle, davon 6 neu: Mahnung, Beschwerde, „Ansprechpartner für …“, externer Support, STA.
+- Datei: `eval/harness/results/2026-10-08-runtime-review-fixes.json`.
+
+| Modell | 08.10. | 06.10. (106 Fälle) | ausgelieferte blockierende Verstöße | Korrekturquote | Enthaltung nach Korrektur | p50 / p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Mistral | 103/112 | 99/106 | 0 | 15 % | 1 % | 6,6 s / 19,2 s |
+| gpt-oss | 103/112 | 97/106 | 0 | 7 % | 1 % | 7,1 s / 17,2 s |
+| Qwen | 101/112 | 96/106 | 0 | 4 % | 2 % | 9,5 s / 25,8 s |
+
+- **Keine Verschlechterung** in den Personio-, Supervisor- und Listenkategorien. Abkürzungen, Prozesse und Zuständigkeiten sind gleich oder besser.
+- **Gemeinsame Fehlfälle aller Modelle:**
+  - zwei Personio-Listen, die als RAG geroutet werden (bekannt);
+  - fünf Prozessfragen ohne Dokument im Korpus: HU ×2, Rechnungsstorno, Garantie-Schritte und neu Mahnung, zu der lokal kein Dokument existiert;
+  - „Übergabe“ (Person plus Prozess).
+- **Qwen zusätzlich:** Ruft bei „Leasingrückläufer“, „externer Support“ und einer Standort-Folgefrage zusätzlich Personio auf (`extra_source`).
+
+**Abnahme:** Das Kriterium „`model_led` ≥ Baseline je Modell; keine Personio-/Supervisor-Regression“ ist für alle drei Modelle erfüllt.
+
+## UI-Abnahme (Checkliste, 08.10.)
+
+Lokal unter `http://localhost:3004`, neuer Chat je Frage. Jede Frage mit dem Standardmodell; die mit * zusätzlich mit `kahle-vinci-thinking` und `kahle-vinci-max-thinking`. Platzhalter in spitzen Klammern durch reale Namen oder Systeme ersetzen.
+
+Für jede Antwort gilt:
+- Jedes Zitat `[N]` passt zum N-ten Quellen-Chip.
+- Es gibt keinen sichtbaren rohen Tool-Aufruf.
+- Die Statusanzeige endet sauber.
+
+| Nr. | Frage | Erwartet |
+| --- | --- | --- |
+| 1* | Wie erstelle ich eine Mahnung? | Schritte aus Dokumenten mit Zitaten oder eine klar benannte Evidenzlücke; keine pauschale Ablehnung |
+| 2* | Wer ist der Ansprechpartner für Garantieanträge? | Antwort aus Dokumenten; eine Person nur, wenn sie aktuell in Personio steht, sonst Funktion oder Abteilung |
+| 3 | Wer hilft bei Problemen mit <externes System>? | Externer Kontakt mit Firma und Quelle |
+| 4* | Wer ist die Führungskraft von <Person>? | Genau eine Person mit Personio-Quelle, sonst Enthaltung |
+| 5 | Wer ist <Person>? | Personio-Profil ohne Dokumentquellen |
+| 6 | Wann hat der Service in STA geöffnet? | Stadthagen erkannt |
+| 7* | Wie hinterlege ich einen Werbewiderspruch in Vaudis? | Schritte, Geltungsbereich und Weg für die übrigen Standorte |
+| 8 | „Wie läuft die Dialogannahme ab?“, danach „Erstelle mir daraus bitte eine PDF.“ | PDF mit der vorherigen Antwort, keine neue Recherche |
+| 9 | Was ist die Hauptstadt von Kanada? | Antwort ohne interne Quellen-Chips |
+
+Ergebnis: _offen_
