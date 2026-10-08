@@ -259,6 +259,14 @@ Implications:
   Eindeutig heißt: alle Personio-Claims tragen dieselbe `personio_id`;
   gleiche Namen genügen nicht. Die Regel gilt für die Vorabsuche und für
   modellgeführte Personio-Aufrufe (Nutzerentscheidung 2026-10-07).
+- Eine Person, die ein Dokument als zuständig, bearbeitend oder als
+  Ansprechpartner nennt, wird nur genannt, wenn Personio in derselben Anfrage
+  genau eine aktuelle Person (eine `personio_id`, nicht veraltet) mit diesem
+  Namen bestätigt. Die Vorabsuche fragt dafür bis zu drei genannte Namen per
+  `person_lookup` ab. Unbestätigte Aussagen fallen aus der Evidenz; nennt die
+  Antwort den Namen dennoch, ist das der blockierende Verstoß
+  `unconfirmed_person_name`. „Ansprechpartner für <Thema>“ ohne Personen- oder
+  Einheitsbezug ist eine Dokumentenfrage (Nutzerentscheidung 2026-10-08).
 - Dokumentierte Kontaktwege und aktuelle Personio-Kontakte werden in gemischten
   Antworten getrennt ausgewiesen. Explizit verlangte E-Mail-Adressen oder
   Telefonnummern benötigen weiterhin einen exakten freigegebenen Wert.
@@ -281,7 +289,8 @@ Antworten mit Evidenz aus `rag_chat` oder `personio_directory` werden vor der
 Auslieferung gegen den Antwortvertrag geprüft. Verstöße haben einen
 Schweregrad: `blocking` (unter anderem unbekannte Quellen-ID, fehlendes Zitat,
 ungebundener Kontakt oder Link, fehlende Pflichtabschnitte, fehlender
-Geltungsbereich) oder `advisory`. Bei einem blockierenden Verstoß folgt genau
+Geltungsbereich, von Personio nicht bestätigte Person aus einem Dokument)
+oder `advisory`. Bei einem blockierenden Verstoß folgt genau
 ein Korrekturaufruf ohne Tools mit derselben Evidenz und einer Zeitgrenze je
 Basismodell; scheitert auch er, wird eine neutrale Enthaltung ausgeliefert.
 `KAHLE_ANSWER_ENFORCEMENT` steuert das Verhalten: `observe` misst nur

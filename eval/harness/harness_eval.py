@@ -30,6 +30,7 @@ BLOCKING_VIOLATION_CODES = frozenset(
         "contact_link_mismatch",
         "required_document_sections_missing",
         "required_scope_missing",
+        "unconfirmed_person_name",
     }
 )
 _ABSTENTION = re.compile(

@@ -96,6 +96,7 @@ from open_webui.utils.kahle_knowledge_harness import (
     classify_personio_directory_intent,
     customer_lock_followup_query,
     knowledge_abstention_answer,
+    person_confirmation_names,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
     resolve_request,
@@ -377,6 +378,23 @@ async def _execute_kahle_retrieval_plan(
 
     metadata['kahle_retrieval_tools'] = list(required_tools)
     return {'rag_result': rag_result, 'personio_result': personio_result}
+
+
+async def _confirm_rag_person_names(
+    names: tuple[str, ...],
+    *,
+    personio_client: Any,
+    user_id: str,
+    user_role: str,
+) -> tuple[dict[str, Any], ...]:
+    """Look up each person a document names; failures confirm nothing."""
+    if not names or user_role not in {'user', 'admin'}:
+        return ()
+    results = await asyncio.gather(
+        *(personio_client.search(name, 'person_lookup', user_id, user_role) for name in names),
+        return_exceptions=True,
+    )
+    return tuple(result for result in results if isinstance(result, dict))
 
 
 def _personio_directory_intent(query: str) -> str:
@@ -5549,6 +5567,14 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         metadata['kahle_internal_rag_prerouted'] = pre_routed_internal_rag
                     harness_decision = None
                     if harness_mode != 'off' and evidence_probe != 'released':
+                        # Decision 2026-10-08: a person named in a document is
+                        # only answerable when Personio confirms them now.
+                        person_confirmations = await _confirm_rag_person_names(
+                            person_confirmation_names(pre_route_rag_result),
+                            personio_client=PersonioDirectoryClient(),
+                            user_id=str(permission_scope.get('user_id') or ''),
+                            user_role=str(permission_scope.get('role') or ''),
+                        )
                         harness_decision = build_knowledge_harness_decision(
                             query=original_user_tool_request or '',
                             resolved_query=user_tool_request or original_user_tool_request or '',
@@ -5557,6 +5583,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             permission_scope=permission_scope,
                             rag_result=pre_route_rag_result,
                             personio_result=retrieval['personio_result'],
+                            person_confirmations=person_confirmations,
                         )
                         metadata['kahle_contract_origin'] = 'pre_route'
                         harness_payload = harness_decision.to_dict()

@@ -36,6 +36,7 @@ BLOCKING_VIOLATION_CODES = frozenset(
         "contact_link_mismatch",
         "required_document_sections_missing",
         "required_scope_missing",
+        "unconfirmed_person_name",
     }
 )
 
@@ -198,6 +199,8 @@ class AnswerContract:
     allowed_contact_bindings: tuple[dict[str, Any], ...] = ()
     required_sections: tuple[str, ...] = ()
     required_scope: tuple[dict[str, Any], ...] = ()
+    # Validator-only: document names Personio did not confirm. Never sent to the model.
+    withheld_person_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -236,6 +239,11 @@ class AnswerValidation:
             instructions.append(
                 "Entferne jede E-Mail-Adresse, Telefonnummer und jeden Link, der nicht wörtlich "
                 "in der Evidenz steht."
+            )
+        if "unconfirmed_person_name" in codes:
+            instructions.append(
+                "Nenne keine Person aus den Dokumenten, die Personio nicht aktuell bestätigt; "
+                "verweise stattdessen auf die Funktion oder Abteilung aus der Evidenz."
             )
         if "required_document_sections_missing" in codes:
             instructions.append(
@@ -348,7 +356,11 @@ class HarnessDecision:
             "user_intent": asdict(self.user_intent),
             "resolved_context": asdict(self.resolved_context),
             "evidence_bundle": evidence_summary,
-            "answer_contract": asdict(self.answer_contract),
+            "answer_contract": {
+                key: value
+                for key, value in asdict(self.answer_contract).items()
+                if key != "withheld_person_names"
+            },
         }
         contract = json.dumps(
             payload,
@@ -1033,6 +1045,22 @@ def validate_answer(
                     exception_contacts=list(requirement["exception_contacts"]),
                 )
 
+    # The withheld names come from the server-side decision, never from the model.
+    folded_answer_text = _fold(text)
+    for name in contract.get("withheld_person_names") or ():
+        tokens = _fold(str(name or "")).split()
+        if len(tokens) < 2:
+            continue
+        if re.search(rf"\b{re.escape(' '.join(tokens))}\b", folded_answer_text) or re.search(
+            rf"\b(?:herr|frau)\s+{re.escape(tokens[-1])}\b", folded_answer_text
+        ):
+            add(
+                "unconfirmed_person_name",
+                "Die Antwort nennt eine Person aus einem Dokument, die Personio nicht "
+                "aktuell bestätigt.",
+            )
+            break
+
     if retrieval_plan.get("mode") == "model_led":
         # The serialized contract is not an independent source of authority.
         current = EvidenceBundle(
@@ -1412,6 +1440,13 @@ def _directory_information_need(query: str) -> bool:
         return True
     if _organization_unit_directory_question(folded):
         return True
+    if (
+        re.search(r"\bansprechpartner\w*\s+(?:fur|bei|zu|zum|zur)\b", folded)
+        and not _has_named_person_reference(query)
+    ):
+        # A contact person for a process topic is documented knowledge; named
+        # people in the documents are confirmed against Personio separately.
+        return False
     if _explicit_onboarding_people_request(folded):
         return True
     if _has_supervisor_reference(folded):
@@ -2362,6 +2397,142 @@ def _has_named_person_entity(text: str) -> bool:
     return False
 
 
+# Capitalized words that open a sentence or address someone, never a name.
+_PERSON_NAME_LEADING_WORDS = frozenset({
+    "herr", "frau", "dr", "prof", "bei", "fur", "mit", "von", "nach", "zur", "zum",
+    "im", "am", "in", "an", "auf", "aus", "uber", "unter", "vor", "ab", "seit", "bitte",
+    "sie", "er", "es", "wir", "ihr", "du", "ich", "alle", "jede", "jeder", "jedes",
+    "diese", "dieser", "dieses", "hier", "dort", "dann", "danach", "zuerst",
+    "anschliessend", "wenn", "falls", "sobald", "und", "oder",
+    "ihre", "ihren", "ihrem", "ihrer", "eure", "euer", "seine", "sein", "unsere", "unser",
+    "deine", "dein", "meine", "mein", "keine", "kein", "welche", "welcher", "welches",
+    "beim", "haben", "vielen", "andere", "weitere", "neue", "wichtige",
+    "digitale", "direkter", "klare", "melde", "nennen", "reine", "zentrale",
+    "begrenztes", "mitarbeiter",
+})
+# Company, product and common words that never form a personal name.
+_PERSON_NAME_NON_NAME_TOKENS = frozenset({"kahle", "vinci", "service", "fragen", "sie", "ihnen"})
+# Adjectives such as "Verantwortliche Stelle" or "Datenschutzrechtliche Fragen".
+_PERSON_NAME_ADJECTIVE = re.compile(r"(?:lich|isch|ig|iv|bar)(?:e|er|es|en|em)$")
+_PERSON_RESPONSIBILITY_RELATION = re.compile(
+    r"\b(?:zustandig\w*|verantwortlich\w*|ansprechpartner\w*|ansprechperson\w*|"
+    r"bearbeit\w*|betreu\w*|kummer\w*|ubernimmt|ubernehmen|wende\w*|erreich\w*|"
+    r"kontakt\w*|meld\w*|genehmig\w*|gibt\s+frei|freigegeben\s+durch)\b"
+)
+
+
+def _person_name_mentions(text: str) -> tuple[str, ...]:
+    """Two- or three-token personal names; titles, prepositions, units and locations excluded."""
+    locations = {_fold(name) for name in KAHLE_LOCATIONS}
+    names: list[str] = []
+    text = str(text or "")
+    for match in re.finditer(
+        r"\b(?:[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]*\s+){1,2}[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]*\b",
+        text,
+    ):
+        # Every sentence starts capitalized: "Andere Standorte wenden sich" is a
+        # plural subject, a single person takes a singular verb.
+        next_word = re.match(r"\s+([a-zäöüß]+)", text[match.end():])
+        if not text[:match.start()].strip() and next_word and next_word.group(1).endswith("en"):
+            continue
+        tokens = [token.strip(".-") for token in match.group(0).split()]
+        while tokens and (
+            _fold(tokens[0]) in _PERSON_NAME_LEADING_WORDS
+            or _PERSON_NAME_ADJECTIVE.search(_fold(tokens[0]))
+        ):
+            tokens.pop(0)
+        folded = [_fold(token) for token in tokens]
+        if len(tokens) < 2 or any(
+            token in _PERSON_ENTITY_EXCLUSION_TOKENS or token in locations
+            or token in _PERSON_NAME_NON_NAME_TOKENS
+            for token in folded
+        ) or any(len(token) > 1 and token.isupper() for token in tokens):
+            continue
+        names.append(" ".join(tokens))
+    return tuple(dict.fromkeys(names))
+
+
+def _responsible_person_names(claim: Any) -> tuple[str, ...]:
+    """Names a document states as handling, owning or answering for something."""
+    text = str(claim.get("text") or "") if isinstance(claim, dict) else str(claim or "")
+    return tuple(dict.fromkeys(
+        name
+        for clause in _claim_clauses(text)
+        if _PERSON_RESPONSIBILITY_RELATION.search(_fold(clause))
+        for name in _person_name_mentions(clause)
+    ))
+
+
+def _is_rag_claim(claim: Any) -> bool:
+    source_id = claim.get("source_id") if isinstance(claim, dict) else ""
+    return not _citation_identifier(str(source_id or "")).startswith("P")
+
+
+def _confirmed_person_names(confirmations: tuple[Any, ...]) -> frozenset[str]:
+    """Folded names with exactly one current Personio ID in this request."""
+    ids_by_name: dict[str, set[str]] = {}
+    for result in confirmations:
+        if not isinstance(result, dict) or result.get("status") != "ok" or result.get("stale") is True:
+            continue
+        for claim in result.get("claims") or ():
+            if not isinstance(claim, dict):
+                continue
+            name = _fold(str(claim.get("display_name") or "")).strip()
+            if name:
+                ids_by_name.setdefault(name, set()).add(str(claim.get("personio_id") or "").strip())
+    return frozenset(
+        name for name, ids in ids_by_name.items() if len(ids) == 1 and "" not in ids
+    )
+
+
+def _withhold_unconfirmed_rag_persons(
+    evidence: EvidenceBundle, confirmations: tuple[Any, ...]
+) -> tuple[EvidenceBundle, tuple[str, ...]]:
+    """Drop document statements naming a person Personio does not confirm (decision 2026-10-08)."""
+    confirmed = _confirmed_person_names(confirmations)
+    kept: list[Any] = []
+    withheld: list[str] = []
+    for claim in evidence.supported_claims:
+        unconfirmed = (
+            [name for name in _responsible_person_names(claim) if _fold(name) not in confirmed]
+            if _is_rag_claim(claim)
+            else []
+        )
+        if unconfirmed:
+            withheld.extend(unconfirmed)
+        else:
+            kept.append(claim)
+    if not withheld:
+        return evidence, ()
+    missing = tuple(dict.fromkeys((
+        *evidence.missing_information,
+        "Eine im Dokument genannte zuständige Person ist im aktuellen "
+        "Personio-Verzeichnis nicht bestätigt. Nenne stattdessen die Funktion "
+        "oder Abteilung aus der Evidenz, falls vorhanden.",
+    )))
+    return (
+        replace(
+            evidence,
+            status=evidence.status if kept else "unsupported",
+            supported_claims=tuple(kept),
+            missing_information=missing,
+        ),
+        tuple(dict.fromkeys(withheld)),
+    )
+
+
+def person_confirmation_names(rag_result: Any, *, limit: int = 3) -> tuple[str, ...]:
+    """Document names the pre-route looks up in Personio before answering."""
+    evidence = _evidence_bundle(str(rag_result or ""), False)
+    names = (
+        name
+        for claim in evidence.supported_claims
+        if _is_rag_claim(claim)
+        for name in _responsible_person_names(claim)
+    )
+    return tuple(dict.fromkeys(names))[:limit]
+
+
 def _contains_contact_literal(text: str) -> bool:
     return bool(
         _EMAIL_LITERAL.search(text)
@@ -3072,6 +3243,7 @@ def build_decision(
     permission_scope: dict[str, Any],
     rag_result: str,
     personio_result: Any = None,
+    person_confirmations: tuple[Any, ...] = (),
 ) -> HarnessDecision:
     """Build an observable decision without changing the live answer path."""
     original = str(query or "").strip()
@@ -3103,6 +3275,9 @@ def build_decision(
         evidence = _evidence_bundle(rag_result, procedural)
     else:
         evidence = merge_evidence(rag_result, personio_result)
+    evidence, withheld_person_names = _withhold_unconfirmed_rag_persons(
+        evidence, (*tuple(person_confirmations or ()), personio_result),
+    )
     evidence = _apply_directory_safety_rules(retrieval_query, evidence)
     evidence, allowed_contact_values = _apply_contact_evidence_requirement(
         retrieval_query, evidence
@@ -3155,6 +3330,7 @@ def build_decision(
             allowed_contact_bindings=rag_contact_bindings,
             required_sections=_complete_document_overview_sections(evidence),
             required_scope=_scope_requirements(evidence),
+            withheld_person_names=withheld_person_names,
         ),
         events=(
             {"type": "intent/started"},
@@ -3231,6 +3407,9 @@ def build_result_driven_decision(
             result_driven=True,
         )
 
+    evidence, withheld_person_names = _withhold_unconfirmed_rag_persons(
+        evidence, (personio_result,) if "personio_directory" in actual_tools else (),
+    )
     if "personio_directory" in actual_tools:
         # Same supervisor and ranking rule as the pre-route.
         evidence = _apply_directory_safety_rules(resolved_context.retrieval_query, evidence)
@@ -3288,6 +3467,7 @@ def build_result_driven_decision(
             allowed_contact_bindings=_model_led_contact_bindings(evidence),
             required_sections=_complete_document_overview_sections(evidence),
             required_scope=_scope_requirements(evidence),
+            withheld_person_names=withheld_person_names,
         ),
         events=(
             *retrieval_events,
