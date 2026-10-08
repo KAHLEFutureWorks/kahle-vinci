@@ -1768,11 +1768,22 @@ def _call_rag_chat_tool(
         return ""
 
 
-# Mirrors the harness location list; test_kahle_harness_phase3c pins all copies.
-_KAHLE_LOCATIONS = (
-    "Hannover", "Wunstorf", "Wedemark", "Walsrode",
-    "Neustadt", "Nienburg", "Stadthagen",
+# --- BEGIN kahle_locations (build_tools.py, nicht direkt bearbeiten) ---
+KAHLE_LOCATION_TABLE = (
+    ("Hannover", "Hannover", ("HAN",)),
+    ("Wunstorf", "Wunstorf", ("WUN",)),
+    ("Wedemark", "Wedemark", ("WED",)),
+    ("Walsrode", "Walsrode", ("WAL",)),
+    ("Neustadt", "Neustadt am Rübenberge", ("NEU",)),
+    ("Nienburg", "Nienburg", ("NIE",)),
+    ("Stadthagen", "Stadthagen", ("STA", "SHG")),
 )
+KAHLE_LOCATIONS = tuple(name for name, _, _ in KAHLE_LOCATION_TABLE)
+KAHLE_LOCATION_FULL_NAMES = tuple(full_name for _, full_name, _ in KAHLE_LOCATION_TABLE)
+KAHLE_LOCATION_CODES = tuple(
+    (code, full_name) for _, full_name, codes in KAHLE_LOCATION_TABLE for code in codes
+)
+# --- END kahle_locations ---
 
 
 def _expand_customer_lock_followup(
@@ -1815,7 +1826,7 @@ def _expand_customer_lock_followup(
     location = next(
         (
             name
-            for name in _KAHLE_LOCATIONS
+            for name in KAHLE_LOCATIONS
             if re.search(rf"\b{fold(name)}\b", folded)
         ),
         "",

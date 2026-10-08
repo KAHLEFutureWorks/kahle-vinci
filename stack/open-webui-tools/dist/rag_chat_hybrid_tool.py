@@ -3,7 +3,7 @@ version: 1.0.0
 description: Berechtigungsgefilterte Dense+BM25-Suche mit RRF, Reranking und Quellen.
 """
 # Erzeugt von stack/open-webui-tools/build_tools.py. Nicht direkt bearbeiten.
-# Quellen: functional_contact_contract.py, hybrid_retrieval.py, hybrid_retrieval_adapters.py, rag_chat_hybrid_tool.py
+# Quellen: kahle_locations.py, functional_contact_contract.py, hybrid_retrieval.py, hybrid_retrieval_adapters.py, rag_chat_hybrid_tool.py
 from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import date
@@ -19,6 +19,21 @@ import requests
 import time
 import unicodedata
 
+
+KAHLE_LOCATION_TABLE = (
+    ("Hannover", "Hannover", ("HAN",)),
+    ("Wunstorf", "Wunstorf", ("WUN",)),
+    ("Wedemark", "Wedemark", ("WED",)),
+    ("Walsrode", "Walsrode", ("WAL",)),
+    ("Neustadt", "Neustadt am Rübenberge", ("NEU",)),
+    ("Nienburg", "Nienburg", ("NIE",)),
+    ("Stadthagen", "Stadthagen", ("STA", "SHG")),
+)
+KAHLE_LOCATIONS = tuple(name for name, _, _ in KAHLE_LOCATION_TABLE)
+KAHLE_LOCATION_FULL_NAMES = tuple(full_name for _, full_name, _ in KAHLE_LOCATION_TABLE)
+KAHLE_LOCATION_CODES = tuple(
+    (code, full_name) for _, full_name, codes in KAHLE_LOCATION_TABLE for code in codes
+)
 
 CONTACT_SCHEMA = "kahle.functional-contact.v1"
 CONTACT_HEADER = ("Funktion", "Kontaktart", "Kontaktwert", "Verwendungszweck", "Geltungsbereich")
@@ -375,14 +390,13 @@ def diversify_reranked(
         if len(selected) >= result_limit:
             break
     return selected
-_OPENING_HOURS_LOCATIONS = (
-    ("hannover",),
-    ("wunstorf",),
-    ("wedemark",),
-    ("walsrode",),
-    ("neustadt", "rubenberge"),
-    ("nienburg",),
-    ("stadthagen",),
+_OPENING_HOURS_LOCATIONS = tuple(
+    tuple(
+        word
+        for word in unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().casefold().split()
+        if len(word) > 2
+    )
+    for name in KAHLE_LOCATION_FULL_NAMES
 )
 def opening_hours_all_locations_intent(query: str) -> bool:
     folded = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().casefold()
@@ -644,15 +658,6 @@ def _metadata_only(point: dict[str, Any]) -> bool:
     inner = content[3:-3]
     lines = [line.strip() for line in inner.splitlines() if line.strip()]
     return bool(lines) and all(":" in line or line.startswith(("-", "#")) for line in lines)
-KAHLE_LOCATIONS = (
-    "Hannover",
-    "Wunstorf",
-    "Wedemark",
-    "Walsrode",
-    "Neustadt",
-    "Nienburg",
-    "Stadthagen",
-)
 _EXPLICIT_SCOPE_STATEMENT = re.compile(
     r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschlie\w*|lediglich)\s+fur\b"
 )
@@ -1624,14 +1629,7 @@ def _expand_kahle_query_aliases(query):
         ("DA", "Digitales Autohaus"),
         ("Perso", "Personalabteilung"),
         ("VK", "Verkauf"),
-        ("HAN", "Hannover"),
-        ("WUN", "Wunstorf"),
-        ("WED", "Wedemark"),
-        ("WAL", "Walsrode"),
-        ("NEU", "Neustadt am Rübenberge"),
-        ("NIE", "Nienburg"),
-        ("STA", "Stadthagen"),
-        ("SHG", "Stadthagen"),
+        *KAHLE_LOCATION_CODES,
     )
     for alias, canonical in aliases:
         value = re.sub(
@@ -1679,9 +1677,12 @@ def _clarification_for_query(query):
     )
     if complete_scope:
         return ""
-    locations = (
-        "hannover", "wunstorf", "neustadt", "rübenberge", "ruebenberge",
-        "wedemark", "walsrode", "nienburg", "stadthagen",
+    locations = tuple(
+        variant
+        for name in KAHLE_LOCATION_FULL_NAMES
+        for word in name.casefold().split()
+        if len(word) > 2
+        for variant in (word, word.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue"))
     )
     if any(location in value for location in locations):
         return ""

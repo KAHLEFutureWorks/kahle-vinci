@@ -102,6 +102,7 @@ from open_webui.utils.kahle_knowledge_harness import (
     resolve_query_aliases,
     validate_answer as validate_knowledge_harness_answer,
 )
+from open_webui.utils.kahle_locations import KAHLE_LOCATION_FULL_NAMES, KAHLE_LOCATIONS
 from open_webui.utils.kahle_internal_knowledge import (
     _supervisor_candidate_query,
     bind_internal_knowledge_tools,
@@ -1230,8 +1231,7 @@ def _is_internal_clarification_followup(messages: list[dict[str, Any]], user_tex
         token in folded
         for token in (
             'allgemein', 'alles', 'alle', 'verkauf', 'service', 'teiledienst',
-            'hannover', 'wunstorf', 'wedemark', 'walsrode', 'neustadt',
-            'nienburg', 'stadthagen',
+            *(fold(name) for name in KAHLE_LOCATIONS),
         )
     )
 
@@ -1274,8 +1274,7 @@ def _expanded_internal_rag_query(messages: list[dict[str, Any]], user_text: str)
     if asks_for_all and 'oeffnungszeiten' in previous and 'standort' in previous:
         return (
             'Öffnungszeiten Verkauf Service Teiledienst alle Standorte '
-            'Hannover Wunstorf Wedemark Walsrode Neustadt am Rübenberge '
-            'Nienburg Stadthagen'
+            + ' '.join(KAHLE_LOCATION_FULL_NAMES)
         )
     if re.search(r'\b(?:er|sie|ihn|ihm|ihr)\b', folded):
         contact_followup = bool(

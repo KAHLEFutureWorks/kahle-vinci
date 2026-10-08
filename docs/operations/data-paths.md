@@ -43,6 +43,8 @@ Diese Mounts sind keine eigenständigen Datenablagen:
 | --- | --- | --- |
 | `${KAHLE_ROOT}/stack/open-webui-overrides/open_webui/routers/openai.py` | `open-webui`, ro | Basis-Stack |
 | `${KAHLE_ROOT}/stack/open-webui-overrides/open_webui/utils/kahle_knowledge_harness.py` | `open-webui`, ro | Basis-Stack |
+| `${KAHLE_ROOT}/stack/open-webui-overrides/open_webui/utils/functional_contact_contract.py` | `open-webui`, ro; erzeugt von `build_tools.py` | Basis-Stack |
+| `${KAHLE_ROOT}/stack/open-webui-overrides/open_webui/utils/kahle_locations.py` | `open-webui`, ro; erzeugt von `build_tools.py` | Basis-Stack |
 | `${KAHLE_ROOT}/stack/open-webui-overrides/open_webui/utils/personio_directory_client.py` | `open-webui`, ro | Basis-Stack |
 | `${KAHLE_ROOT}/stack/open-webui-overrides/open_webui/utils/middleware.py` | `open-webui`, ro | Basis-Stack |
 | `${KAHLE_ROOT}/stack/open-webui-overrides/open_webui/utils/misc.py` | `open-webui`, ro | Basis-Stack |

@@ -16,6 +16,10 @@ try:
     from open_webui.utils.functional_contact_contract import extract_contact_literals, functional_contact_key, validate_functional_contact
 except ModuleNotFoundError:  # Isolated offline contract tests use the generated module.
     from functional_contact_contract import extract_contact_literals, functional_contact_key, validate_functional_contact
+try:
+    from open_webui.utils.kahle_locations import KAHLE_LOCATION_CODES, KAHLE_LOCATIONS
+except ModuleNotFoundError:  # Isolated offline tests use the canonical module.
+    from kahle_locations import KAHLE_LOCATION_CODES, KAHLE_LOCATIONS
 
 
 SCHEMA_VERSION = "kahle.knowledge-harness.v1"
@@ -40,13 +44,7 @@ KNOWN_ALIASES = {
     "DA": "Digitales Autohaus",
     "Perso": "Personalabteilung",
     "VK": "Verkauf",
-    "NIE": "Nienburg",
-    "HAN": "Hannover",
-    "WAL": "Walsrode",
-    "WED": "Wedemark",
-    "NEU": "Neustadt am Rübenberge",
-    "WUN": "Wunstorf",
-    "SHG": "Stadthagen",
+    **dict(KAHLE_LOCATION_CODES),
 }
 
 _PERSON_NAME_WORD = (
@@ -662,7 +660,7 @@ def customer_lock_followup_query(
     location = next(
         (
             name
-            for name in _REQUEST_LOCATIONS
+            for name in KAHLE_LOCATIONS
             if re.search(rf"\b{re.escape(_fold(name))}\b", folded)
         ),
         "",
@@ -704,10 +702,10 @@ def _requested_location(query: str) -> str:
     candidates = [name for name in candidates if _fold(name) not in {"vaudis", "personio", "sharepoint", "dse"}]
     if candidates:
         requested = candidates[-1]
-        return next((name for name in _REQUEST_LOCATIONS if _fold(name) == _fold(requested)), requested)
+        return next((name for name in KAHLE_LOCATIONS if _fold(name) == _fold(requested)), requested)
     value = str(query or "").strip()
     return next((
-        name for name in _REQUEST_LOCATIONS
+        name for name in KAHLE_LOCATIONS
         if _fold(name) == _fold(value)
     ), "")
 
@@ -1785,15 +1783,6 @@ def resolve_query_aliases(query: str) -> str:
     return resolved
 
 
-_REQUEST_LOCATIONS = (
-    "Hannover",
-    "Wunstorf",
-    "Wedemark",
-    "Walsrode",
-    "Neustadt",
-    "Nienburg",
-    "Stadthagen",
-)
 _REQUEST_SYSTEMS = ("Vaudis", "Personio", "SharePoint")
 _CONVERSATION_REFERENCE = re.compile(
     r"(?iu)(?:^\s*und\b|\b(?:dann|dort|davon|dazu|das|dies|diese[rmns]?)\b)"
@@ -1807,7 +1796,7 @@ def _request_entities(text: str) -> dict[str, tuple[str, ...]]:
     raw = str(text or "")
     folded = _fold(raw)
     locations = tuple(
-        location for location in _REQUEST_LOCATIONS if _fold(location) in folded
+        location for location in KAHLE_LOCATIONS if _fold(location) in folded
     )
     systems = tuple(system for system in _REQUEST_SYSTEMS if _fold(system) in folded)
     person_match = _EXPLICIT_PERSON_AFTER_VON.search(raw)
@@ -2491,7 +2480,7 @@ def _named_request_locations(text: str) -> tuple[str, ...]:
     """KAHLE locations named in ``text``, in order of appearance."""
     folded = _fold(text)
     hits = []
-    for name in _REQUEST_LOCATIONS:
+    for name in KAHLE_LOCATIONS:
         match = re.search(rf"\b{re.escape(_fold(name))}\b", folded)
         if match:
             hits.append((match.start(), name))
@@ -2523,7 +2512,7 @@ def _scope_requirements(evidence: EvidenceBundle) -> tuple[dict[str, Any], ...]:
         if not isinstance(source_id, str) or not _SCOPE_STATEMENT.search(_fold(text)):
             continue
         locations = _named_request_locations(text)
-        if not locations or len(locations) >= len(_REQUEST_LOCATIONS):
+        if not locations or len(locations) >= len(KAHLE_LOCATIONS):
             continue
         requirement = {
             "source_id": source_id,

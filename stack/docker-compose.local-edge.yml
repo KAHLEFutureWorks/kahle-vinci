@@ -33,6 +33,7 @@ services:
       - "${KAHLE_LOCAL_CODE_ROOT:-${KAHLE_ROOT}}/stack/open-webui-overrides/open_webui/utils/kahle_knowledge_harness.py:/app/backend/open_webui/utils/kahle_knowledge_harness.py:ro"
       - "${KAHLE_LOCAL_CODE_ROOT:-${KAHLE_ROOT}}/stack/open-webui-overrides/open_webui/utils/kahle_internal_knowledge.py:/app/backend/open_webui/utils/kahle_internal_knowledge.py:ro"
       - "${KAHLE_LOCAL_CODE_ROOT:-${KAHLE_ROOT}}/stack/open-webui-overrides/open_webui/utils/functional_contact_contract.py:/app/backend/open_webui/utils/functional_contact_contract.py:ro"
+      - "${KAHLE_LOCAL_CODE_ROOT:-${KAHLE_ROOT}}/stack/open-webui-overrides/open_webui/utils/kahle_locations.py:/app/backend/open_webui/utils/kahle_locations.py:ro"
 
   kb-admin-api:
     environment:

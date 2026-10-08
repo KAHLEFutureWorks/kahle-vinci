@@ -25,11 +25,24 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parent
 
 # Reihenfolge ist bedeutsam: Adapter benutzen RetrievalError aus hybrid_retrieval.
-SHARED_MODULES = ("functional_contact_contract.py", "hybrid_retrieval.py", "hybrid_retrieval_adapters.py")
-CONTRACT_COPIES = (
-    "kb-sync/app/functional_contact_contract.py",
-    "open-webui-overrides/open_webui/utils/functional_contact_contract.py",
+SHARED_MODULES = (
+    "kahle_locations.py", "functional_contact_contract.py",
+    "hybrid_retrieval.py", "hybrid_retrieval_adapters.py",
 )
+# Kanonische Quelle -> exakte Laufzeitkopien ausserhalb der Tool-Bundles.
+RUNTIME_COPIES = {
+    "functional_contact_contract.py": (
+        "kb-sync/app/functional_contact_contract.py",
+        "open-webui-overrides/open_webui/utils/functional_contact_contract.py",
+    ),
+    "kahle_locations.py": (
+        "open-webui-overrides/open_webui/utils/kahle_locations.py",
+    ),
+}
+# Der Guard wird als einzelne Datei installiert; er erhaelt die Tabelle als Block.
+GUARD_PATH = "open-webui-functions/kahle_toolcall_guard.py"
+LOCATION_BLOCK_BEGIN = "# --- BEGIN kahle_locations (build_tools.py, nicht direkt bearbeiten) ---\n"
+LOCATION_BLOCK_END = "# --- END kahle_locations ---\n"
 BUNDLES = {
     "rag_chat_hybrid_tool.py": SHARED_MODULES,
     "kahle_workflow_orchestrator.py": SHARED_MODULES,
@@ -80,6 +93,18 @@ def split_source(
         else:
             remainder.append(segment)
     return docstring, imports, "".join(remainder)
+
+
+def replace_location_block(text: str, body: str) -> str:
+    """Ersetzt den generierten Standortblock zwischen seinen Markern."""
+    start = text.find("# --- BEGIN kahle_locations")
+    end = text.find(LOCATION_BLOCK_END)
+    if start < 0 or end < start:
+        raise ValueError("Standortblock-Marker fehlen")
+    return (
+        text[:start] + LOCATION_BLOCK_BEGIN + body.strip("\n") + "\n"
+        + text[end:]
+    )
 
 
 def build(tool_name: str, shared: tuple[str, ...]) -> str:
@@ -142,19 +167,37 @@ def main() -> int:
     dist.mkdir(exist_ok=True)
     failed = False
 
-    contract = (TOOLS_DIR / "functional_contact_contract.py").read_bytes()
-    for relative_path in CONTRACT_COPIES:
-        target = TOOLS_DIR.parent / relative_path
-        if args.check:
-            if not target.is_file() or target.read_bytes() != contract:
-                print(f"VERALTET {relative_path}: neu bauen")
-                failed = True
+    for source_name, copies in RUNTIME_COPIES.items():
+        content = (TOOLS_DIR / source_name).read_bytes()
+        for relative_path in copies:
+            target = TOOLS_DIR.parent / relative_path
+            if args.check:
+                if not target.is_file() or target.read_bytes() != content:
+                    print(f"VERALTET {relative_path}: neu bauen")
+                    failed = True
+                else:
+                    print(f"aktuell  {relative_path}")
             else:
-                print(f"aktuell  {relative_path}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+                print(f"kopiert  {relative_path}")
+
+    guard = TOOLS_DIR.parent / GUARD_PATH
+    _, _, location_body = split_source(TOOLS_DIR / "kahle_locations.py")
+    raw_guard = guard.read_bytes().decode("utf-8")
+    # Zeilenenden des Checkouts bleiben erhalten; verglichen wird der Inhalt.
+    newline = "\r\n" if "\r\n" in raw_guard else "\n"
+    current_guard = raw_guard.replace("\r\n", "\n")
+    expected_guard = replace_location_block(current_guard, location_body)
+    if args.check:
+        if current_guard != expected_guard:
+            print(f"VERALTET {GUARD_PATH}: neu bauen")
+            failed = True
         else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(contract)
-            print(f"kopiert  {relative_path}")
+            print(f"aktuell  {GUARD_PATH}")
+    elif current_guard != expected_guard:
+        guard.write_bytes(expected_guard.replace("\n", newline).encode("utf-8"))
+        print(f"aktualisiert {GUARD_PATH}")
 
     for tool_name, shared in BUNDLES.items():
         bundle = build(tool_name, shared)

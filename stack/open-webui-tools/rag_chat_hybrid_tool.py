@@ -16,8 +16,8 @@ import time
 import requests
 from pydantic import BaseModel, Field
 from functional_contact_contract import validate_functional_contact
+from kahle_locations import KAHLE_LOCATION_CODES, KAHLE_LOCATION_FULL_NAMES, KAHLE_LOCATIONS
 from hybrid_retrieval import (
-    KAHLE_LOCATIONS,
     is_scope_statement,
     named_kahle_locations,
     scope_excludes_locations,
@@ -160,14 +160,7 @@ def _expand_kahle_query_aliases(query):
         ("DA", "Digitales Autohaus"),
         ("Perso", "Personalabteilung"),
         ("VK", "Verkauf"),
-        ("HAN", "Hannover"),
-        ("WUN", "Wunstorf"),
-        ("WED", "Wedemark"),
-        ("WAL", "Walsrode"),
-        ("NEU", "Neustadt am Rübenberge"),
-        ("NIE", "Nienburg"),
-        ("STA", "Stadthagen"),
-        ("SHG", "Stadthagen"),
+        *KAHLE_LOCATION_CODES,
     )
     for alias, canonical in aliases:
         value = re.sub(
@@ -217,9 +210,12 @@ def _clarification_for_query(query):
     )
     if complete_scope:
         return ""
-    locations = (
-        "hannover", "wunstorf", "neustadt", "rübenberge", "ruebenberge",
-        "wedemark", "walsrode", "nienburg", "stadthagen",
+    locations = tuple(
+        variant
+        for name in KAHLE_LOCATION_FULL_NAMES
+        for word in name.casefold().split()
+        if len(word) > 2
+        for variant in (word, word.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue"))
     )
     if any(location in value for location in locations):
         return ""

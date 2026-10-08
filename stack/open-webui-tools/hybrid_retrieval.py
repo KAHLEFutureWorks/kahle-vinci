@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 import requests
 from functional_contact_contract import functional_contact_key, validate_functional_contact
+from kahle_locations import KAHLE_LOCATION_FULL_NAMES, KAHLE_LOCATIONS
 
 
 class RetrievalError(RuntimeError):
@@ -265,14 +266,14 @@ def diversify_reranked(
     return selected
 
 
-_OPENING_HOURS_LOCATIONS = (
-    ("hannover",),
-    ("wunstorf",),
-    ("wedemark",),
-    ("walsrode",),
-    ("neustadt", "rubenberge"),
-    ("nienburg",),
-    ("stadthagen",),
+# Distinctive folded words per location; short connectors such as "am" are skipped.
+_OPENING_HOURS_LOCATIONS = tuple(
+    tuple(
+        word
+        for word in unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().casefold().split()
+        if len(word) > 2
+    )
+    for name in KAHLE_LOCATION_FULL_NAMES
 )
 
 
@@ -566,15 +567,6 @@ def _metadata_only(point: dict[str, Any]) -> bool:
     return bool(lines) and all(":" in line or line.startswith(("-", "#")) for line in lines)
 
 
-KAHLE_LOCATIONS = (
-    "Hannover",
-    "Wunstorf",
-    "Wedemark",
-    "Walsrode",
-    "Neustadt",
-    "Nienburg",
-    "Stadthagen",
-)
 _EXPLICIT_SCOPE_STATEMENT = re.compile(
     r"\bgeltungsbereich\b|\bgilt\s+(?:nur|ausschlie\w*|lediglich)\s+fur\b"
 )

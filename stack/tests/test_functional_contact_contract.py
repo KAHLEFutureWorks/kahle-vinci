@@ -197,6 +197,9 @@ def test_builder_generates_exact_copies_and_detects_drift(tmp_path, monkeypatch,
     tools_dir.mkdir(parents=True)
     for source in SOURCE.parent.glob("*.py"):
         shutil.copyfile(source, tools_dir / source.name)
+    guard = SOURCE.parents[1] / "open-webui-functions" / "kahle_toolcall_guard.py"
+    (tools_dir.parent / "open-webui-functions").mkdir()
+    shutil.copyfile(guard, tools_dir.parent / "open-webui-functions" / guard.name)
     monkeypatch.setattr(builder, "TOOLS_DIR", tools_dir)
     monkeypatch.setattr(sys, "argv", ["build_tools.py"])
     assert builder.main() == 0

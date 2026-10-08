@@ -1620,6 +1620,12 @@ def load_function_from_middleware(name: str):
         harness.classify_personio_directory_intent
     )
     namespace["customer_lock_followup_query"] = harness.customer_lock_followup_query
+    locations = load_python_module(
+        ROOT / "open-webui-overrides" / "open_webui" / "utils" / "kahle_locations.py",
+        f"kahle_locations_{name}_dependency",
+    )
+    namespace["KAHLE_LOCATIONS"] = locations.KAHLE_LOCATIONS
+    namespace["KAHLE_LOCATION_FULL_NAMES"] = locations.KAHLE_LOCATION_FULL_NAMES
     return namespace[name]
 
 

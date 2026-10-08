@@ -315,10 +315,6 @@ def load_tool():
     return tool
 
 
-def test_tool_and_harness_share_the_location_list():
-    assert load_tool().KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
-
-
 def test_scope_sentences_always_reach_the_claims():
     tool = load_tool()
     passage = (
@@ -400,10 +396,6 @@ def _point(point_id, document_id, text, heading=(), kind="text"):
         "parent_content": text, "content": text, "heading_path": list(heading), "chunk_kind": kind,
         "title": "Prozess",
     }}
-
-
-def test_retrieval_shares_the_location_list():
-    assert load_retrieval().KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
 
 
 def test_restrictive_scope_of_a_selected_document_is_added_for_any_question():
@@ -556,10 +548,6 @@ def test_retry_timeouts_reach_the_container():
 
     assert "KAHLE_ANSWER_RETRY_TIMEOUTS: ${KAHLE_ANSWER_RETRY_TIMEOUTS:-}" in compose
     assert "\nKAHLE_ANSWER_RETRY_TIMEOUTS=\n" in template
-
-
-def test_guard_shares_the_location_list():
-    assert _guard_module()._KAHLE_LOCATIONS == load_harness()._REQUEST_LOCATIONS
 
 
 def test_failed_exception_lookup_reports_a_technical_error_code():

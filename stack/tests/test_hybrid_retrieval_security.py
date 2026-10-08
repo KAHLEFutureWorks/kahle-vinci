@@ -207,8 +207,11 @@ def load_tool_helpers(*names):
     ]
     namespace = {
         "re": re,
-        # The bundle inlines hybrid_retrieval; its helpers are in scope.
+        # The bundle inlines hybrid_retrieval and kahle_locations; their names are in scope.
         "is_scope_statement": module.is_scope_statement,
+        **{name: getattr(__import__("kahle_locations"), name) for name in (
+            "KAHLE_LOCATIONS", "KAHLE_LOCATION_FULL_NAMES", "KAHLE_LOCATION_CODES",
+        )},
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source_path), "exec"), namespace)
     return tuple(namespace[name] for name in names)
