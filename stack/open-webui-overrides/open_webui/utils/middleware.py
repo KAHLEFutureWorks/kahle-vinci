@@ -325,7 +325,6 @@ def _evidence_probe_kinds_match(plan: Any) -> bool:
     return bool(kinds & {
         'procedure',
         'functional_contact',
-        'functional_responsibility',
         'workflow',
         'opening_hours',
         'system_usage_locations',

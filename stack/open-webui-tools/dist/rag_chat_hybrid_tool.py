@@ -458,8 +458,6 @@ def pre_rerank_metadata_filter(
         and float((point.get("payload") or {}).get("classification_confidence") or 0) >= 0.8
     ]
     if not trusted:
-        if "approved_functional_responsibility" in required:
-            return []
         return candidates
     selected = [
         point for point in trusted

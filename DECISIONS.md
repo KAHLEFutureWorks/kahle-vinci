@@ -264,6 +264,10 @@ Implications:
   dieser Quelle genannt werden (Nutzerentscheidung 2026-09-30). Aussagen, die
   eine Person benennen, sind davon ausgenommen. Personio-Kontaktfelder werden
   nur auf eine ausdrückliche Kontaktfrage genannt.
+- Kein Fachthema erhält eine pauschale Enthaltung. Mahnungen und
+  Kundenbeschwerden folgen derselben Prozess- und Zuständigkeitslogik wie
+  andere Themen, etwa Garantieanträge (Nutzerentscheidung 2026-10-07, ersetzt
+  die Abnahmeregel vom 2026-08-26).
 
 ## ADR-009: Knowledge answers are validated before delivery
 

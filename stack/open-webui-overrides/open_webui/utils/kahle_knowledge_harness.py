@@ -1406,8 +1406,6 @@ def _documented_responsibility_question(folded_query: str) -> bool:
 
 def _directory_information_need(query: str) -> bool:
     folded = _fold(query)
-    if _functional_responsibility_question(folded):
-        return False
     if _documented_responsibility_question(folded) and not _has_named_person_reference(query):
         return False
     if _explicit_functional_contact_question(folded) and not _explicit_current_staff_request(folded):
@@ -1526,16 +1524,8 @@ def _rag_information_need(query: str) -> bool:
     )
     return (
         relation
-        or _functional_responsibility_question(folded)
         or _is_procedural(query)
         or any(term in folded for term in rag_terms)
-    )
-
-
-def _functional_responsibility_question(folded_query: str) -> bool:
-    return bool(
-        re.search(r"\bmahnung\w*\b", folded_query)
-        or re.search(r"\bkundenbeschwerd\w*\b", folded_query)
     )
 
 
@@ -1589,15 +1579,6 @@ def _information_needs(
                 domain="internal_glossary",
                 document_types=("knowledge_document",),
                 evidence_capabilities=("exact_abbreviation_definition",),
-            ),
-        )
-    if _functional_responsibility_question(folded):
-        return (
-            InformationNeed(
-                kind="functional_responsibility",
-                domain="customer_processes",
-                document_types=("process_description", "responsibility_matrix"),
-                evidence_capabilities=("approved_functional_responsibility",),
             ),
         )
     if _explicit_functional_contact_question(folded):
@@ -2295,19 +2276,6 @@ def _evidence_bundle(
         status="supported",
         supported_claims=claims,
         sources=sources,
-    )
-
-
-def _functional_responsibility_evidence(rag_result: str) -> EvidenceBundle:
-    """Keep responsibility questions fail-closed until a role-only mapping is approved."""
-    evidence = _evidence_bundle(rag_result, procedural=False)
-    return EvidenceBundle(
-        status="unsupported",
-        missing_information=(
-            "Für diese fachliche Zuständigkeit liegt keine freigegebene, "
-            "eindeutig auf Personio abbildbare Rollen-Zuordnung vor.",
-        ),
-        sources=evidence.sources,
     )
 
 
@@ -3144,11 +3112,7 @@ def build_decision(
     if retrieval_plan.required_tools == ("personio_directory",):
         evidence = _personio_evidence(personio_result)
     elif retrieval_plan.required_tools == ("rag_chat",):
-        evidence = (
-            _functional_responsibility_evidence(rag_result)
-            if _functional_responsibility_question(_fold(retrieval_query))
-            else _evidence_bundle(rag_result, procedural)
-        )
+        evidence = _evidence_bundle(rag_result, procedural)
     else:
         evidence = merge_evidence(rag_result, personio_result)
     evidence = _apply_directory_safety_rules(retrieval_query, evidence)

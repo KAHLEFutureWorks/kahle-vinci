@@ -772,7 +772,7 @@ def test_retrieval_plan_routes_explicit_mailbox_and_current_staff_to_both_source
         ("Wer ist Verkäufer von Seat Neuwagen?", ("personio_directory",), "employee_directory"),
         ("Wer davon ist die Führungskraft?", ("personio_directory",), "employee_directory"),
         ("An wen wende ich mich, wenn ein Kunde eine Mahnung erhält?", ("rag_chat",), "internal_knowledge"),
-        ("Wer ist der Ansprechpartner für Kundenbeschwerden?", ("rag_chat",), "internal_knowledge"),
+        ("Welche Abteilung bearbeitet Kundenbeschwerden?", ("rag_chat",), "internal_knowledge"),
     ),
 )
 def test_retrieval_plan_separates_employee_lists_from_process_responsibility(
@@ -798,28 +798,63 @@ def test_retrieval_plan_separates_employee_lists_from_process_responsibility(
     )
 
 
-def test_functional_responsibility_rejects_rag_person_names_without_a_versioned_role_mapping():
-    harness = load_harness()
-    rag_result = (
+def _supported_rag(text):
+    return (
         "KAHLE_RAG_RESULT\nFOUND: true\n"
         'EVIDENCE_BUNDLE_JSON: {"schema_version":"kahle.evidence-bundle.v1",'
         '"status":"supported","supported_claims":[{"source_id":"#1",'
-        '"text":"Eine benannte Person bearbeitet Kundenbeschwerden."}],'
+        f'"text":"{text}"}}],'
         '"missing_information":[],"conflicts":[],"sources":[{"number":1,"document_id":"process"}]}'
     )
 
-    decision = harness.build_decision(
-        query="Wer ist der Ansprechpartner für Kundenbeschwerden?",
-        resolved_query="Wer ist der Ansprechpartner für Kundenbeschwerden?",
+
+def _rag_decision(harness, query, claim):
+    return harness.build_decision(
+        query=query,
+        resolved_query=query,
         messages=[],
         model_id="kahle-vinci",
         permission_scope={"user_id": "user-1", "groups": ["intern"]},
-        rag_result=rag_result,
+        rag_result=_supported_rag(claim),
     )
 
+
+@pytest.mark.parametrize(
+    ("query", "claim"),
+    (
+        ("Wie erstelle ich eine Mahnung?", "Mahnungen werden in Vaudis unter Debitoren erstellt."),
+        ("Wie bearbeite ich eine Kundenbeschwerde?", "Kundenbeschwerden werden im Beschwerdeformular erfasst."),
+    ),
+)
+def test_dunning_and_complaint_procedures_are_answered_from_documents(query, claim):
+    """Review U3 (decision 2026-10-07): no topic-wide abstention for these processes."""
+    decision = _rag_decision(load_harness(), query, claim)
+
     assert decision.retrieval_plan.required_tools == ("rag_chat",)
-    assert decision.evidence_bundle.status == "unsupported"
-    assert decision.evidence_bundle.supported_claims == ()
+    assert decision.evidence_bundle.status == "supported"
+    assert [c["text"] for c in decision.evidence_bundle.supported_claims] == [claim]
+
+
+@pytest.mark.parametrize(
+    ("template", "topic"),
+    (
+        ("Wer ist für {} zuständig?", "Mahnungen"),
+        ("Welche Abteilung bearbeitet {}?", "Kundenbeschwerden"),
+        ("Wer ist der Ansprechpartner für {}?", "Kundenbeschwerden"),
+    ),
+)
+def test_dunning_and_complaint_responsibility_follows_the_generic_rule(template, topic):
+    """Same plan and evidence status as the same question about warranty claims."""
+    harness = load_harness()
+    claim = "Die zuständige Fachabteilung bearbeitet den Vorgang."
+    reference = _rag_decision(harness, template.format("Garantieanträge"), claim)
+    decision = _rag_decision(harness, template.format(topic), claim)
+
+    assert decision.retrieval_plan.required_tools == reference.retrieval_plan.required_tools
+    assert [n.kind for n in decision.retrieval_plan.information_needs] == [
+        n.kind for n in reference.retrieval_plan.information_needs
+    ]
+    assert decision.evidence_bundle.status == reference.evidence_bundle.status
 
 
 def test_retrieval_plan_is_model_independent_for_personio_and_rag_needs():

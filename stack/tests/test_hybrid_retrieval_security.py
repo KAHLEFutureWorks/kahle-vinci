@@ -156,29 +156,6 @@ def test_structured_contact_survives_document_capability_filter():
     assert selected == [point]
 
 
-def test_functional_responsibility_rejects_unclassified_unrelated_sources():
-    unrelated = {
-        "payload": {
-            "domain": "internal_communications",
-            "evidence_capabilities": ["contact_details"],
-            "classification_status": "review_required",
-            "classification_confidence": 0.0,
-        }
-    }
-
-    selected = module.pre_rerank_metadata_filter(
-        "An wen wende ich mich, wenn ein Kunde eine Mahnung erhält?",
-        [unrelated],
-        information_needs=[{
-            "kind": "functional_responsibility",
-            "domain": "customer_processes",
-            "evidence_capabilities": ["approved_functional_responsibility"],
-        }],
-    )
-
-    assert selected == []
-
-
 def test_conflict_for_one_key_keeps_independent_contact(monkeypatch):
     first = contact_search_point()
     conflict = contact_search_point("other@example.invalid")
