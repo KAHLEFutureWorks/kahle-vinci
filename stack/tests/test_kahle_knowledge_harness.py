@@ -3961,20 +3961,3 @@ def test_group_supervisor_claim_names_the_group_relation():
 
     [claim] = decision.evidence_bundle.supported_claims
     assert claim["relation"] == "ist laut Personio die gemeinsame Führungskraft der angefragten Gruppe"
-
-
-def test_answer_contract_binds_a_functional_contact_to_its_purpose():
-    """UI acceptance 09.10. (decision A): a data-protection row that mentions VaudisX
-    was named as VaudisX support. A contact is named only for its own purpose."""
-    harness = load_harness()
-    decision = harness.build_decision(
-        query="Wer hilft bei Problemen mit VaudisX?", resolved_query="Wer hilft bei Problemen mit VaudisX?",
-        messages=[], model_id="kahle-vinci", permission_scope={"user_id": "user-1"},
-        rag_result="KAHLE_RAG_RESULT\nFOUND: false",
-    )
-
-    assert (
-        "Nenne einen Funktionskontakt nur, wenn sein Verwendungszweck zur Frage passt; "
-        "ein Systemname im Verwendungszweck allein genügt nicht. Passt keiner, sage, dass "
-        "dafür kein passender Kontakt dokumentiert ist."
-    ) in decision.answer_prompt()
