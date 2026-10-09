@@ -92,6 +92,7 @@ from open_webui.utils.filter import (
     process_filter_functions,
 )
 from open_webui.utils.kahle_knowledge_harness import (
+    add_release_notice,
     build_decision as build_knowledge_harness_decision,
     classify_personio_directory_intent,
     customer_lock_followup_query,
@@ -4463,12 +4464,24 @@ async def _enforce_knowledge_answer(
     model answer that passed the blocking checks or replaces it with a neutral
     abstention.
     """
+    # Without a KAHLE document the fixed notice is prefixed, never requested
+    # from the model (decision 2026-10-09); other violations are still corrected.
+    released = (harness_payload.get('retrieval_plan') or {}).get('mode') == 'released'
+    original = _last_kahle_answer_text(output)
+    answer = add_release_notice(original) if released else original
+    if answer != original:
+        _replace_last_answer_text(output, answer)
     first = validate_knowledge_harness_answer(
-        _last_kahle_answer_text(output), harness_payload, reference_urls=reference_urls,
+        answer, harness_payload, reference_urls=reference_urls,
     )
     attempts = [first.to_dict()]
     if not first.retry_required:
-        return {'attempts': attempts, 'delivery_status': 'accepted', 'retry_count': 0, 'fallback_used': False}
+        return {
+            'attempts': attempts,
+            'delivery_status': 'notice_added' if answer != original else 'accepted',
+            'retry_count': 0,
+            'fallback_used': False,
+        }
 
     evidence = harness_payload.get('evidence_bundle') or {}
     source_ids = tuple(
@@ -4486,6 +4499,8 @@ async def _enforce_knowledge_answer(
         )
     except Exception as error:  # timeout or upstream failure → neutral abstention
         attempts.append({'status': 'retry_failed', 'error': type(error).__name__, 'violations': []})
+    if corrected and released:
+        corrected = add_release_notice(corrected)
     if corrected:
         second = validate_knowledge_harness_answer(
             corrected, harness_payload, reference_urls=reference_urls,

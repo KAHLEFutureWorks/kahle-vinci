@@ -1000,12 +1000,26 @@ def released_decision_payload(query: str, permission_scope: dict[str, Any]) -> d
     }
 
 
+_RELEASE_NOTICE_TEXT = "Dazu gibt es kein KAHLE-Dokument. Allgemein gilt:"
+
+
+def _has_release_notice(text: str) -> bool:
+    return bool(_RELEASE_NOTICE.search(_fold(re.sub(r"[*_#>`]", "", text))[:250]))
+
+
+def add_release_notice(text: str) -> str:
+    """Put the fixed notice in front of a general answer that lacks it (decision 2026-10-09)."""
+    text = str(text or "")
+    if not text.strip() or _ABSTENTION_TEXT in text or _has_release_notice(text):
+        return text
+    return f"{_RELEASE_NOTICE_TEXT}\n\n{text.lstrip()}"
+
+
 def _check_released_answer(text: str, add: Any) -> None:
     """First sentence discloses the missing document; no invented KAHLE contact data."""
     if not text or _ABSTENTION_TEXT in text:
         return
-    opening = _fold(re.sub(r"[*_#>`]", "", text))[:250]
-    if not _RELEASE_NOTICE.search(opening):
+    if not _has_release_notice(text):
         add(
             "release_notice_missing",
             "Die allgemeine Antwort sagt nicht zuerst, dass es dazu kein KAHLE-Dokument gibt.",

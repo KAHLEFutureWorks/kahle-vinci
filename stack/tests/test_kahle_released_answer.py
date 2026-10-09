@@ -100,3 +100,62 @@ def test_eval_counts_the_new_code_as_blocking():
 
     assert "release_notice_missing" in harness_eval.BLOCKING_VIOLATION_CODES
     assert "release_notice_missing" in load_harness().BLOCKING_VIOLATION_CODES
+
+
+NOTICE = "Dazu gibt es kein KAHLE-Dokument. Allgemein gilt:"
+
+
+def test_notice_is_added_once_and_only_when_missing():
+    """Decision 2026-10-09 (A): the fixed notice replaces correction and abstention."""
+    harness = load_harness()
+
+    added = harness.add_release_notice("Ein Reisepass wird beim Bürgeramt beantragt.")
+
+    assert added == f"{NOTICE}\n\nEin Reisepass wird beim Bürgeramt beantragt."
+    assert harness.add_release_notice(added) == added
+    disclosed = "Dazu gibt es kein KAHLE-Dokument. Allgemein: Antrag beim Bürgeramt."
+    assert harness.add_release_notice(disclosed) == disclosed
+    abstention = harness.knowledge_abstention_answer(has_sources=False)
+    assert harness.add_release_notice(abstention) == abstention
+
+
+def _enforce():
+    from test_kahle_harness_phase2 import load_middleware_functions
+
+    harness = load_harness()
+    namespace = load_middleware_functions(
+        "_enforce_knowledge_answer", "_knowledge_retry_messages",
+        "_replace_last_answer_text", "_last_kahle_answer_text",
+        validate_knowledge_harness_answer=harness.validate_answer,
+        knowledge_abstention_answer=harness.knowledge_abstention_answer,
+        add_release_notice=harness.add_release_notice,
+    )
+    return harness, namespace["_enforce_knowledge_answer"]
+
+
+def test_missing_notice_is_prefixed_without_a_model_call():
+    from test_kahle_harness_phase2 import _output, _run
+
+    harness, enforce = _enforce()
+    payload = harness.released_decision_payload("Wie beantrage ich einen Reisepass?", {"user_id": "u"})
+    output = _output("Ein Reisepass wird beim Bürgeramt beantragt.")
+
+    result, calls = _run(enforce, output, payload, [])
+
+    assert calls == []
+    assert (result["delivery_status"], result["retry_count"], result["fallback_used"]) == ("notice_added", 0, False)
+    assert output[0]["content"][0]["text"].startswith(NOTICE)
+
+
+def test_invented_contact_is_still_corrected_and_the_correction_gets_the_notice():
+    from test_kahle_harness_phase2 import _output, _run
+
+    harness, enforce = _enforce()
+    payload = harness.released_decision_payload("Wie erstelle ich eine Mahnung?", {"user_id": "u"})
+    output = _output("Absender: Autohaus KAHLE, Telefon +49 511 123 456")
+
+    result, calls = _run(enforce, output, payload, ["Eine Mahnung nennt Betrag und Frist."])
+
+    assert len(calls) == 1
+    assert (result["delivery_status"], result["retry_count"]) == ("corrected", 1)
+    assert output[0]["content"][0]["text"] == f"{NOTICE}\n\nEine Mahnung nennt Betrag und Frist."

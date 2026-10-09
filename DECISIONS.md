@@ -330,6 +330,9 @@ Implications:
   `release_notice_missing`), und nennt keine KAHLE-Anschrift, -Telefonnummer,
   -E-Mail-Adresse oder -Webadresse ohne Quelle (`unbound_contact_literal`)
   (Nutzerentscheidung 2026-10-08).
+  Fehlt der Hinweis, stellt das System den festen Satz „Dazu gibt es kein
+  KAHLE-Dokument. Allgemein gilt:“ voran, statt zu korrigieren oder sich zu
+  enthalten (`delivery_status` `notice_added`, Nutzerentscheidung 2026-10-09).
 - Personio-Zitate `[P1]` werden erst nach der Prüfung als „(Personio)“
   angezeigt, ergänzt um die Zeile „Quelle: Personio-Mitarbeiterverzeichnis,
   Stand …“ (Nutzerentscheidung 2026-10-08).
