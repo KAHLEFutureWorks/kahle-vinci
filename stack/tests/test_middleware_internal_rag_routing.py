@@ -2892,12 +2892,12 @@ def test_document_blueprint_receives_the_high_salience_final_answer_prompt():
     blueprint_decision = SimpleNamespace(
         answer_blueprint=object(),
         answer_contract=SimpleNamespace(location_mode=False),
-        answer_prompt=lambda: "six-section-blueprint",
+        answer_duties=lambda: "six-section-blueprint",
     )
     ordinary_decision = SimpleNamespace(
         answer_blueprint=None,
         answer_contract=SimpleNamespace(location_mode=False),
-        answer_prompt=lambda: "ordinary-contract",
+        answer_duties=lambda: "ordinary-contract",
     )
 
     assert final_prompt(blueprint_decision) == "six-section-blueprint"
@@ -2912,7 +2912,7 @@ def test_clarification_contract_receives_the_high_salience_final_answer_prompt()
         answer_blueprint=None,
         answer_contract=SimpleNamespace(location_mode=False),
         user_intent=SimpleNamespace(clarification_required=True),
-        answer_prompt=lambda: "exact-rag-clarification",
+        answer_duties=lambda: "exact-rag-clarification",
     )
 
     assert final_prompt(clarification_decision) == "exact-rag-clarification"

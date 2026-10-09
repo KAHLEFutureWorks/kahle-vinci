@@ -229,7 +229,7 @@ def test_scope_contract_is_repeated_right_before_the_answer():
 
     decision = _model_led_decision(harness, _scoped_rag_result())
 
-    assert namespace["_high_salience_knowledge_answer_prompt"](decision) == decision.answer_prompt()
+    assert namespace["_high_salience_knowledge_answer_prompt"](decision) == decision.answer_duties()
 
 
 FULL_ANSWER = (

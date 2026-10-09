@@ -517,7 +517,7 @@ def _high_salience_knowledge_answer_prompt(decision: Any) -> str:
         or bool(getattr(answer_contract, 'required_scope', ()))
     ):
         return ''
-    return str(decision.answer_prompt() or '')
+    return str(decision.answer_duties() or '')
 
 
 def _knowledge_harness_tool_called(metadata: dict[str, Any]) -> str:
@@ -5878,11 +5878,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     final_answer_prompt = metadata.pop('_kahle_final_answer_prompt', '')
     if final_answer_prompt:
-        form_data['messages'] = add_or_update_system_message(
-            final_answer_prompt,
-            form_data['messages'],
-            append=True,
-        )
+        # The full contract is already a system message; next to the user turn
+        # only the short duty list or release notice is repeated (phase 4a).
         form_data['messages'] = add_or_update_user_message(
             final_answer_prompt,
             form_data['messages'],

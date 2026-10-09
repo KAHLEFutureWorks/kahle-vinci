@@ -429,6 +429,27 @@ class HarnessDecision:
             "die Oberfläche ergänzt den vertrauenswürdigen Link separat."
         )
 
+    def answer_duties(self) -> str:
+        """Short duty list for the position right before the answer; no evidence."""
+        if self.user_intent.clarification_required and self.user_intent.clarification_question.strip():
+            # The clarification must be repeated word for word and is short.
+            return self.answer_prompt()
+        duties = []
+        if self.answer_blueprint is not None:
+            headings = [section.heading for section in self.answer_blueprint.sections]
+            duties.append(
+                "Gliedere die Antwort in genau diese nummerierten Abschnitte, in dieser "
+                f"Reihenfolge: {'; '.join(headings)}."
+            )
+        scope = _scope_instruction(self.answer_contract.required_scope)
+        if scope:
+            duties.append(scope.removeprefix("KAHLE_KNOWLEDGE_SCOPE\n").strip())
+        duties.append(
+            "Belege jede interne Aussage mit einer Quellen-ID aus dem Antwortvertrag und nenne "
+            "Kontaktwerte nur aus dem Antwortvertrag."
+        )
+        return "KAHLE_KNOWLEDGE_ANSWER_DUTIES\n" + "\n".join(f"- {duty}" for duty in duties)
+
 
 # Typographic hyphens and dashes would otherwise vanish in the ASCII fold
 # ("KAHLE\u2011Dokument" -> "kahledokument") and merge two words.
