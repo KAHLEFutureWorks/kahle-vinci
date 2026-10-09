@@ -211,6 +211,11 @@ def _last_validation_attempt(message: dict[str, Any]) -> dict[str, Any]:
     return last if isinstance(last, dict) else {}
 
 
+def _token_count(message: dict[str, Any], field: str) -> int | None:
+    value = (message.get("usage") or {}).get(field)
+    return int(value) if isinstance(value, (int, float)) and value >= 0 else None
+
+
 def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
     text = answer_text(message)
     attempt = _last_validation_attempt(message)
@@ -250,6 +255,8 @@ def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
         "fallback_used": bool(metrics.get("fallback_used")),
         "delivery_status": str(metrics.get("delivery_status") or "not_run"),
         "evidence_probe": str(metrics.get("evidence_probe") or ""),
+        "prompt_tokens": _token_count(message, "prompt_tokens"),
+        "completion_tokens": _token_count(message, "completion_tokens"),
     }
 
 
@@ -262,6 +269,10 @@ def summarize_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
         checked = [row for row in items if row.get("abstention_correct") is not None]
         latencies = [row["latency_ms"] for row in items if isinstance(row.get("latency_ms"), int)]
         walls = [row["wall_ms"] for row in items if isinstance(row.get("wall_ms"), int)]
+        prompt_tokens = [row["prompt_tokens"] for row in items if isinstance(row.get("prompt_tokens"), int)]
+        completion_tokens = [
+            row["completion_tokens"] for row in items if isinstance(row.get("completion_tokens"), int)
+        ]
         codes = Counter(
             code for row in items for code in row.get("blocking_violations") or ()
         )
@@ -288,6 +299,9 @@ def summarize_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "latency_p95_ms": nearest_rank(latencies, 0.95),
             "wall_p50_ms": nearest_rank(walls, 0.5),
             "wall_p95_ms": nearest_rank(walls, 0.95),
+            "prompt_tokens_p50": nearest_rank(prompt_tokens, 0.5),
+            "prompt_tokens_p95": nearest_rank(prompt_tokens, 0.95),
+            "completion_tokens_p50": nearest_rank(completion_tokens, 0.5),
             "probe_bound": sum(row.get("evidence_probe") == "bound" for row in items),
             "probe_released": sum(row.get("evidence_probe") == "released" for row in items),
         }

@@ -199,6 +199,8 @@ def test_score_answer_keeps_only_blocking_codes_and_no_text():
         "fallback_used": False,
         "delivery_status": "not_run",
         "evidence_probe": "",
+        "prompt_tokens": None,
+        "completion_tokens": None,
     }
     assert "verlässliche" not in json.dumps(score, ensure_ascii=False)
 
@@ -289,3 +291,23 @@ def test_abstention_counts_as_delivered_without_violation():
     assert score["attempt_blocking_violations"] == ["citation_missing"]
     assert summary["blocking_violation_rate"] == 0.0
     assert summary["fallback_rate"] == 1.0
+
+
+def test_score_and_summary_report_token_usage():
+    first = _message(text="Antwort [1].")
+    first["usage"] = {"prompt_tokens": 20000, "completion_tokens": 400}
+    second = _message(text="Antwort [1].")
+    second["usage"] = {"prompt_tokens": 12000, "completion_tokens": 800}
+    missing = _message(text="Antwort [1].")
+
+    rows = [
+        {"model": "m", **score_answer(_case(), message), "wall_ms": 10}
+        for message in (first, second, missing)
+    ]
+    summary = summarize_answers(rows)["m"]
+
+    assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (20000, 400)
+    assert (rows[2]["prompt_tokens"], rows[2]["completion_tokens"]) == (None, None)
+    assert summary["prompt_tokens_p50"] == 12000
+    assert summary["prompt_tokens_p95"] == 20000
+    assert summary["completion_tokens_p50"] == 400
