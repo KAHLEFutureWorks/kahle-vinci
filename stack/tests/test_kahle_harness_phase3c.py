@@ -185,10 +185,10 @@ def test_both_contract_paths_carry_the_scope(build):
     assert decision.answer_contract.required_scope == EXPECTED_SCOPE
     prompt = decision.answer_prompt()
     assert (
-        "Wenn du Quelle [1] verwendest, nenne ihren Geltungsbereich: Hannover, Wunstorf "
-        "und Wedemark, und für alle anderen Fälle den dokumentierten Weg "
-        "(datenschutz@kahle.de). Passt Quelle [1] nicht zur Frage, lass sie und ihren "
-        "Geltungsbereich weg."
+        "Wenn du den Ablauf aus Quelle [1] verwendest, nenne seinen Geltungsbereich: Er gilt "
+        "nur für Hannover, Wunstorf und Wedemark. Für diesen Ablauf an allen anderen "
+        "Standorten gilt: datenschutz@kahle.de. Andere Wege aus den Quellen bleiben davon "
+        "unberührt. Passt Quelle [1] nicht zur Frage, lass sie und ihren Geltungsbereich weg."
     ) in prompt
 
 
@@ -213,8 +213,9 @@ def test_scope_without_exception_path_asks_only_for_the_scope():
     prompt = _model_led_decision(harness, rag).answer_prompt()
 
     assert (
-        "Wenn du Quelle [1] verwendest, nenne ihren Geltungsbereich: Walsrode. "
-        "Passt Quelle [1] nicht zur Frage, lass sie und ihren Geltungsbereich weg."
+        "Wenn du den Ablauf aus Quelle [1] verwendest, nenne seinen Geltungsbereich: Er gilt "
+        "nur für Walsrode. Passt Quelle [1] nicht zur Frage, lass sie und ihren "
+        "Geltungsbereich weg."
     ) in prompt
     assert "Die Quellen begrenzen ihren Geltungsbereich" not in prompt
 

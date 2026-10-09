@@ -2775,18 +2775,20 @@ def _scope_instruction(requirements: tuple[dict[str, Any], ...]) -> str:
             continue
         source = f"[{_citation_identifier(str(requirement.get('source_id') or ''))}]"
         # A search can return an unrelated scoped document; only its use obliges.
+        # The scope belongs to the documented procedure; other documented paths
+        # (e.g. a permanent objection for every location) stay as they are.
         sentence = (
-            f"Wenn du Quelle {source} verwendest, nenne ihren Geltungsbereich: "
-            f"{_german_list(locations)}"
+            f"Wenn du den Ablauf aus Quelle {source} verwendest, nenne seinen "
+            f"Geltungsbereich: Er gilt nur für {_german_list(locations)}."
         )
         contacts = tuple(requirement.get("exception_contacts") or ())
         if contacts:
             sentence += (
-                ", und für alle anderen Fälle den dokumentierten Weg "
-                f"({', '.join(contacts)})"
+                " Für diesen Ablauf an allen anderen Standorten gilt: "
+                f"{', '.join(contacts)}. Andere Wege aus den Quellen bleiben davon unberührt."
             )
         sentences.append(
-            sentence + f". Passt Quelle {source} nicht zur Frage, lass sie und ihren "
+            sentence + f" Passt Quelle {source} nicht zur Frage, lass sie und ihren "
             "Geltungsbereich weg."
         )
     return ("KAHLE_KNOWLEDGE_SCOPE\n" + " ".join(sentences) + "\n") if sentences else ""
