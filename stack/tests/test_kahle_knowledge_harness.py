@@ -1904,7 +1904,8 @@ def test_middleware_supports_shadow_and_active_answer_contract_modes():
     assert "build_knowledge_harness_decision(" in middleware
     assert "metadata['kahle_knowledge_harness_shadow']" in middleware
     assert "metadata['kahle_knowledge_harness_active'] = True" in middleware
-    assert "harness_decision.answer_prompt()" in middleware
+    # Phase 4a (R2): the pre-route installs the replaceable contract message.
+    assert "form_data.get('messages', []) or [], harness_decision," in middleware
     assert "add_or_update_system_message(" in middleware
 
 

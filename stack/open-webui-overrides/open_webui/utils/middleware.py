@@ -5667,7 +5667,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                             metadata['kahle_answer_contract'] = harness_payload[
                                 'answer_contract'
                             ]
-                            knowledge_answer_prompt = harness_decision.answer_prompt()
                             final_answer_prompt = (
                                 _high_salience_knowledge_answer_prompt(
                                     harness_decision
@@ -5677,10 +5676,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 metadata['_kahle_final_answer_prompt'] = (
                                     final_answer_prompt
                                 )
-                            form_data['messages'] = add_or_update_system_message(
-                                knowledge_answer_prompt,
-                                form_data.get('messages', []) or [],
-                                append=True,
+                            # One replaceable contract message; a later model-led
+                            # refresh replaces it instead of adding a second (R2).
+                            form_data['messages'] = upsert_answer_contract_message(
+                                form_data.get('messages', []) or [], harness_decision,
                             )
                     if harness_mode != 'active' and pre_routed_internal_rag == 'clarification':
                         metadata['kahle_direct_final_content'] = (

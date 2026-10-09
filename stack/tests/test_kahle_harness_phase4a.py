@@ -53,3 +53,33 @@ def test_final_prompt_goes_only_to_the_user_turn():
 
     assert "add_or_update_user_message(" in block
     assert "add_or_update_system_message(" not in block
+
+
+def test_pre_route_installs_the_replaceable_contract_message():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    start = source.index("metadata['kahle_answer_contract'] = harness_payload[")
+    block = source[start: start + 1200]
+
+    assert "upsert_answer_contract_message(" in block
+    assert "knowledge_answer_prompt,\n" not in block
+
+
+def test_refresh_after_pre_route_leaves_exactly_one_contract():
+    sys.path.insert(0, str(ROOT / "open-webui-overrides"))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "kahle_internal_phase4a", ROOT / "open-webui-overrides" / "open_webui" / "utils" / "kahle_internal_knowledge.py"
+        )
+        internal = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(internal)
+    finally:
+        sys.path.remove(str(ROOT / "open-webui-overrides"))
+    harness = load_harness()
+    first = _model_led_decision(harness, _scoped_rag_result())
+    messages = [{"role": "system", "content": "Basis"}, {"role": "user", "content": "Frage"}]
+
+    messages = internal.upsert_answer_contract_message(messages, first)
+    messages = internal.upsert_answer_contract_message(messages, first)
+
+    contracts = [m for m in messages if str(m.get("content") or "").startswith("KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n")]
+    assert len(contracts) == 1
