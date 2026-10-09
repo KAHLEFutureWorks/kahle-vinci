@@ -83,6 +83,8 @@ def test_ask_messages_sends_full_history_without_system_override():
     assert body["messages"] == CASE.messages()
     assert all(item["role"] != "system" for item in body["messages"])
     assert body["tool_ids"] == ["rag_chat"]
+    # Without it OpenWebUI stores no token usage for API-started chats (phase 4a).
+    assert body["stream_options"] == {"include_usage": True}
     assert body["user_message"]["content"] == "Und in WPS?"
     assert chat_id == "chat-1"
     assert message["done"] is True

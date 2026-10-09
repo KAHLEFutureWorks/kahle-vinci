@@ -66,6 +66,8 @@ class HarnessRuntimeClient(OpenWebUIRuntimeClient):
             "messages": [dict(message) for message in messages],
             "tool_ids": list(tool_ids),
             "stream": True,
+            # OpenWebUI stores token usage for API-started chats only on request.
+            "stream_options": {"include_usage": True},
         }
         message, state = self._start_and_wait(body, assistant_message_id, None)
         return message, state.chat_id
