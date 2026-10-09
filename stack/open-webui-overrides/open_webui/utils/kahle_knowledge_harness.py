@@ -430,9 +430,14 @@ class HarnessDecision:
         )
 
 
+# Typographic hyphens and dashes would otherwise vanish in the ASCII fold
+# ("KAHLE\u2011Dokument" -> "kahledokument") and merge two words.
+_FOLD_DASHES = str.maketrans({char: "-" for char in "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"})
+
+
 def _fold(value: str) -> str:
     return (
-        unicodedata.normalize("NFKD", str(value or ""))
+        unicodedata.normalize("NFKD", str(value or "").translate(_FOLD_DASHES))
         .encode("ascii", "ignore")
         .decode()
         .casefold()

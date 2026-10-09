@@ -159,3 +159,13 @@ def test_invented_contact_is_still_corrected_and_the_correction_gets_the_notice(
     assert len(calls) == 1
     assert (result["delivery_status"], result["retry_count"]) == ("corrected", 1)
     assert output[0]["content"][0]["text"] == f"{NOTICE}\n\nEine Mahnung nennt Betrag und Frist."
+
+
+@pytest.mark.parametrize("dash", ["‐", "‑", "‒", "–", "−"])
+def test_notice_with_typographic_hyphen_is_recognised_and_not_doubled(dash):
+    """UI acceptance 09.10.: 'KAHLE‑Dokument' (non-breaking hyphen) got a second notice."""
+    harness = load_harness()
+    answer = f"Dazu gibt es kein KAHLE{dash}Dokument.\n\n**Allgemeiner Hinweis zur Mahnung**"
+
+    assert harness.add_release_notice(answer) == answer
+    assert harness._fold(f"KAHLE{dash}Dokument") == "kahle-dokument"
