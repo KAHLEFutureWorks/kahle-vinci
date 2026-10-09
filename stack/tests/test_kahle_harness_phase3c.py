@@ -515,7 +515,8 @@ def test_tool_texts_name_no_locations_or_contacts():
 
     for text in (instruction, clarification):
         assert not tool.named_kahle_locations(text)
-    assert "Werbung und Befragungen" in clarification
+    assert "befristete Sperre für Hersteller-Zufriedenheitsbefragungen" in clarification
+    assert "dauerhaften Werbewiderspruch" in clarification
     assert "allgemeine Kundensperre in Vaudis" in clarification
 
 
@@ -579,7 +580,18 @@ def test_failed_exception_lookup_reports_a_technical_error_code():
 
 
 def test_harness_has_no_opt_out_markers_left():
-    source = HARNESS.read_text(encoding="utf-8").casefold()
+    """Only the clarification resolver may name the processes it distinguishes."""
+    source = HARNESS.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    lines = source.splitlines(keepends=True)
+    for node in tree.body:
+        named = getattr(node, "name", "") or next(
+            (target.id for target in getattr(node, "targets", []) if isinstance(target, ast.Name)), ""
+        )
+        if named in {"customer_lock_followup_query", "_LOCK_CLARIFICATION_MARKERS"}:
+            for index in range(node.lineno - 1, node.end_lineno):
+                lines[index] = ""
+    source = "".join(lines).casefold()
 
     for marker in ("sperrprozess", "datenschutz@kahle", "zufriedenheitsbefrag", "herstellerbefrag"):
         assert marker not in source, marker

@@ -149,7 +149,9 @@ def test_customer_lock_clarification_followup_resolves_a_natural_question(
     assert resolved.retrieval_query == (
         f"Wie sperre ich einen Kunden in Vaudis? Standort {expected_location}"
         if expected_location
-        else "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
+        else "Wie setze ich eine befristete Sperre für Hersteller-Zufriedenheitsbefragungen in Vaudis?"
+        if "Befragung" in reply
+        else "An wen wende ich mich bei einem dauerhaften Werbewiderspruch eines Kunden?"
     )
     assert plan.required_tools == ("rag_chat",)
 

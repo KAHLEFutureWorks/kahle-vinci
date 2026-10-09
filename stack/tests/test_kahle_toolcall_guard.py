@@ -64,7 +64,7 @@ def test_guard_expands_short_marketing_reply_from_customer_lock_clarification():
     ]
 
     assert module._expand_customer_lock_followup("Werbung", messages) == (
-        "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
+        "An wen wende ich mich bei einem dauerhaften Werbewiderspruch eines Kunden?"
     )
 
 

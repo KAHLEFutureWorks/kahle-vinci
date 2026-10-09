@@ -653,10 +653,17 @@ def _contact_values(evidence: EvidenceBundle) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+_LOCK_CLARIFICATION_MARKERS = (
+    # Current three-way question and the earlier two-way question.
+    ("zufriedenheitsbefragung", "werbewiderspruch", "allgemeine kundensperre", "vaudis"),
+    ("werbung und befragungen", "allgemeine kundensperre", "vaudis"),
+)
+
+
 def customer_lock_followup_query(
     current: str, prior_user: str, prior_assistant: str,
 ) -> str:
-    """Resolve the two safe choices from the customer-lock clarification."""
+    """Resolve the choices of the customer-lock clarification."""
     current = str(current or "").strip()
     if not current or len(current) > 120:
         return ""
@@ -668,9 +675,10 @@ def customer_lock_followup_query(
             re.search(r"\bkunden?(?:sperr\w*|\s+sperr\w*)\b", prior_question)
             or ("kunde" in prior_question and "sperr" in prior_question)
         )
-        and "werbung und befragungen" in prior_reply
-        and "allgemeine kundensperre" in prior_reply
-        and "vaudis" in prior_reply
+        and any(
+            all(marker in prior_reply for marker in markers)
+            for markers in _LOCK_CLARIFICATION_MARKERS
+        )
     ):
         return ""
 
@@ -683,26 +691,28 @@ def customer_lock_followup_query(
         ),
         "",
     )
-    marketing_choice = any(token in folded for token in (
-        "werbung", "werbesperre", "werbewiderspruch", "befragung",
-        "kontaktfreigabe", "ersteres", "erste option",
-    ))
-    general_choice = any(token in folded for token in (
+    # Decision 2026-10-09: temporary survey block (the documented locations),
+    # permanent advertising objection (data protection, all locations) or a
+    # general lock. An explicit general lock always wins.
+    if any(token in folded for token in (
         "allgemein", "kundensperre", "komplett", "vollstandig",
-        "zweiteres", "zweite option",
-    ))
-    # An explicit general lock must never be reclassified as the scoped
-    # marketing opt-out merely because it names a location.
-    if general_choice:
+        "dritte", "letzteres", "letzte option",
+    )):
         return (
             "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? Falls dafür "
             "keine freigegebene Anleitung vorliegt: Welche freigegebene "
             "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
         )
-
-    if marketing_choice:
+    permanent = ("dauerhaft", "werbewiderspruch", "werbesperre")
+    survey = ("befrist", "zufriedenheit", "befragung", "kontaktfreigabe", "erste")
+    if not any(token in folded for token in permanent) and any(token in folded for token in survey):
         location_suffix = f" am Standort {location}" if location else ""
-        return f"Wie hinterlege ich einen Werbewiderspruch in Vaudis{location_suffix}?"
+        return (
+            "Wie setze ich eine befristete Sperre für Hersteller-Zufriedenheitsbefragungen "
+            f"in Vaudis{location_suffix}?"
+        )
+    if any(token in folded for token in (*permanent, "werbung", "zweite")):
+        return "An wen wende ich mich bei einem dauerhaften Werbewiderspruch eines Kunden?"
     if location:
         # Which process applies to a location is the documents' decision.
         return f"{str(prior_user or '').strip()} Standort {location}"

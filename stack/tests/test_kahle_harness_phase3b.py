@@ -264,10 +264,9 @@ def test_customer_lock_choice_resolves_to_a_natural_question():
     def follow(reply):
         return harness.customer_lock_followup_query(reply, prior_user, prior_assistant)
 
-    assert follow("Werbung") == "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
-    assert follow("Werbung für Walsrode") == (
-        "Wie hinterlege ich einen Werbewiderspruch in Vaudis am Standort Walsrode?"
-    )
+    # Decision 2026-10-09: advertising means the permanent objection path.
+    assert follow("Werbung") == "An wen wende ich mich bei einem dauerhaften Werbewiderspruch eines Kunden?"
+    assert follow("Werbung für Walsrode") == "An wen wende ich mich bei einem dauerhaften Werbewiderspruch eines Kunden?"
     # A bare location keeps the original question; retrieval decides the process.
     assert follow("Nienburg") == "Wie sperre ich einen Kunden? Standort Nienburg"
     assert follow("allgemein").startswith("Wie veranlasse ich eine allgemeine Kundensperre in Vaudis?")

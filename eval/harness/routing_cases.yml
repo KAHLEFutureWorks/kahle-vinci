@@ -103,6 +103,9 @@ cases:
   - {id: internal_complaint_notes, category: internal_knowledge, question: "Was muss ich bei einer Reklamation beachten?", expected_tools: [rag_chat]}
   # --- RAG: Geltungsbereich nach Standort (U1) ---
   - {id: scope_opt_out_vaudis, category: scope_location, question: "Wie hinterlege ich einen Werbewiderspruch in Vaudis?", expected_tools: [rag_chat], findings: [U1], expected_procedural: true}
+  # Entscheidung 09.10.: befristete Befragungssperre (Dokument) vs. dauerhafter Werbewiderspruch (Datenschutz, alle Standorte)
+  - {id: scope_opt_out_permanent, category: scope_location, question: "Ein Kunde möchte dauerhaft keine Werbung mehr. Was muss ich tun?", expected_tools: [rag_chat]}
+  - {id: scope_survey_block_temporary, category: scope_location, question: "Wie setze ich eine befristete Sperre für Hersteller-Zufriedenheitsbefragungen in Vaudis?", expected_tools: [rag_chat], expected_procedural: true}
   - {id: scope_survey_opt_out, category: scope_location, question: "Ein Kunde möchte keine Zufriedenheitsbefragungen mehr erhalten, was muss ich tun?", expected_tools: [rag_chat], findings: [U1]}
   - {id: scope_opt_out_walsrode, category: scope_location, question: "Wie sperre ich einen Kunden für Werbung am Standort Walsrode?", expected_tools: [rag_chat], findings: [U1], expected_procedural: true}
   - {id: scope_dse_wunstorf, category: scope_location, question: "Wie deaktiviere ich die DSE-Kontaktfreigaben in Wunstorf?", expected_tools: [rag_chat], findings: [U1]}

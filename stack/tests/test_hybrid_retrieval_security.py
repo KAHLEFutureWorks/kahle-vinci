@@ -764,8 +764,8 @@ def test_ambiguous_customer_lock_query_requires_purpose_clarification():
     )
 
     assert clarification("Wie sperre ich einen Kunden in Vaudis?") == (
-        "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
-        "oder um eine allgemeine Kundensperre in Vaudis?"
+        "Geht es um eine befristete Sperre für Hersteller-Zufriedenheitsbefragungen, "
+        "um einen dauerhaften Werbewiderspruch oder um eine allgemeine Kundensperre in Vaudis?"
     )
     assert guided("Wie sperre ich einen Kunden in Vaudis?") == ""
 

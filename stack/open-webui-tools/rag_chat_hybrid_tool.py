@@ -199,8 +199,8 @@ def _clarification_for_query(query):
     )
     if customer_lock and not marketing_scope and not general_scope:
         return (
-            "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
-            "oder um eine allgemeine Kundensperre in Vaudis?"
+            "Geht es um eine befristete Sperre für Hersteller-Zufriedenheitsbefragungen, "
+            "um einen dauerhaften Werbewiderspruch oder um eine allgemeine Kundensperre in Vaudis?"
         )
     if not re.search(r"\b(?:öffnungszeiten|oeffnungszeiten|öffnungszeit|oeffnungszeit)\b", value):
         return ""

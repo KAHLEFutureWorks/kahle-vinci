@@ -2080,7 +2080,7 @@ def test_customer_lock_marketing_followup_keeps_clarification_context():
     ]
 
     assert helper(messages, "Werbung") == (
-        "Wie hinterlege ich einen Werbewiderspruch in Vaudis?"
+        "An wen wende ich mich bei einem dauerhaften Werbewiderspruch eines Kunden?"
     )
 
 
@@ -2166,8 +2166,8 @@ def test_customer_lock_clarification_offers_both_choices_without_locations():
     exec(compile(module_ast, str(tool_path), "exec"), namespace)
 
     assert namespace["_clarification_for_query"]("Wie sperre ich einen Kunden bei KAHLE?") == (
-        "Geht es darum, Werbung und Befragungen für den Kunden zu sperren, "
-        "oder um eine allgemeine Kundensperre in Vaudis?"
+        "Geht es um eine befristete Sperre für Hersteller-Zufriedenheitsbefragungen, "
+        "um einen dauerhaften Werbewiderspruch oder um eine allgemeine Kundensperre in Vaudis?"
     )
 
 

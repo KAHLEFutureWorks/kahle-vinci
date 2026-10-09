@@ -1811,6 +1811,13 @@ KAHLE_LOCATION_CODES = tuple(
 # --- END kahle_locations ---
 
 
+_LOCK_CLARIFICATION_MARKERS = (
+    # Current three-way question and the earlier two-way question.
+    ("zufriedenheitsbefragung", "werbewiderspruch", "allgemeine kundensperre", "vaudis"),
+    ("werbung und befragungen", "allgemeine kundensperre", "vaudis"),
+)
+
+
 def _expand_customer_lock_followup(
     query: str, messages: list[dict[str, Any]],
 ) -> str:
@@ -1833,21 +1840,11 @@ def _expand_customer_lock_followup(
 
     previous = fold(previous_assistant)
     folded = fold(current)
-    if not (
-        "werbung und befragungen" in previous
-        and "allgemeine kundensperre" in previous
-        and "vaudis" in previous
+    if not any(
+        all(marker in previous for marker in markers)
+        for markers in _LOCK_CLARIFICATION_MARKERS
     ):
         return current
-    if any(token in folded for token in (
-        "allgemein", "kundensperre", "komplett", "vollstandig",
-        "zweiteres", "zweite option",
-    )):
-        return (
-            "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? Falls dafür "
-            "keine freigegebene Anleitung vorliegt: Welche freigegebene "
-            "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
-        )
     location = next(
         (
             name
@@ -1856,12 +1853,28 @@ def _expand_customer_lock_followup(
         ),
         "",
     )
-    location_suffix = f" am Standort {location}" if location else ""
+    # Decision 2026-10-09: temporary survey block (the documented locations),
+    # permanent advertising objection (data protection, all locations) or a
+    # general lock. An explicit general lock always wins.
     if any(token in folded for token in (
-        "werbung", "werbesperre", "werbewiderspruch", "befragung",
-        "kontaktfreigabe", "ersteres", "erste option",
+        "allgemein", "kundensperre", "komplett", "vollstandig",
+        "dritte", "letzteres", "letzte option",
     )):
-        return f"Wie hinterlege ich einen Werbewiderspruch in Vaudis{location_suffix}?"
+        return (
+            "Wie veranlasse ich eine allgemeine Kundensperre in Vaudis? Falls dafür "
+            "keine freigegebene Anleitung vorliegt: Welche freigegebene "
+            "Datenschutz-Anlaufstelle nennt das KAHLE-Wissen für Sperranfragen?"
+        )
+    permanent = ("dauerhaft", "werbewiderspruch", "werbesperre")
+    survey = ("befrist", "zufriedenheit", "befragung", "kontaktfreigabe", "erste")
+    if not any(token in folded for token in permanent) and any(token in folded for token in survey):
+        location_suffix = f" am Standort {location}" if location else ""
+        return (
+            "Wie setze ich eine befristete Sperre für Hersteller-Zufriedenheitsbefragungen "
+            f"in Vaudis{location_suffix}?"
+        )
+    if any(token in folded for token in (*permanent, "werbung", "zweite")):
+        return "An wen wende ich mich bei einem dauerhaften Werbewiderspruch eines Kunden?"
     if location:
         # Which process applies to a location is the documents' decision.
         previous_user = ""

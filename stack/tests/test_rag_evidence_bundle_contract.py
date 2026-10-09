@@ -487,7 +487,8 @@ def test_customer_lock_is_clarified_even_without_system_name():
         __user__={"id": "user-1"},
     ))
 
-    assert "Geht es darum, Werbung und Befragungen" in result
+    assert "befristete Sperre für Hersteller-Zufriedenheitsbefragungen" in result
+    assert "dauerhaften Werbewiderspruch" in result
     assert "allgemeine Kundensperre" in result
 
 
