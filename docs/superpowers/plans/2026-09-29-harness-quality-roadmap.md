@@ -49,7 +49,7 @@ ausgearbeitet, weil die späteren Pläne auf ihrer Baseline aufbauen.
 | 0 | Umlaute, Validator-Schweregrade, Evidenzsitzung, toter Code, Direktantworten entfernen, Modell-ID konfigurierbar, Prompt-Korrekturen, ein Zitierformat | Alle Befund-Tests grün; Offline-Eval besser als die Baseline; Runtime-Eval nicht schlechter | Full (Middleware und Guard sind High-Risk) |
 | 2 | Puffern, blockierende Prüfung, ein Retry ohne Tools, Enthaltung, Metriken | Keine blockierenden Verstöße ausgeliefert; Retry-Rate und p95-Latenz je Modell dokumentiert | Full + Runtime-Eval |
 | 3 | Keine Vorab-Ausführung in `model_led`, eine Vertragsnachricht, schärfere Tool-Beschreibungen, Geltungsbereichs-Metadaten, danach Release B | `model_led` ≥ Baseline je Modell; keine Personio-/Supervisor-Regression | Full + Runtime-Eval + UI-Abnahme |
-| 4 | Evidenz nur einmal, Vertrag als Pflichtenliste, Modellprofile, modularer Prompt, strukturierte Ausgabe prüfen | Weniger Tokens pro interner Antwort bei gleicher oder besserer Eval-Metrik | Full + Runtime-Eval |
+| 4 | Evidenz nur einmal, Vertrag als Pflichtenliste, Modellprofile, modularer Prompt, strukturierte Ausgabe prüfen; dazu R2 (eine Vertragsnachricht), Quellenvermischung (KAHLE-Vinci) und vergessene Zitate (gpt-oss) | Weniger Tokens pro interner Antwort bei gleicher oder besserer Eval-Metrik; danach Messung ohne Vorabplanung als Voraussetzung für Release B | Full + Runtime-Eval |
 
 ## Arbeitsregeln für alle Phasen
 

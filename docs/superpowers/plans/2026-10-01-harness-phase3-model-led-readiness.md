@@ -467,3 +467,5 @@ Gleiche Vorgehensweise wie oben, nur die Fragen 1, 3, 4, 6 (jetzt mit „SHG“)
 | Dialogannahme | Kein Dokument vorhanden; KAHLE-Vinci und Thinking vermischen mit KAHLE Speak, Max-Thinking erkennt es |
 
 Die Quellenvermischung bei KAHLE-Vinci wird in Phase 4 behandelt (Nutzerentscheidung 09.10.).
+
+**Release B (R5) verschoben (Nutzerentscheidung 09.10.):** Ohne Vorabplanung lagen die Modelle am 01.10. deutlich unter dem Stand mit Vorabplanung (70/73/88 gegen 91/95/94 von 102). Die Vorabplanung bleibt deshalb als Sicherheitsnetz. Nach Phase 4 wird die Messung ohne Vorabplanung wiederholt; erst wenn alle drei Modelle mindestens gleich gut sind, werden Regex-Planung, Direktantworten und wortlautgebundene Tests entfernt.
