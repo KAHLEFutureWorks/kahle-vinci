@@ -454,4 +454,16 @@ Für jede Antwort gilt:
 
 Gleiche Vorgehensweise wie oben, nur die Fragen 1, 3, 4, 6 (jetzt mit „SHG“), 7 und 8, jeweils mit allen drei Modellen.
 
-Ergebnis: _offen_
+**Ergebnis (09.10.): bestanden mit bekannten Einschränkungen.**
+
+| Punkt | Ergebnis |
+| --- | --- |
+| Statusanzeige während der Prüfung | neu (`196fb00`), vom Nutzer bestätigt |
+| Hinweis „kein KAHLE-Dokument“ | erscheint genau einmal (`96b0907`), vom Nutzer bestätigt |
+| Führungskraft, Öffnungszeiten SHG, PDF-Export | alle Modelle korrekt |
+| Werbewiderspruch | Thinking (nach `42050f9`) und Max-Thinking korrekt; KAHLE-Vinci vermischt die Prozesse |
+| Rückfrage mit drei Wegen (`65851ce`) | alle Modelle korrekt |
+| VaudisX-Support | Alle Modelle nennen Datenschutz. Eine Prompt-Regel blieb wirkungslos und ist zurückgenommen (`701dd7c`). Die Behebung ist ein dokumentierter Support-Kontakt (redaktionell offen). |
+| Dialogannahme | Kein Dokument vorhanden; KAHLE-Vinci und Thinking vermischen mit KAHLE Speak, Max-Thinking erkennt es |
+
+Die Quellenvermischung bei KAHLE-Vinci wird in Phase 4 behandelt (Nutzerentscheidung 09.10.).
