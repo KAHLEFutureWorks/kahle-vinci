@@ -446,7 +446,7 @@ Für jede Antwort gilt:
 | 4 | Führungskraft nicht erkannt bzw. Beziehung angezweifelt | Der Personio-Claim nannte die Beziehung nicht | `0d4cd31`: Beziehung steht ausdrücklich in der Evidenz |
 | 4, 5 | „[P1]“ unerklärt | Kein Quellen-Chip für Personio | `ef3cdd8`: „(Personio)“ und Quellenzeile mit Stand (Entscheidung 2 A) |
 | 6 | Kürzel STA falsch; Thinking enthielt sich | STA stammte aus altem Tool-Code; gpt-oss vergaß zweimal das Zitat | `aa20f0e`: nur noch SHG. Das Zitatmuster ist ein Phase-4-Messpunkt. |
-| 7 | Zwei Modelle nennen keine Schritte | Gleiche Quellen für alle Modelle. Das Dokument behandelt „Sperrung für Zufriedenheitsbefragungen“; „Werbewiderspruch“ steht nur unter „Suchbegriffe“, die die Modelle nicht sehen. | Redaktionelle Entscheidung offen |
+| 7 | Zwei Modelle nennen keine Schritte | Gleiche Quellen für alle Modelle. Das Dokument behandelt „Sperrung für Zufriedenheitsbefragungen“; „Werbewiderspruch“ steht nur unter „Suchbegriffe“, die die Modelle nicht sehen. | Nutzerentscheidung 09.10.: Der Prozess gilt nur für die befristete Sperre von Zufriedenheitsbefragungen in Hannover, Wunstorf und Wedemark. Dauerhafte Werbewidersprüche gehen an allen Standorten an datenschutz@kahle.de. Das Dokument und die Funktionskontakte werden redaktionell ergänzt. |
 | 8 | Mistral vermischt Quellen; PDF mit falschem Namen, rohen Links und „■“ | Modellschwäche; Export-Titel aus der Modellvermutung; Renderer ohne Link- und Zeichenbehandlung | `dc77d43`: Titel und Name aus der Frage, Feedback-Link entfernt, Links lesbar, Zeichen ersetzt. Die Quellenvermischung ist ein Phase-4-Messpunkt. |
 | 2, 9 | in Ordnung | – | – |
 
