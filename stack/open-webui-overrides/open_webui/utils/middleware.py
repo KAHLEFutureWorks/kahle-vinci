@@ -7021,6 +7021,29 @@ async def streaming_chat_response_handler(response, ctx):
                 _answer_enforcement_mode() == 'enforce'
                 and bool(metadata.get('kahle_knowledge_harness_active'))
             )
+            held_answer_status = {'open': False}
+
+            async def _open_held_answer_status():
+                # The held text shows nothing until validated; show that work goes on.
+                if held_answer_status['open'] or not event_emitter:
+                    return
+                held_answer_status['open'] = True
+                await event_emitter({
+                    'type': 'status',
+                    'data': {'description': 'Antwort wird erstellt und anhand der Quellen geprüft', 'done': False},
+                })
+
+            async def _close_held_answer_status():
+                if not held_answer_status['open'] or not event_emitter:
+                    return
+                held_answer_status['open'] = False
+                await event_emitter({
+                    'type': 'status',
+                    'data': {'description': 'Antwort wird erstellt und anhand der Quellen geprüft', 'done': True},
+                })
+
+            if hold_knowledge_answer:
+                await _open_held_answer_status()
 
             def full_output():
                 combined = prior_output + output if prior_output else output
@@ -7944,6 +7967,8 @@ async def streaming_chat_response_handler(response, ctx):
                         )
                         if tool_function_name in {'rag_chat', 'personio_directory'}:
                             hold_knowledge_answer = _answer_enforcement_mode() == 'enforce'
+                            if hold_knowledge_answer:
+                                await _open_held_answer_status()
                         if tool_function_name == 'rag_chat':
                             canonical_rag_sources.extend(_extract_kahle_rag_sources(tool_result))
                             if citations_enabled:
@@ -8571,6 +8596,7 @@ async def streaming_chat_response_handler(response, ctx):
                     _append_canonical_rag_source_links(output, canonical_rag_sources)
                     _append_canonical_rag_feedback_link(output, canonical_rag_feedback_link)
                 _present_personio_citations(output, harness_payload)
+                await _close_held_answer_status()
 
 
                 # Mark all in-progress items as completed
