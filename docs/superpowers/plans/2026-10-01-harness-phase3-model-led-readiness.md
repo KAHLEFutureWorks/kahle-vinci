@@ -437,4 +437,21 @@ Für jede Antwort gilt:
 | 8 | „Wie läuft die Dialogannahme ab?“, danach „Erstelle mir daraus bitte eine PDF.“ | PDF mit der vorherigen Antwort, keine neue Recherche |
 | 9 | Was ist die Hauptstadt von Kanada? | Antwort ohne interne Quellen-Chips |
 
+### Ergebnis der ersten Abnahme (08.10.): nicht bestanden
+
+| Nr. | Befund | Ursache | Behebung |
+| --- | --- | --- | --- |
+| 1 | Allgemeine Mahnungs-Anleitung ohne Hinweis, ein Modell erfand eine KAHLE-Anschrift, -Telefonnummer und -E-Mail-Adresse | Bei freigegebener Vorabsuche lief keine Prüfung | `1081f4a`: Hinweis am Anfang und keine KAHLE-Kontaktdaten ohne Quelle, beides geprüft (Entscheidung 1 A) |
+| 3 | Geltungsbereich eines unpassenden Dokuments in der Antwort, bei Max-Thinking per Korrektur erzwungen | Die Geltungsbereich-Pflicht galt für jedes gefundene Dokument | `1532f38`: Pflicht nur, wenn die Antwort das Dokument zitiert |
+| 4 | Führungskraft nicht erkannt bzw. Beziehung angezweifelt | Der Personio-Claim nannte die Beziehung nicht | `0d4cd31`: Beziehung steht ausdrücklich in der Evidenz |
+| 4, 5 | „[P1]“ unerklärt | Kein Quellen-Chip für Personio | `ef3cdd8`: „(Personio)“ und Quellenzeile mit Stand (Entscheidung 2 A) |
+| 6 | Kürzel STA falsch; Thinking enthielt sich | STA stammte aus altem Tool-Code; gpt-oss vergaß zweimal das Zitat | `aa20f0e`: nur noch SHG. Das Zitatmuster ist ein Phase-4-Messpunkt. |
+| 7 | Zwei Modelle nennen keine Schritte | Gleiche Quellen für alle Modelle. Das Dokument behandelt „Sperrung für Zufriedenheitsbefragungen“; „Werbewiderspruch“ steht nur unter „Suchbegriffe“, die die Modelle nicht sehen. | Redaktionelle Entscheidung offen |
+| 8 | Mistral vermischt Quellen; PDF mit falschem Namen, rohen Links und „■“ | Modellschwäche; Export-Titel aus der Modellvermutung; Renderer ohne Link- und Zeichenbehandlung | `dc77d43`: Titel und Name aus der Frage, Feedback-Link entfernt, Links lesbar, Zeichen ersetzt. Die Quellenvermischung ist ein Phase-4-Messpunkt. |
+| 2, 9 | in Ordnung | – | – |
+
+### Nachprüfung
+
+Gleiche Vorgehensweise wie oben, nur die Fragen 1, 3, 4, 6 (jetzt mit „SHG“), 7 und 8, jeweils mit allen drei Modellen.
+
 Ergebnis: _offen_

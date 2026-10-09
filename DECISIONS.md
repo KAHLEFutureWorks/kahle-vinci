@@ -324,6 +324,15 @@ Implications:
   Freigabeentscheidung und nicht Teil einer Codeänderung.
 - Die Zeitgrenzen des Korrekturaufrufs sind über
   `KAHLE_ANSWER_RETRY_TIMEOUTS` je Basismodell-Präfix einstellbar.
+- Findet die evidenzgesteuerte Vorabsuche kein Dokument, bleibt eine
+  allgemeine Antwort erlaubt, wird aber ebenfalls geprüft. Sie beginnt mit dem
+  Hinweis, dass es kein KAHLE-Dokument gibt (Verstoß
+  `release_notice_missing`), und nennt keine KAHLE-Anschrift, -Telefonnummer,
+  -E-Mail-Adresse oder -Webadresse ohne Quelle (`unbound_contact_literal`)
+  (Nutzerentscheidung 2026-10-08).
+- Personio-Zitate `[P1]` werden erst nach der Prüfung als „(Personio)“
+  angezeigt, ergänzt um die Zeile „Quelle: Personio-Mitarbeiterverzeichnis,
+  Stand …“ (Nutzerentscheidung 2026-10-08).
 
 ## ADR-010: A restrictive document scope is an evidence obligation
 
@@ -332,7 +341,9 @@ Status: Confirmed
 Decision:
 Nennt eine belegte, redaktionelle Aussage einen einschränkenden
 Geltungsbereich (eine echte Teilmenge der KAHLE-Standorte), muss die Antwort
-diesen Geltungsbereich nennen. Gibt es einen typisierten Funktionskontakt,
+diesen Geltungsbereich nennen, sofern sie dieses Dokument zitiert; ein
+mitgefundenes, nicht verwendetes Dokument verpflichtet nicht (UI-Abnahme
+2026-10-08). Gibt es einen typisierten Funktionskontakt,
 dessen Gültigkeitsfeld genau diese Standorte ausnimmt, muss die Antwort ihn als
 Weg für alle anderen Fälle nennen. Die Pflicht wird bei jeder Prüfung aus der
 Evidenz berechnet (`required_scope`, Verstoß `required_scope_missing`);
@@ -357,9 +368,10 @@ damit auch für künftige standortgebundene Prozesse.
 
 Implications:
 
-- Die KAHLE-Standortliste existiert in Harness, Tool, Hybridsuche und Guard;
-  Tests koppeln die Kopien. Ein neuer Standort wird in allen Kopien zugleich
-  ergänzt.
+- Standorte, volle Namen und Kürzel stehen einmal in
+  `stack/open-webui-tools/kahle_locations.py`. `build_tools.py` verteilt sie an
+  Harness, Tool-Bundles und Guard; `--check` und ein Test melden Kopien oder
+  fest eingebaute Namen und Kürzel (Nutzerentscheidung 2026-10-07).
 - Ein Dokument mit einschränkendem Geltungsbereich braucht für den Weg „alle
   anderen Standorte“ einen typisierten Funktionskontakt mit passendem
   Gültigkeitsfeld.
