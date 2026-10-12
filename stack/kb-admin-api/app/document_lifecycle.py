@@ -53,6 +53,8 @@ class Analysis:
     conversion_quality: str = "good"
     notes: tuple[str, ...] = ()
     restricted_terms: tuple[str, ...] = ()
+    # Categories only, never values (user decision 2026-10-12).
+    personal_data_categories: tuple[str, ...] = ()
 
 
 
@@ -460,6 +462,7 @@ class DocumentLifecycle:
             analysis.conversion_quality != "good",
             analysis.notes,
             analysis.restricted_terms,
+            analysis.personal_data_categories,
         ))
         auto_ready = bool(
             clean and kb and kb["slug"] != self.general_knowledgebase_slug
@@ -477,6 +480,7 @@ class DocumentLifecycle:
             or analysis.same_kb_similarity != "none"
             or analysis.cross_kb_matches
             or analysis.version_candidate_document_ids
+            or analysis.personal_data_categories
         )
         if not analysis.malware_safe:
             next_status = "security_blocked"
@@ -509,6 +513,7 @@ class DocumentLifecycle:
             "conversion_quality": analysis.conversion_quality,
             "notes": list(analysis.notes),
             "restricted_terms": list(analysis.restricted_terms),
+            "personal_data_categories": list(analysis.personal_data_categories),
         }
         with self.store.connect() as db:
             db.execute(
@@ -575,7 +580,8 @@ class DocumentLifecycle:
         return self.submission(case_id)
 
     def choose_action(
-        self, *, case_id: str, actor_user_id: str, action: UserAction
+        self, *, case_id: str, actor_user_id: str, action: UserAction,
+        personal_data_confirmed: bool = False,
     ) -> Submission:
         case = self.submission(case_id)
         if actor_user_id != case.uploaded_by_user_id:
@@ -586,6 +592,13 @@ class DocumentLifecycle:
             raise LifecycleError("invalid_user_action")
         if case.status == "duplicate_blocked" and action not in {"publish_existing", "discard"}:
             raise LifecycleError("exact_duplicate_action_forbidden")
+        if action != "discard":
+            # Detected customer data needs the uploader's explicit confirmation.
+            with self.store.connect() as db:
+                row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,)).fetchone()
+            categories = (json.loads(row["analysis_json"] or "{}") if row else {}).get("personal_data_categories") or []
+            if categories and not personal_data_confirmed:
+                raise LifecycleError("personal_data_confirmation_required")
         if action == "discard":
             next_status = "withdrawn"
         elif action == "publish_existing":
@@ -622,6 +635,8 @@ class DocumentLifecycle:
                 "UPDATE document_versions SET status = ? WHERE version_id = ?",
                 (next_status, case.version_id),
             )
+            if personal_data_confirmed:
+                self._event(db, case_id, actor_user_id, "personal_data_confirmed", {"action": action})
             self._event(db, case_id, actor_user_id, "action_chosen", {"action": action, "status": next_status})
         return self.submission(case_id)
 

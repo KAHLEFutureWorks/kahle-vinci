@@ -785,3 +785,36 @@ def test_admins_also_see_their_own_open_uploads():
         assert checked.status == "pending_manager_approval"
         assert case.case_id not in {task.case_id for task in lifecycle.tasks_for("admin")}
         assert case.case_id in {task.case_id for task in lifecycle.tasks_for("portal")}
+
+
+def test_personal_data_waits_for_the_uploaders_explicit_confirmation():
+    import pytest
+
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+        case = submit(lifecycle, kb_id, sha="7" * 64, title="Formular")
+        case = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(personal_data_categories=("vin", "licence_plate")),
+        )
+        assert case.status == "pending_employee_decision"
+
+        with pytest.raises(lifecycle_module.LifecycleError, match="personal_data_confirmation_required"):
+            lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="create")
+
+        case = lifecycle.choose_action(
+            case_id=case.case_id, actor_user_id="employee", action="create", personal_data_confirmed=True,
+        )
+        assert case.status in {"pending_manager_approval", "pending_admin_approval"}
+
+
+def test_discard_needs_no_personal_data_confirmation():
+    with tempfile.TemporaryDirectory() as directory:
+        _, lifecycle, kb_id = setup(Path(directory))
+        case = submit(lifecycle, kb_id, sha="6" * 64, title="Formular")
+        case = lifecycle.record_analysis(
+            case_id=case.case_id, normalized_sha256=SHA_B, markdown_sha256=SHA_C,
+            analysis=lifecycle_module.Analysis(personal_data_categories=("iban",)),
+        )
+
+        assert lifecycle.choose_action(case_id=case.case_id, actor_user_id="employee", action="discard").status == "withdrawn"
