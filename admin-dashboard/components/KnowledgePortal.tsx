@@ -2172,7 +2172,14 @@ function Tasks({
           personal_data_confirmed: Boolean(personalDataConfirmed[caseId]),
         }),
       });
+      setDecisionFeedback((current) => ({ ...current, [caseId]: "" }));
       await done();
+    } catch (cause) {
+      // Ohne Meldung wirkte eine abgelehnte Aktion, als passiere nichts.
+      setDecisionFeedback((current) => ({
+        ...current,
+        [caseId]: friendlyError(cause, "Aktion fehlgeschlagen"),
+      }));
     } finally {
       setBusy("");
     }

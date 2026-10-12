@@ -412,6 +412,8 @@ test("asks the uploader to confirm detected customer data before continuing", as
   assert.match(portal, /personal_data_confirmed: Boolean\(personalDataConfirmed\[caseId\]\)/);
   assert.match(portal, /disabled=\{personalDataBlocked\} onClick=\{\(\) => void action\("create"\)\}/);
   assert.match(portal, /personal_data_confirmation_required/);
+  // A refused task action must be visible instead of silently doing nothing.
+  assert.match(portal, /\[caseId\]: friendlyError\(cause, "Aktion fehlgeschlagen"\)/);
   // Discarding never needs the confirmation, in the API as in the portal.
   assert.doesNotMatch(portal, /personalDataBlocked\}[^\n]*"discard"/);
 });

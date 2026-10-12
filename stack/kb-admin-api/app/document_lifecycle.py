@@ -579,6 +579,20 @@ class DocumentLifecycle:
             })
         return self.submission(case_id)
 
+    def require_personal_data_confirmation(
+        self, case_id: str, action: str, personal_data_confirmed: bool,
+    ) -> None:
+        """Detected customer data needs the uploader's explicit confirmation.
+
+        Callers that move files before choose_action must run this first.
+        """
+        if action == "discard" or personal_data_confirmed:
+            return
+        with self.store.connect() as db:
+            row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,)).fetchone()
+        if (json.loads(row["analysis_json"] or "{}") if row else {}).get("personal_data_categories"):
+            raise LifecycleError("personal_data_confirmation_required")
+
     def choose_action(
         self, *, case_id: str, actor_user_id: str, action: UserAction,
         personal_data_confirmed: bool = False,
@@ -592,13 +606,7 @@ class DocumentLifecycle:
             raise LifecycleError("invalid_user_action")
         if case.status == "duplicate_blocked" and action not in {"publish_existing", "discard"}:
             raise LifecycleError("exact_duplicate_action_forbidden")
-        if action != "discard":
-            # Detected customer data needs the uploader's explicit confirmation.
-            with self.store.connect() as db:
-                row = db.execute("SELECT analysis_json FROM document_cases WHERE case_id=?", (case_id,)).fetchone()
-            categories = (json.loads(row["analysis_json"] or "{}") if row else {}).get("personal_data_categories") or []
-            if categories and not personal_data_confirmed:
-                raise LifecycleError("personal_data_confirmation_required")
+        self.require_personal_data_confirmation(case_id, action, personal_data_confirmed)
         if action == "discard":
             next_status = "withdrawn"
         elif action == "publish_existing":

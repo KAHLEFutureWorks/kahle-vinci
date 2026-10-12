@@ -3045,6 +3045,10 @@ def portal_case_action(
         if payload.action == "replace":
             if not payload.target_document_id:
                 raise LifecycleError("replacement_target_required")
+            # Before any file moves, otherwise a refusal strands the upload.
+            DOCUMENT_LIFECYCLE.require_personal_data_confirmation(
+                case_id, payload.action, payload.personal_data_confirmed,
+            )
             before = DOCUMENT_LIFECYCLE.submission(case_id)
             source_dir = (PORTAL_FILES_ROOT / before.document_id / before.version_id).resolve()
             target_dir = (PORTAL_FILES_ROOT / payload.target_document_id / before.version_id).resolve()
