@@ -104,6 +104,15 @@ fehl. Ungeprüfte Dateien dürfen dadurch nicht stillschweigend veröffentlicht
 werden. Originaldatei, aufbereitete Fassung und Veröffentlichungsstatus bleiben
 im Portal-Lifecycle getrennt nachvollziehbar.
 
+Die aufbereitete Fassung wird zusätzlich auf Kundendaten geprüft
+(`stack/kb-admin-api/app/personal_data.py`). Ein starkes Merkmal wie
+Fahrgestellnummer oder IBAN oder zwei schwache Merkmale führen zu
+`pending_employee_decision`. Weiter geht es nur, wenn die hochladende Person im
+Portal ausdrücklich bestätigt; die API verlangt dafür `personal_data_confirmed`
+und lehnt sonst mit `personal_data_confirmation_required` ab. Verwerfen bleibt
+ohne Bestätigung möglich. Gespeichert und angezeigt werden nur Kategorien,
+niemals die erkannten Werte (Nutzerentscheidung 2026-10-12).
+
 ## Sensitive Data
 
 Sicherheitsrelevante Daten umfassen insbesondere:

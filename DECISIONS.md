@@ -129,6 +129,10 @@ Implications:
   nicht.
 - Der klassische Freigabecode erteilt keine Portalrolle oder Portal-ACL.
 - Änderungen müssen beide Sicherheitsmodelle getrennt testen.
+- Erkannte Kundendaten (ein starkes oder zwei schwache Merkmale) führen zu
+  `pending_employee_decision`; weiter geht es nur mit
+  `personal_data_confirmed`. Gespeichert werden nur Kategorien, keine Werte
+  (Nutzerentscheidung 2026-10-12).
 
 ## ADR-005: Isolated Python service test processes
 
