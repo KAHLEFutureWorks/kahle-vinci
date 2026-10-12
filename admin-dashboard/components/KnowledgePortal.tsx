@@ -75,6 +75,7 @@ type UploadResult = {
   conversion_quality?: string;
   conversion_issues?: string[];
   restricted_terms?: string[];
+  personal_data_categories?: string[];
 };
 type Task = {
   case_id: string;
@@ -88,6 +89,7 @@ type Task = {
   requested_action?: string;
   requires_admin: boolean;
   restricted_terms?: string[];
+  personal_data_categories?: string[];
   contact_name?: string;
   publication_error?: string;
   security_review_finding?: string;
@@ -587,6 +589,49 @@ const changeKindText: Record<string, string> = {
   delete: "Endgültig entfernen",
 };
 
+// Kategorien aus der Kundendaten-Erkennung; Werte erreichen das Portal nie.
+const personalDataLabels: Record<string, string> = {
+  vin: "Fahrgestellnummer",
+  licence_plate: "Kennzeichen",
+  mobile_phone: "Mobilnummer",
+  private_phone: "private Telefonnummer",
+  iban: "IBAN",
+  birth_date: "Geburtsdatum",
+  postal_address: "Postanschrift",
+  external_email: "E-Mail-Adresse außerhalb KAHLE",
+};
+
+function PersonalDataNotice({
+  categories,
+  confirmed,
+  onChange,
+}: {
+  categories: string[];
+  confirmed: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div className="wp-quality check wp-personal-data" role="alert">
+      <AlertTriangle />
+      <div>
+        <strong>Kundendaten erkannt</strong>
+        <span>
+          Das Dokument enthält: {categories.map((category) => personalDataLabels[category] || category).join(", ")}.
+          Es wird erst nach deiner ausdrücklichen Bestätigung weiterbearbeitet.
+        </span>
+        <label>
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(event) => onChange(event.target.checked)}
+          />
+          Ich bestätige, dass diese Kundendaten in das Wissensportal hochgeladen werden dürfen.
+        </label>
+      </div>
+    </div>
+  );
+}
+
 const confidentialityText: Record<string, string> = {
   internal: "Unternehmensweit intern",
   restricted: "Nur freigegebene Bereiche",
@@ -739,6 +784,8 @@ function friendlyError(cause: unknown, fallback: string) {
     return "Das Dokument konnte nicht vollständig aufbereitet werden. Ein technischer Fall wurde automatisch angelegt. Bitte versuche es später erneut.";
   if (/^required_check_unavailable:/.test(raw))
     return "Die Datei wurde aufbereitet, aber die erforderliche Ähnlichkeitsanalyse war nicht erreichbar. Ein technischer Fall wurde automatisch angelegt. Bitte versuche es später erneut.";
+  if (raw === "personal_data_confirmation_required")
+    return "Das Dokument enthält Kundendaten. Bitte bestätige zuerst, dass sie hochgeladen werden dürfen.";
   if (raw === "embedding_service_unavailable")
     return "Der Dienst für die automatische Ähnlichkeitsanalyse war nicht erreichbar.";
   if (errorText[raw]) return errorText[raw];
@@ -1503,6 +1550,9 @@ function Upload({
     : "";
   const [result, setResult] = useState<UploadResult | null>(null),
     [message, setMessage] = useState("");
+  const [personalDataConfirmed, setPersonalDataConfirmed] = useState(false);
+  const personalDataBlocked =
+    Boolean(result?.personal_data_categories?.length) && !personalDataConfirmed;
   const [securityReviewAvailable, setSecurityReviewAvailable] = useState(false);
   const [job, setJob] = useState<UploadJob | null>(null);
   const [activeJobs, setActiveJobs] = useState<UploadJob[]>([]);
@@ -1632,9 +1682,11 @@ function Upload({
         body: JSON.stringify({
           action: value,
           target_document_id: targetDocumentId,
+          personal_data_confirmed: personalDataConfirmed,
         }),
       });
       setResult(null);
+      setPersonalDataConfirmed(false);
       setFile(null);
       setSelectedKnowledgebaseIds([]);
       setTitle("");
@@ -1650,6 +1702,7 @@ function Upload({
   }
   function startAnotherUpload() {
     setResult(null);
+    setPersonalDataConfirmed(false);
     setFile(null);
     setSelectedKnowledgebaseIds([]);
     setTitle("");
@@ -2001,6 +2054,13 @@ function Upload({
               </div>
             </div>
           )}
+          {result.personal_data_categories && result.personal_data_categories.length > 0 && (
+            <PersonalDataNotice
+              categories={result.personal_data_categories}
+              confirmed={personalDataConfirmed}
+              onChange={setPersonalDataConfirmed}
+            />
+          )}
           {result.matches.map((match) => (
             <article key={match.document_id} className="wp-match">
               <div>
@@ -2027,6 +2087,7 @@ function Upload({
               {match.version_candidate && (
                 <button
                   className="wp-version-action"
+                  disabled={personalDataBlocked}
                   onClick={() => void action("replace", match.document_id)}
                 >
                   Als neue Version von „{match.title}“ vorschlagen
@@ -2040,12 +2101,12 @@ function Upload({
             ) && (
               <div className="wp-actions">
                 {!result.exact_duplicate_document_id && (
-                  <button onClick={() => void action("create")}>
+                  <button disabled={personalDataBlocked} onClick={() => void action("create")}>
                     Als neues Dokument vorschlagen
                   </button>
                 )}
                 {result.exact_duplicate_document_id && (
-                  <button onClick={() => void action("publish_existing")}>
+                  <button disabled={personalDataBlocked} onClick={() => void action("publish_existing")}>
                     Vorhandenes zusätzlich veröffentlichen
                   </button>
                 )}
@@ -2093,6 +2154,7 @@ function Tasks({
     [inquiryMessage, setInquiryMessage] = useState("");
   const [targetSelections, setTargetSelections] = useState<Record<string, string[]>>({}),
     [targetBusy, setTargetBusy] = useState<Record<string, boolean>>({});
+  const [personalDataConfirmed, setPersonalDataConfirmed] = useState<Record<string, boolean>>({});
   const targetSaveLocks = useRef(new Set<string>());
   const canDecide = session.role !== "employee",
     isAdmin = ["admin", "portal_admin"].includes(session.role);
@@ -2104,7 +2166,11 @@ function Tasks({
       await api(`/portal/cases/${caseId}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, target_document_id: targetDocumentId }),
+        body: JSON.stringify({
+          action,
+          target_document_id: targetDocumentId,
+          personal_data_confirmed: Boolean(personalDataConfirmed[caseId]),
+        }),
       });
       await done();
     } finally {
@@ -2395,6 +2461,8 @@ function Tasks({
     const targetIsSaving = Boolean(targetBusy[task.case_id]);
     const hasReviewDecision =
       task.status.includes("approval") || task.status === "needs_correction";
+    const personalDataBlocked =
+      Boolean(task.personal_data_categories?.length) && !personalDataConfirmed[task.case_id];
     return (
       <article key={task.case_id}>
         <div className="wp-task-icon">
@@ -2528,6 +2596,15 @@ function Tasks({
               </div>
             </div>
           )}
+          {own && task.personal_data_categories && task.personal_data_categories.length > 0 && (
+            <PersonalDataNotice
+              categories={task.personal_data_categories}
+              confirmed={Boolean(personalDataConfirmed[task.case_id])}
+              onChange={(value) =>
+                setPersonalDataConfirmed((current) => ({ ...current, [task.case_id]: value }))
+              }
+            />
+          )}
           {task.sanitized_for_review && (
             <div className="wp-alert" role="alert">
               <ShieldCheck />
@@ -2574,7 +2651,7 @@ function Tasks({
                 {task.status === "duplicate_blocked" ? (
                   <button
                     className="wp-secondary approve"
-                    disabled={busy === task.case_id}
+                    disabled={busy === task.case_id || personalDataBlocked}
                     onClick={() =>
                       void chooseAction(task.case_id, "publish_existing")
                     }
@@ -2589,7 +2666,7 @@ function Tasks({
                         <button
                           key={match.document_id}
                           className="wp-secondary approve"
-                          disabled={busy === task.case_id}
+                          disabled={busy === task.case_id || personalDataBlocked}
                           onClick={() => void chooseAction(task.case_id, "replace", match.document_id)}
                         >
                           Als neue Version von „{match.title}“ vorschlagen
@@ -2597,7 +2674,7 @@ function Tasks({
                       ))}
                     <button
                       className="wp-secondary"
-                      disabled={busy === task.case_id}
+                      disabled={busy === task.case_id || personalDataBlocked}
                       onClick={() => void chooseNewDocument(task)}
                     >
                       Als eigenständiges Dokument vorschlagen

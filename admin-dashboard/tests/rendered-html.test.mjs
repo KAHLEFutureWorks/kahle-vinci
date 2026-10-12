@@ -405,6 +405,17 @@ test("shows version candidates to uploaders and reviewers", async () => {
   assert.doesNotMatch(portal, /match\.version_candidate && !match\.has_conflict/);
 });
 
+test("asks the uploader to confirm detected customer data before continuing", async () => {
+  const portal = await source("components/KnowledgePortal.tsx");
+  assert.match(portal, /Kundendaten erkannt/);
+  assert.match(portal, /personal_data_confirmed: personalDataConfirmed,/);
+  assert.match(portal, /personal_data_confirmed: Boolean\(personalDataConfirmed\[caseId\]\)/);
+  assert.match(portal, /disabled=\{personalDataBlocked\} onClick=\{\(\) => void action\("create"\)\}/);
+  assert.match(portal, /personal_data_confirmation_required/);
+  // Discarding never needs the confirmation, in the API as in the portal.
+  assert.doesNotMatch(portal, /personalDataBlocked\}[^\n]*"discard"/);
+});
+
 test("shows the persistent upload queue and assigns technical cases to an upload", async () => {
   const portal = await source("components/KnowledgePortal.tsx");
   assert.match(portal, /Meine laufenden Uploads/);
