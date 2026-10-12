@@ -72,6 +72,7 @@ try:
     from .content_classification import ContentConfidentialityClassifier
     from .retrieval_metadata import RetrievalMetadataStore
     from .restricted_terms import RestrictedTermError, RestrictedTermService
+    from .personal_data import detect as detect_personal_data
     from .global_analysis import (
         CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
     )
@@ -96,6 +97,7 @@ except ImportError:  # pragma: no cover
     from content_classification import ContentConfidentialityClassifier
     from retrieval_metadata import RetrievalMetadataStore
     from restricted_terms import RestrictedTermError, RestrictedTermService
+    from personal_data import detect as detect_personal_data
     from global_analysis import (
         CorpusDocument, GlobalAnalysisError, GlobalCorpus, GlobalDocumentAnalyzer, IonosEmbeddingProvider,
     )
@@ -447,6 +449,7 @@ class PortalRetrievalScopeRequest(BaseModel):
 class PortalCaseActionRequest(BaseModel):
     action: str = Field(..., pattern=r"^(create|replace|publish_existing|discard)$")
     target_document_id: str | None = Field(None, max_length=100)
+    personal_data_confirmed: bool = False
 
 
 class PortalCaseDecisionRequest(BaseModel):
@@ -485,6 +488,7 @@ class PortalUploadResponse(BaseModel):
     conversion_quality: str = "good"
     conversion_issues: list[str] = Field(default_factory=list)
     restricted_terms: list[str] = Field(default_factory=list)
+    personal_data_categories: list[str] = Field(default_factory=list)
     exact_duplicate_document_id: str | None = None
     matches: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -1524,6 +1528,11 @@ async def portal_upload_document(
         markdown = result.markdown_path.read_text(encoding="utf-8")
         confidentiality_suggestion = CONFIDENTIALITY_CLASSIFIER.classify(markdown)
         restricted_terms = RESTRICTED_TERMS.matches(markdown)
+        # Customer data is allowed only after the uploader confirms it (2026-10-12).
+        personal_data = detect_personal_data(markdown)
+        personal_data_categories = (
+            tuple(personal_data.categories) if personal_data.requires_confirmation else ()
+        )
         submission = DOCUMENT_LIFECYCLE.apply_automatic_confidentiality(
             case_id=submission.case_id, level=confidentiality_suggestion.level,
             reason=confidentiality_suggestion.reason, signals=confidentiality_suggestion.signals,
@@ -1556,6 +1565,7 @@ async def portal_upload_document(
                 conversion_quality=result.conversion_quality,
                 notes=result.conversion_issues,
                 restricted_terms=restricted_terms,
+                personal_data_categories=personal_data_categories,
             ),
         )
         if security_review_finding:
@@ -1646,6 +1656,7 @@ async def portal_upload_document(
         conversion_quality=result.conversion_quality,
         conversion_issues=list(result.conversion_issues),
         restricted_terms=list(restricted_terms),
+        personal_data_categories=list(personal_data_categories),
         confidentiality=DOCUMENT_LIFECYCLE.submission(submission.case_id).confidentiality,
         confidentiality_reason=(
             confidentiality_suggestion.reason
@@ -2358,6 +2369,7 @@ def portal_tasks(identity: dict[str, Any] = Depends(require_portal_identity)) ->
             ).fetchone()
             analysis = json.loads(row["analysis_json"] or "{}") if row else {}
             item["restricted_terms"] = analysis.get("restricted_terms", [])
+            item["personal_data_categories"] = analysis.get("personal_data_categories", [])
             item["security_review_finding"] = analysis.get("security_review_finding", "")
             item["sanitized_for_review"] = bool(analysis.get("sanitized_for_review"))
             duplicate_ids = list(dict.fromkeys(filter(None, [
@@ -3070,6 +3082,7 @@ def portal_case_action(
                 raise
         case = DOCUMENT_LIFECYCLE.choose_action(
             case_id=case_id, actor_user_id=identity["user_id"], action=payload.action,
+            personal_data_confirmed=payload.personal_data_confirmed,
         )
     except LifecycleError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -775,3 +775,64 @@ def test_background_job_passes_every_form_parameter_explicitly():
         "background job must pass these explicitly, otherwise they arrive as "
         f"FieldInfo instead of their value: {missing}"
     )
+
+
+def test_upload_with_customer_data_requires_explicit_confirmation():
+    """User decision 2026-10-12: customer data is allowed only after the uploader confirms."""
+    synthetic_form = (
+        "# Termin\n\nAnschrift: Beispielweg 12, 30159 Hannover\n"
+        "Telefon mobil: 0171 2345678\nKennzeichen: H AB 1234\nFahrg.-Nr.: WVWZZZ1KZAW000001\n"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        module = load_app(root)
+        module.SECURE_INGEST.storage.root = (root / "portal-files").resolve()
+        module.PORTAL_FILES_ROOT = module.SECURE_INGEST.storage.root
+        module.RAG_METADATA.files_root = module.SECURE_INGEST.storage.root
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        current["user"] = identity("employee")
+        assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(user_id="manager", email="manager@kahle.de", display_name="Leitung")
+        module.PORTAL_GOVERNANCE.set_role("portal", "manager", "manager")
+        module.PORTAL_GOVERNANCE.assign_manager("portal", "employee", "manager")
+        created = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service", "purpose": "Test"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access("portal", "employee", created.knowledgebase_id, can_read=True, can_upload=True)
+
+        class Scanner:
+            def scan(self, filename, data):
+                return None
+
+        class Converter:
+            def convert(self, filename, data, title):
+                return synthetic_form
+
+        module.SECURE_INGEST.scanner = Scanner()
+        module.SECURE_INGEST.converter = Converter()
+        response = client.post(
+            "/portal/documents",
+            data={"knowledgebase_id": created.knowledgebase_id, "title": "Termin",
+                  "valid_workdays": "60", "confidentiality": "internal"},
+            files={"file": ("termin.md", b"Original", "text/markdown")},
+        )
+        assert response.status_code == 201, response.text
+        payload = response.json()
+        assert payload["status"] == "pending_employee_decision"
+        assert {"vin", "licence_plate", "mobile_phone"} <= set(payload["personal_data_categories"])
+        assert "0171" not in response.text and "WVWZZZ" not in response.text
+
+        tasks = client.get("/portal/tasks").json()
+        task = next(item for item in tasks.get("tasks", tasks.get("items", [])) if item["case_id"] == payload["case_id"])
+        assert "vin" in task["personal_data_categories"]
+
+        denied = client.post(f"/portal/cases/{payload['case_id']}/action", json={"action": "create"})
+        assert denied.status_code == 409 and denied.json()["detail"] == "personal_data_confirmation_required"
+        accepted = client.post(
+            f"/portal/cases/{payload['case_id']}/action",
+            json={"action": "create", "personal_data_confirmed": True},
+        )
+        assert accepted.status_code == 200, accepted.text
