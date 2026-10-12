@@ -575,6 +575,24 @@ class MaintenanceService:
              trash_row["trashed_at"], self.now(), json.dumps(actors), trash_row["reason"], int(trash_row["legal_hold"])),
         )
         db.execute("DELETE FROM document_publications WHERE document_id = ?", (document_id,))
+        # Rows owned by other modules that point at the document, its versions
+        # or its cases. Notifications reference document_cases by foreign key;
+        # the others would leave content-derived data (topics, relations,
+        # change requests) of a deleted document behind. Removal requests and
+        # trash reads stay as audit.
+        case_scoped = ("portal_case_notifications", "decision_jobs")
+        document_scoped = (
+            "document_retrieval_metadata", "document_evidence_relations", "document_change_requests",
+        )
+        for table in case_scoped:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                db.execute(
+                    f"DELETE FROM {table} WHERE case_id IN (SELECT case_id FROM document_cases WHERE document_id = ?)",
+                    (document_id,),
+                )
+        for table in document_scoped:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                db.execute(f"DELETE FROM {table} WHERE document_id = ?", (document_id,))
         db.execute("DELETE FROM document_decisions WHERE case_id IN (SELECT case_id FROM document_cases WHERE document_id = ?)", (document_id,))
         db.execute("DELETE FROM document_events WHERE case_id IN (SELECT case_id FROM document_cases WHERE document_id = ?)", (document_id,))
         db.execute("DELETE FROM document_cases WHERE document_id = ?", (document_id,))

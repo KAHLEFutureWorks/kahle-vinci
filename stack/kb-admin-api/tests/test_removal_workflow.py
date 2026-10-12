@@ -324,3 +324,69 @@ def test_corpus_entries_do_not_survive_their_version():
         assert module.GLOBAL_CORPUS.documents() == [], (
             "ein physisch geloeschtes Dokument darf keinen Korpuseintrag hinterlassen"
         )
+
+
+def test_physical_deletion_removes_notifications_and_derived_rows():
+    """
+    Portal 12.10.: 'Endgültig löschen' lief in FOREIGN KEY constraint failed,
+    weil portal_case_notifications noch auf den Vorgang verwies. Abgeleitete
+    Daten (Retrieval-Metadaten mit Themen aus dem Inhalt, Belegrelationen,
+    Änderungsanträge, Entscheidungsjobs) dürfen nach der Löschung ebenfalls
+    nicht stehen bleiben; Antrags- und Löschaudit bleiben erhalten.
+    """
+    import tempfile
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from test_portal_api import identity, load_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        assert TestClient(module.app).get("/portal/session").status_code == 200
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="portal", owner_user_id="portal",
+            target_knowledgebase_id=kb.knowledgebase_id, title="Formular mit Kundendaten",
+            original_filename="f.md", original_file_id="f",
+            original_sha256="8" * 64, valid_workdays=30, confidentiality="internal",
+        )
+
+        def insert(db, table, **values):
+            columns = [row["name"] for row in db.execute(f"PRAGMA table_info({table})")]
+            row = {name: values.get(name, "x") for name in columns}
+            db.execute(
+                f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+                [row[name] for name in columns],
+            )
+
+        module.RETRIEVAL_METADATA  # the store creates its tables on first use
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            insert(db, "portal_case_notifications", notification_id="n1", recipient_user_id="portal", case_id=case.case_id, read_at=None)
+            insert(db, "document_retrieval_metadata", version_id=case.version_id, document_id=case.document_id, confidence=0.5)
+            insert(db, "document_evidence_relations", version_id=case.version_id, document_id=case.document_id)
+            insert(db, "decision_jobs", job_id="j1", case_id=case.case_id, lease_expires_at=None)
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='document_change_requests'").fetchone():
+                insert(db, "document_change_requests", request_id="c1", document_id=case.document_id, manager_user_id=None)
+
+        module.MAINTENANCE.move_to_trash(case.document_id, "portal", "Enthält Kundendaten")
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute("UPDATE document_trash SET trashed_at='2026-01-01' WHERE document_id=?", (case.document_id,))
+        module.MAINTENANCE.delete_now(case.document_id, "portal", "Endgültig weg")
+
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            def count(table, column, value):
+                if not db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
+                    return 0
+                return db.execute(f"SELECT COUNT(*) FROM {table} WHERE {column}=?", (value,)).fetchone()[0]
+
+            assert count("portal_case_notifications", "case_id", case.case_id) == 0
+            assert count("decision_jobs", "case_id", case.case_id) == 0
+            assert count("document_retrieval_metadata", "document_id", case.document_id) == 0
+            assert count("document_evidence_relations", "document_id", case.document_id) == 0
+            assert count("document_change_requests", "document_id", case.document_id) == 0
+            assert count("canonical_documents", "document_id", case.document_id) == 0
+            assert count("deletion_audit", "document_id", case.document_id) == 1
