@@ -407,6 +407,22 @@ git commit -m "eval(harness): phase 4a measurement"
 git push origin feat/harness-eval-foundation
 ```
 
+### Ergebnis und Abnahme (13.10.)
+
+Umgesetzt in `b4d72b5`, `001731c`, `4ec31f0`, `6da614d`; gemessen in `b99e8a2` (Ausgangsmessung) und `c15e8b3` (nach 4a), je 114 Fälle.
+
+| Kriterium | Mistral (`vinci-2`) | gpt-oss (`thinking`) | `max-thinking` | Ziel erfüllt |
+| --- | --- | --- | --- | --- |
+| `prompt_tokens_p50` | 18.046 → 17.496 (−3,0 %) | 13.257 → 12.798 (−3,5 %) | 17.185 → 16.865 (−1,9 %) | nein, nicht spürbar |
+| Routing korrekt | 104 → 105 | 104 → 104 | 106 → 103 | 2 von 3 |
+| ausgelieferte blockierende Verstöße | 0 → 0 | 0 → 0 | 0 → 0 | ja |
+| Nachbesserungen (`retry_required`) | 2 → 0 | 3 → 2 | 2 → 0 | ja |
+
+Abgenommen mit Vermerk (Nutzerentscheidung 13.10.):
+
+- Das Token-Ziel ist verfehlt. Der Vertrag war nicht der große Posten; Systemprompts und doppelte Dokumentpassagen sind es. Die Ersparnis ist Aufgabe von 4b.
+- `max-thinking` −3 gilt als vermutete Streuung: Ein Fall war ein technischer Fehler, zwei Fälle wechseln auch zwischen anderen Läufen. Ein Folgelauf auf dem 4a-Stand (Vertragsposition-Experiment, 12.10., verworfen) kam auf 104. Die Messung nach 4b prüft das mit.
+
 ## Nicht Teil von 4a (folgt in 4b)
 
 - **Modellprofile:** gezielte Zusatzpflichten je Basismodell, z. B. Quellenabgrenzung für Mistral und Zitatpflicht für gpt-oss.
