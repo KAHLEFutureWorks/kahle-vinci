@@ -105,3 +105,25 @@ def test_max_base_and_model_are_in_the_public_registration_contract():
     assert register.KAHLE_VINCI_MAX_MODEL_ID in register.PUBLIC_MODEL_IDS
     assert register.KAHLE_VINCI_MAX_BASE_MODEL_ID in register.PUBLIC_MODEL_IDS
     assert "personio_directory" in register.shared_vinci_tool_ids()
+
+
+def test_builtin_duplicates_are_hidden_only_where_our_tool_replaces_them():
+    """Phase 4b, 15.10.: built-in notes/tasks/automations/time duplicated our tools in every prompt."""
+    module = load_register()
+    con = model_db()
+    con.execute(
+        "update model set meta = ? where id = ?",
+        (json.dumps({"toolIds": ["owui_productivity"]}), "kahle-vinci-thinking"),
+    )
+
+    assert module.set_model_tools(con, "kahle-vinci-thinking", ["rag_chat"], 20)
+
+    builtin = json.loads(
+        con.execute("select meta from model where id = 'kahle-vinci-thinking'").fetchone()["meta"]
+    )["builtinTools"]
+    assert builtin["notes"] is False
+    assert builtin["tasks"] is False
+    assert builtin["automations"] is False
+    # zeit_berechnung is not assigned, so the built-in time tools stay available.
+    assert "time" not in builtin
+    assert "calendar" not in builtin

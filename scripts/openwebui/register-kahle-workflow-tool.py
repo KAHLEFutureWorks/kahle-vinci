@@ -559,6 +559,14 @@ def grant_public_read(con: sqlite3.Connection, resource_type: str, resource_id: 
     )
 
 
+BUILTIN_REPLACEMENTS = {
+    "notes": "owui_productivity",
+    "tasks": "owui_productivity",
+    "automations": "owui_productivity",
+    "time": "zeit_berechnung",
+}
+
+
 def set_model_tools(con: sqlite3.Connection, model_id: str, tool_ids: list[str], now: int, prompt_path: Path | None = None) -> bool:
     row = con.execute("select meta, params from model where id = ?", (model_id,)).fetchone()
     if not row:
@@ -574,6 +582,11 @@ def set_model_tools(con: sqlite3.Connection, model_id: str, tool_ids: list[str],
     builtin_tools = meta.setdefault("builtinTools", {})
     builtin_tools["image_generation"] = False
     builtin_tools["code_interpreter"] = False
+    # Our tools wrap these built-ins; offering both doubled the tool specs in
+    # every prompt (phase 4b, 15.10.). Hide a built-in only where ours is assigned.
+    for category, replacement in BUILTIN_REPLACEMENTS.items():
+        if replacement in meta["toolIds"]:
+            builtin_tools[category] = False
     params = load_json(row["params"], {})
     if prompt_path and prompt_path.exists():
         params["system"] = prompt_path.read_text(encoding="utf-8")
