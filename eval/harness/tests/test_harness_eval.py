@@ -201,6 +201,7 @@ def test_score_answer_keeps_only_blocking_codes_and_no_text():
         "evidence_probe": "",
         "prompt_tokens": None,
         "completion_tokens": None,
+        "prompt_composition": {},
     }
     assert "verlässliche" not in json.dumps(score, ensure_ascii=False)
 
@@ -311,3 +312,18 @@ def test_score_and_summary_report_token_usage():
     assert summary["prompt_tokens_p50"] == 12000
     assert summary["prompt_tokens_p95"] == 20000
     assert summary["completion_tokens_p50"] == 400
+
+
+def test_score_and_summary_carry_prompt_composition():
+    composition = {"system_chars": 100, "tool_result_chars": 50, "duplicate_span_chars": 10}
+    message = {"content": "Antwort [1]", "kahle_harness_metrics": {"prompt_composition": composition}}
+    row = score_answer(_case(), message)
+    assert row["prompt_composition"] == composition
+
+    summary = summarize_answers([
+        {**row, "model": "m", "outcome": "correct"},
+        {**row, "model": "m", "outcome": "correct",
+         "prompt_composition": {"system_chars": 300, "tool_result_chars": 70, "duplicate_span_chars": 30}},
+    ])
+    assert summary["m"]["composition_p50"]["system_chars"] == 100
+    assert summary["m"]["composition_p50"]["duplicate_span_chars"] == 10

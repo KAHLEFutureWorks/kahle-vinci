@@ -257,6 +257,7 @@ def score_answer(case: RoutingCase, message: dict[str, Any]) -> dict[str, Any]:
         "evidence_probe": str(metrics.get("evidence_probe") or ""),
         "prompt_tokens": _token_count(message, "prompt_tokens"),
         "completion_tokens": _token_count(message, "completion_tokens"),
+        "prompt_composition": dict(metrics.get("prompt_composition") or {}),
     }
 
 
@@ -276,6 +277,15 @@ def summarize_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
         codes = Counter(
             code for row in items for code in row.get("blocking_violations") or ()
         )
+        composition_keys = sorted({key for row in items for key in row.get("prompt_composition") or {}})
+        composition_p50 = {
+            key: nearest_rank(
+                [row["prompt_composition"][key] for row in items
+                 if isinstance((row.get("prompt_composition") or {}).get(key), int)],
+                0.5,
+            )
+            for key in composition_keys
+        }
         summary[model] = {
             "total": len(items),
             "answer_present_rate": _rate(
@@ -302,6 +312,7 @@ def summarize_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "prompt_tokens_p50": nearest_rank(prompt_tokens, 0.5),
             "prompt_tokens_p95": nearest_rank(prompt_tokens, 0.95),
             "completion_tokens_p50": nearest_rank(completion_tokens, 0.5),
+            "composition_p50": composition_p50,
             "probe_bound": sum(row.get("evidence_probe") == "bound" for row in items),
             "probe_released": sum(row.get("evidence_probe") == "released" for row in items),
         }

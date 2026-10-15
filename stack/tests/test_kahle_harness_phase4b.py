@@ -85,3 +85,14 @@ def test_composition_accepts_list_content_and_ignores_garbage():
 
     assert result["conversation_chars"] == len("Hallo")
     assert result["total_chars"] == len("Hallo")
+
+
+MIDDLEWARE = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "middleware.py"
+
+
+def test_middleware_records_composition_before_each_answer_call_and_reports_it():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    record = "metadata['_kahle_prompt_composition'] = prompt_composition(\n"
+    assert source.count(record) == 2
+    assert "'prompt_composition': metadata.get('_kahle_prompt_composition') or {}," in source
+    assert "    prompt_composition,\n" in source
