@@ -98,7 +98,6 @@ from open_webui.utils.kahle_knowledge_harness import (
     customer_lock_followup_query,
     knowledge_abstention_answer,
     person_confirmation_names,
-    prompt_composition,
     released_decision_payload,
     plan_retrieval as plan_knowledge_retrieval,
     rag_result_from_sources,
@@ -8254,9 +8253,6 @@ async def streaming_chat_response_handler(response, ctx):
                                     append=True,
                                 )
 
-                        metadata['_kahle_prompt_composition'] = prompt_composition(
-                            new_form_data.get('messages'), new_form_data.get('tools'),
-                        )
                         res = await generate_chat_completion(
                             request,
                             new_form_data,
@@ -8441,9 +8437,6 @@ async def streaming_chat_response_handler(response, ctx):
                                 ],
                             }
 
-                            metadata['_kahle_prompt_composition'] = prompt_composition(
-                                new_form_data.get('messages'), new_form_data.get('tools'),
-                            )
                             res = await generate_chat_completion(
                                 request,
                                 new_form_data,
@@ -8585,7 +8578,12 @@ async def streaming_chat_response_handler(response, ctx):
                         'document_sources_present': bool(canonical_rag_sources),
                         'feedback_link_present': bool(canonical_rag_feedback_link),
                         'latency_ms': elapsed_ms,
-                        'prompt_composition': metadata.get('_kahle_prompt_composition') or {},
+                        # The OpenAI router records it on the request-scoped metadata,
+                        # which is a different dict than this handler's metadata.
+                        'prompt_composition': (
+                            (getattr(request.state, 'metadata', None) or {}).get('_kahle_prompt_composition')
+                            or {}
+                        ),
                     }
                 elif metadata.get('kahle_evidence_probe'):
                     # A released probe has no harness payload; keep it measurable.

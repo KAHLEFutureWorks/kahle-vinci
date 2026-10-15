@@ -90,9 +90,21 @@ def test_composition_accepts_list_content_and_ignores_garbage():
 MIDDLEWARE = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "middleware.py"
 
 
-def test_middleware_records_composition_before_each_answer_call_and_reports_it():
-    source = MIDDLEWARE.read_text(encoding="utf-8")
-    record = "metadata['_kahle_prompt_composition'] = prompt_composition(\n"
-    assert source.count(record) == 2
-    assert "'prompt_composition': metadata.get('_kahle_prompt_composition') or {}," in source
-    assert "    prompt_composition,\n" in source
+OPENAI_ROUTER = ROOT / "open-webui-overrides" / "open_webui" / "routers" / "openai.py"
+
+
+def test_composition_is_recorded_on_the_prompt_as_sent_and_reported():
+    # The model system prompt is only added in the OpenAI router; measuring in the
+    # middleware missed it (smoke run 15.10.: system_chars 0).
+    router = OPENAI_ROUTER.read_text(encoding="utf-8")
+    # utils/chat.py passes the router a merged copy of the metadata; only the
+    # request-scoped dict reaches the middleware metrics (smoke run 15.10.).
+    record = "request_metadata['_kahle_prompt_composition'] = prompt_composition(\n"
+    assert router.count(record) == 1
+    assert "request_metadata = getattr(request.state, 'metadata', None)" in router
+    assert "not (metadata or {}).get('task')" in router
+    assert router.index(record) > router.index("payload = await apply_system_prompt_to_body(")
+    assert "from open_webui.utils.kahle_knowledge_harness import prompt_composition\n" in router
+    middleware = MIDDLEWARE.read_text(encoding="utf-8")
+    # The handler's metadata is not request.state.metadata (diagnosed 15.10. by object id).
+    assert "(getattr(request.state, 'metadata', None) or {}).get('_kahle_prompt_composition')" in middleware

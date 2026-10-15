@@ -45,6 +45,7 @@ from open_webui.utils.anthropic import get_anthropic_models, is_anthropic_url
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.headers import get_custom_headers, include_user_info_headers
 from open_webui.utils.json_codec import JSONCodec
+from open_webui.utils.kahle_knowledge_harness import prompt_composition
 from open_webui.utils.model_ids import strip_provider_model_prefix
 from open_webui.utils.misc import (
     convert_logit_bias_input_to_json,
@@ -1286,6 +1287,15 @@ async def generate_chat_completion(
         await check_model_access(user, model_info, bypass_filter)
     else:
         await check_model_access(user, None, bypass_filter)
+
+    # Phase 4b: the prompt as sent, system prompt included; the last call wins.
+    # utils/chat.py hands this router a merged copy, so the request-scoped
+    # metadata is the one the middleware reads; background tasks keep out.
+    request_metadata = getattr(request.state, 'metadata', None)
+    if isinstance(request_metadata, dict) and not (metadata or {}).get('task'):
+        request_metadata['_kahle_prompt_composition'] = prompt_composition(
+            payload.get('messages'), payload.get('tools'),
+        )
 
     # Check if model is already in app state cache to avoid expensive get_all_models() call
     models = request.app.state.OPENAI_MODELS
