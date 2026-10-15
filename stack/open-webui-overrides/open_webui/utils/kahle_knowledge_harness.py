@@ -3661,6 +3661,31 @@ def build_shadow_decision(**kwargs: Any) -> HarnessDecision:
     return build_decision(**kwargs)
 
 
+_GENERATED_FILE_LINK = "/files/download?token="
+
+
+def document_tools_needed(
+    *, current_files: Any, request_messages: Any, history_messages: Any,
+) -> bool:
+    """Whether the document-worker file tools belong in the prompt.
+
+    They only edit or read existing files, so they are needed when the
+    conversation has an attached file or a file Vinci generated (download
+    link). Creating a file from a chat result runs through kahle_workflow.
+    """
+    if any(isinstance(item, dict) for item in current_files or ()):
+        return True
+    history = history_messages.values() if isinstance(history_messages, dict) else ()
+    for message in (*(request_messages or ()), *history):
+        if not isinstance(message, dict):
+            continue
+        if any(isinstance(item, dict) for item in message.get("files") or ()):
+            return True
+        if _GENERATED_FILE_LINK in _composition_text(message.get("content")):
+            return True
+    return False
+
+
 _COMPOSITION_CONTEXT = re.compile(r"<context>.*?</context>", re.S)
 _CONTRACT_MARKER = "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
 _BLUEPRINT_MARKER = "KAHLE_KNOWLEDGE_ANSWER_BLUEPRINT\n"

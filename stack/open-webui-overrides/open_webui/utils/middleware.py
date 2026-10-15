@@ -96,6 +96,7 @@ from open_webui.utils.kahle_knowledge_harness import (
     build_decision as build_knowledge_harness_decision,
     classify_personio_directory_intent,
     customer_lock_followup_query,
+    document_tools_needed,
     knowledge_abstention_answer,
     person_confirmation_names,
     released_decision_payload,
@@ -5225,6 +5226,25 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 }
                             )
                         continue
+
+            if 'server:doc-worker' in tool_ids:
+                # Phase 4b: the file tools need an attached or generated file and
+                # cost ~7,400 prompt characters on every request without one.
+                history_messages = {}
+                chat_id = metadata.get('chat_id')
+                if chat_id and not str(chat_id).startswith('local:'):
+                    try:
+                        history_messages = await Chats.get_messages_map_by_chat_id(chat_id) or {}
+                    except Exception as e:
+                        log.debug(f'Document tool gate keeps the tools, history unreadable: {e}')
+                        history_messages = None
+                if history_messages is not None and not document_tools_needed(
+                    current_files=metadata.get('files'),
+                    request_messages=form_data.get('messages'),
+                    history_messages=history_messages,
+                ):
+                    tool_ids = [tool_id for tool_id in tool_ids if tool_id != 'server:doc-worker']
+                    metadata['kahle_document_tools_hidden'] = True
 
             await _evict_stale_local_tool_cache(request, tool_ids)
             tools_dict = await get_tools(

@@ -125,3 +125,43 @@ def test_composition_is_recorded_on_the_prompt_as_sent_and_reported():
     middleware = MIDDLEWARE.read_text(encoding="utf-8")
     # The handler's metadata is not request.state.metadata (diagnosed 15.10. by object id).
     assert "(getattr(request.state, 'metadata', None) or {}).get('_kahle_prompt_composition')" in middleware
+
+
+def test_document_tools_stay_whenever_the_conversation_has_a_file():
+    harness = load_harness()
+    needed = harness.document_tools_needed
+    plain = [{"role": "user", "content": "Wer ist für Garantie zuständig?"}]
+
+    assert needed(current_files=[], request_messages=plain, history_messages={}) is False
+    assert needed(current_files=[{"id": "f1", "name": "vertrag.pdf"}], request_messages=plain, history_messages={})
+    earlier = {"m1": {"role": "user", "content": "Lies das", "files": [{"id": "f1", "name": "liste.xlsx"}]}}
+    assert needed(current_files=[], request_messages=plain, history_messages=earlier)
+    in_request = [{"role": "user", "content": "x", "files": [{"name": "a.docx"}]}]
+    assert needed(current_files=[], request_messages=in_request, history_messages={})
+
+
+def test_document_tools_stay_after_vinci_generated_a_file():
+    harness = load_harness()
+    generated = [
+        {"role": "user", "content": "Fasse das zusammen"},
+        {"role": "assistant", "content": "Download: https://vinci.local/files/download?token=abc123"},
+        {"role": "user", "content": "Mach daraus eine PDF"},
+    ]
+
+    assert harness.document_tools_needed(current_files=[], request_messages=generated, history_messages={})
+    assert harness.document_tools_needed(
+        current_files=[], request_messages=[],
+        history_messages={"a": {"role": "assistant", "content": [{"type": "text", "text": "/files/download?token=x"}]}},
+    )
+
+
+def test_middleware_hides_document_tools_only_without_file_context_and_keeps_them_on_doubt():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    gate = source.index("if 'server:doc-worker' in tool_ids:")
+    assert gate < source.index("tools_dict = await get_tools(", gate)
+    block = source[gate:source.index("tools_dict = await get_tools(", gate)]
+    assert "document_tools_needed(" in block
+    assert "Chats.get_messages_map_by_chat_id(" in block
+    # An unreadable history keeps the tools (no lost capability on doubt).
+    assert "history_messages = None" in block
+    assert "history_messages is not None" in block
