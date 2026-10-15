@@ -97,7 +97,10 @@ from open_webui.utils.kahle_knowledge_harness import (
     classify_personio_directory_intent,
     customer_lock_followup_query,
     document_tools_needed,
+    generated_file_link_for,
+    generated_file_links,
     knowledge_abstention_answer,
+    map_generated_file_params,
     person_confirmation_names,
     released_decision_payload,
     plan_retrieval as plan_knowledge_retrieval,
@@ -2695,6 +2698,7 @@ async def chat_completion_tools_handler(
         attached_file_names: list[str],
         attached_exact_paths: list[str],
         name_to_exact: dict[str, str],
+        generated_files: Optional[list[tuple[str, str]]] = None,
     ) -> dict[str, Any]:
         updated = dict(params or {})
 
@@ -2750,6 +2754,13 @@ async def chat_completion_tools_handler(
                 for name, exact in name_to_exact.items():
                     if _normalize_name_key(name) == raw_key or _canonical_filename_key(name) == raw_ckey:
                         return exact
+
+            # A file Vinci generated in this chat is no attachment; its download
+            # link is the only exact reference (the bare name may match generated
+            # files of other chats). The latest file of that name wins.
+            generated_link = generated_file_link_for(raw, generated_files)
+            if generated_link:
+                return generated_link
 
             if len(attached_exact_paths) == 1:
                 if _is_placeholder_filename(raw):
@@ -3049,12 +3060,28 @@ async def chat_completion_tools_handler(
     event_emitter = extra_params['__event_emitter__']
     metadata = extra_params['__metadata__']
     current_message_refs: list[dict[str, Optional[str]]] = []
+    history_chain: list[dict] = []
     try:
         chat_id = metadata.get('chat_id')
         message_id = metadata.get('message_id')
         if chat_id and message_id and not str(chat_id).startswith('local:'):
             messages_map = await Chats.get_messages_map_by_chat_id(chat_id)
             if isinstance(messages_map, dict):
+                # Branch of the current message (oldest first) for generated files.
+                node = messages_map.get(message_id)
+                while isinstance(node, dict) and len(history_chain) < 200:
+                    if any(node is seen for seen in history_chain):
+                        break
+                    history_chain.append(node)
+                    parent_id = node.get('parentId') or node.get('parent_id')
+                    node = messages_map.get(parent_id) if parent_id else None
+                history_chain.reverse()
+                if not history_chain:
+                    history_chain = sorted(
+                        (m for m in messages_map.values() if isinstance(m, dict)),
+                        key=lambda m: int(m.get('timestamp') or 0) if str(m.get('timestamp') or '').isdigit() else 0,
+                    )
+
                 current_message = messages_map.get(message_id)
                 visited: set[str] = set()
                 depth = 0
@@ -3117,6 +3144,7 @@ async def chat_completion_tools_handler(
             grouped_exacts.setdefault(name, set()).add(exact)
 
     name_to_exact = {key: next(iter(value)) for key, value in grouped_exacts.items() if len(value) == 1}
+    generated_files = generated_file_links([*history_chain, *(body.get('messages', []) or [])])
     log.debug(
         f'tools_handler attached_file_names={attached_file_names} attached_exact_paths={attached_exact_paths}'
     )
@@ -3215,6 +3243,7 @@ async def chat_completion_tools_handler(
                         attached_file_names,
                         attached_exact_paths,
                         name_to_exact,
+                        generated_files=generated_files,
                     )
 
                     document_comparison_validation_error = (
@@ -3370,6 +3399,7 @@ async def chat_completion_tools_handler(
                         attached_file_names,
                         attached_exact_paths,
                         name_to_exact,
+                        generated_files=generated_files,
                     )
 
                     document_comparison_validation_error = (
@@ -7933,6 +7963,43 @@ async def streaming_chat_response_handler(response, ctx):
                                 tool_function_params = {
                                     k: v for k, v in tool_function_params.items() if k in allowed_params
                                 }
+
+                                if any(key in tool_function_params for key in ('file_path', 'file_paths')):
+                                    # A file generated earlier in this chat is no attachment; map its
+                                    # bare name to its download link (see map_generated_file_params).
+                                    history_for_files = form_data.get('messages', []) or []
+                                    generated_files = generated_file_links(history_for_files)
+                                    chat_id_for_files = str(metadata.get('chat_id') or '')
+                                    if (
+                                        not generated_files
+                                        and metadata.get('user_message_id')
+                                        and chat_id_for_files
+                                        and not chat_id_for_files.startswith(('local:', 'channel:'))
+                                    ):
+                                        history_for_files = (
+                                            await load_messages_from_db(chat_id_for_files, metadata['user_message_id'])
+                                            or []
+                                        )
+                                        generated_files = generated_file_links(history_for_files)
+                                    attached_items = [
+                                        *(metadata.get('files') or []),
+                                        *(
+                                            item
+                                            for message in history_for_files
+                                            if isinstance(message, dict)
+                                            for item in (message.get('files') or [])
+                                        ),
+                                    ]
+                                    tool_function_params = map_generated_file_params(
+                                        tool_function_params,
+                                        generated_files,
+                                        attached_names=[
+                                            item.get('name')
+                                            or (item['file'].get('filename') if isinstance(item.get('file'), dict) else None)
+                                            for item in attached_items
+                                            if isinstance(item, dict)
+                                        ],
+                                    )
 
                                 document_comparison_block_reason = (
                                     _kahle_document_comparison_block_reason(
