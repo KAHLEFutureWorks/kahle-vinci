@@ -548,6 +548,21 @@ git commit -m "eval(harness): phase 4b measurement"
 git push origin feat/harness-eval-foundation
 ```
 
+### Ergebnis und Abnahme (15.10.)
+
+Umgesetzt: Messung (`481b9b3`, `c4a1b9d`, `d1a3a4b`, `5bf2a84`), Dubletten der Bordwerkzeuge ausgeblendet (`81c565d`, Nutzerentscheidung), Doc-Worker nur bei Datei im Chat (`227a3f8`, `3521d49`, Nutzerentscheidung: nur ohne Eingriff in „Erstelle mir aus dem Ergebnis eine PDF“). Task 5 entfiel (keine doppelten Passagen), Task 6 wurde nicht umgesetzt (Vorabschätzung nur ca. 900 Zeichen nachweislich doppelt durchgesetzter Regeln). Full Verify `EXIT=0`, 13 von 13.
+
+| Kriterium | Mistral (`vinci-2`) | gpt-oss (`thinking`) | `max-thinking` | Ziel |
+| --- | --- | --- | --- | --- |
+| `prompt_tokens_p50` 4a → 4b | 17.496 → 13.298 (−24,0 %) | 12.798 → 10.435 (−18,5 %) | 16.865 → 12.825 (−24,0 %) | erfüllt |
+| Routing korrekt 4a → 4b | 105 → 105 | 104 → 103 | 103 → 100 von 110 messbaren | 2 von 3 sicher, max-thinking offen |
+| blockierende Verstöße | 0 | 0 | 0 | erfüllt |
+| `retry_required` | 0 → 0 | 2 → 3 | 0 → 1 | erfüllt |
+
+`max-thinking`: Während des Laufs starteten parallele Sitzungen Open WebUI und den Datei-Proxy neu (12:10 und 12:15 UTC, Exit-Code 0); 17 Fälle endeten mit `HTTPError` (u. a. 502 von Caddy). Eine Wiederholung der betroffenen Kategorien ersetzte 13 davon; 4 Fälle blieben unbewertet. Der eingehängte Code war durchgehend dieser Stand.
+
+Prüfung „Erstelle mir aus dem Ergebnis eine PDF“ (drei Modelle, echter Folgechat): Die PDF entsteht über `kahle_workflow_execute` mit Download-Link; eine Bearbeitung der erzeugten Datei in der Folgerunde erhält die Doc-Worker-Funktionen. Ein HTTP 400 bei `file_to_md_save` auf erzeugten PDFs tritt mit und ohne Sperre gleich auf (A/B) und ist als eigene Aufgabe abgelegt.
+
 ## Nicht Teil dieses Plans (folgt in 4c)
 
 - **Modellprofile:** gezielte Zusatzpflichten je Basismodell.
