@@ -3659,3 +3659,79 @@ def build_result_driven_decision(
 def build_shadow_decision(**kwargs: Any) -> HarnessDecision:
     """Backward-compatible name for callers still running comparison mode."""
     return build_decision(**kwargs)
+
+
+_COMPOSITION_CONTEXT = re.compile(r"<context>.*?</context>", re.S)
+_CONTRACT_MARKER = "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
+_BLUEPRINT_MARKER = "KAHLE_KNOWLEDGE_ANSWER_BLUEPRINT\n"
+_DUTIES_MARKER = "KAHLE_KNOWLEDGE_ANSWER_DUTIES\n"
+
+
+def _composition_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+def prompt_composition(messages: Any, tools: Any) -> dict[str, int]:
+    """Characters per prompt part of one model call; values only, no text."""
+    parts = dict.fromkeys(
+        ("system_chars", "contract_chars", "blueprint_chars", "duties_chars",
+         "tool_result_chars", "conversation_chars", "tool_spec_chars"), 0,
+    )
+    tool_texts: list[str] = []
+    spans: list[str] = []
+    for message in messages or ():
+        if not isinstance(message, dict):
+            continue
+        text = _composition_text(message.get("content"))
+        if message.get("role") == "tool":
+            parts["tool_result_chars"] += len(text)
+            tool_texts.append(text)
+            continue
+        for block in _COMPOSITION_CONTEXT.findall(text):
+            parts["tool_result_chars"] += len(block)
+            tool_texts.append(block)
+        text = _COMPOSITION_CONTEXT.sub("", text)
+        duties_at = text.find(_DUTIES_MARKER)
+        if duties_at >= 0:
+            parts["duties_chars"] += len(text) - duties_at
+            text = text[:duties_at]
+        contract_at = text.find(_CONTRACT_MARKER)
+        if contract_at >= 0:
+            contract = text[contract_at:]
+            text = text[:contract_at]
+            blueprint_at = contract.find(_BLUEPRINT_MARKER)
+            if blueprint_at >= 0:
+                line_start = blueprint_at + len(_BLUEPRINT_MARKER)
+                line_end = contract.find("\n", line_start)
+                line = contract[line_start:] if line_end < 0 else contract[line_start:line_end]
+                parts["blueprint_chars"] += len(line)
+                contract = contract[:line_start] + contract[line_start + len(line):]
+                try:
+                    blueprint = json.loads(line)
+                except ValueError:
+                    blueprint = {}
+                spans.extend(
+                    str(claim.get("evidence_span") or "")
+                    for section in blueprint.get("sections") or ()
+                    for claim in section.get("claims") or ()
+                    if isinstance(claim, dict)
+                )
+            parts["contract_chars"] += len(contract)
+        key = "system_chars" if message.get("role") == "system" else "conversation_chars"
+        parts[key] += len(text)
+    if tools:
+        parts["tool_spec_chars"] = len(json.dumps(tools, ensure_ascii=False))
+    parts["total_chars"] = sum(parts.values())
+    parts["duplicate_span_chars"] = sum(
+        len(span) for span in spans
+        if len(span.strip()) >= 20 and any(span.strip() in tool for tool in tool_texts)
+    )
+    return parts
