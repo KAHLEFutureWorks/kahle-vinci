@@ -406,6 +406,16 @@ Tool-Spezifikationen je Gruppe (52 Funktionen, 30.376 Zeichen; Kurzlauf nach `5b
 
 Folgerungen: Task 5 entfällt (keine doppelten Passagen). Die Hebel sind Tool-Spezifikationen und Systemprompt; der Tool-Posten enthält mindestens 7.674 Zeichen Doppelungen (Bordwerkzeuge zu Automationen, Notizen, Aufgaben, Zeit).
 
+**Nutzerentscheidung 15.10.: zuerst Dubletten entfernen** (`81c565d`). `register-kahle-workflow-tool.py` blendet die Bordwerkzeuge `notes`, `tasks`, `automations` und `time` je Modell aus (`meta.builtinTools`), wenn `owui_productivity` bzw. `zeit_berechnung` zugewiesen ist; unsere Tools rufen dieselben Bordfunktionen intern auf. Kalender bleibt. Lokal angewendet auf die drei Vinci-Modelle; im Prompt stehen danach 38 statt 52 Funktionen (22.778 statt 30.478 Zeichen).
+
+| Modell | `prompt_tokens` Median vorher → nachher | ggü. 4a | korrekt | `retry_required` | blockierend |
+| --- | --- | --- | --- | --- | --- |
+| Mistral (`vinci-2`) | 17.450 → 15.336 | −12,3 % | 105 → 105 | 2 → 2 | 0 |
+| gpt-oss (`thinking`) | 12.798 → 11.562 | −9,7 % | 104 → 104 | 2 → 3 | 0 |
+| `max-thinking` | 16.779 → 14.764 | −12,5 % | 105 → 103 | 1 → 2 | 0 |
+
+Bei Mistral und gpt-oss änderte sich kein einziger Fall. Bei `max-thinking` waren zwei Supervisor-Fälle technische Fehler (`RuntimeError` des Chat-Tasks); die Wiederholung der Kategorie war 6 von 6 korrekt.
+
 - [ ] **Step 5: Entscheidungspunkt.** Task 5 wird nur umgesetzt, wenn `duplicate_span_chars` im Median bei mindestens einem Modell **≥ 1.000 Zeichen** liegt. Task 6 wird dem Nutzer mit den gemessenen Anteilen vorgelegt; ohne Freigabe entfällt er.
 
 ### Task 4: (entfällt bewusst) Tool-Spezifikationen
