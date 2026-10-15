@@ -3661,7 +3661,8 @@ def build_shadow_decision(**kwargs: Any) -> HarnessDecision:
     return build_decision(**kwargs)
 
 
-_GENERATED_FILE_LINK = "/files/download?token="
+# owui-file-proxy links: /files/d/<id> (current) and /files/download?token= (older).
+_GENERATED_FILE_LINK = re.compile(r"/files/(?:d/[A-Za-z0-9_-]+|download\?token=)")
 
 
 def document_tools_needed(
@@ -3681,7 +3682,9 @@ def document_tools_needed(
             continue
         if any(isinstance(item, dict) for item in message.get("files") or ()):
             return True
-        if _GENERATED_FILE_LINK in _composition_text(message.get("content")):
+        # The stored tool result may hold the link even when the answer omits it.
+        searched = _composition_text(message.get("content")) + str(message.get("output") or "")
+        if _GENERATED_FILE_LINK.search(searched):
             return True
     return False
 

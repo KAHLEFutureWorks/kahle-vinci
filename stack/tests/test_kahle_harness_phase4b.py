@@ -153,6 +153,19 @@ def test_document_tools_stay_after_vinci_generated_a_file():
         current_files=[], request_messages=[],
         history_messages={"a": {"role": "assistant", "content": [{"type": "text", "text": "/files/download?token=x"}]}},
     )
+    # Current links are /files/d/<id> (owui-file-proxy _build_download_url); the
+    # stored tool result may hold the link even when the visible answer does not.
+    current_link = {"role": "assistant", "content": "Hier ist deine PDF: http://localhost:8091/files/d/0a1b2c3d"}
+    assert harness.document_tools_needed(current_files=[], request_messages=[current_link], history_messages={})
+    tool_result_only = {"role": "assistant", "content": "Die PDF ist fertig.", "output": [
+        {"type": "function_call_output", "output": [{"type": "input_text",
+                                                     "text": '{"download_url": "http://x/files/d/0a1b"}'}]},
+    ]}
+    assert harness.document_tools_needed(current_files=[], request_messages=[], history_messages={"m": tool_result_only})
+    assert not harness.document_tools_needed(
+        current_files=[], request_messages=[{"role": "user", "content": "Was sind /files/ in Linux?"}],
+        history_messages={},
+    )
 
 
 def test_middleware_hides_document_tools_only_without_file_context_and_keeps_them_on_doubt():
