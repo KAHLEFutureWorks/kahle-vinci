@@ -353,6 +353,8 @@ git add stack/open-webui-overrides/open_webui/utils/middleware.py eval/harness/h
 git commit -m "eval(harness): report the prompt composition of each answer"
 ```
 
+**Abweichung bei der Umsetzung (15.10., `d1a3a4b`):** Die Messung in der Middleware kam leer bzw. ohne Systemprompt an. Open WebUI fügt den Modell-Systemprompt erst im OpenAI-Router hinzu, und `utils/chat.py` gibt dem Router eine zusammengeführte Kopie der Metadaten. Gemessen wird deshalb in `routers/openai.py` direkt nach `apply_system_prompt_to_body` auf `request.state.metadata` (Hintergrundaufgaben mit `metadata.task` ausgenommen); die Middleware liest den Wert von dort. Erfasst wird der letzte Aufruf; nach einer Nachbesserung der Antwortprüfung ist das der Nachbesserungsaufruf ohne Tools, während `prompt_tokens` aus der Nutzungsangabe des Chats stammt.
+
 ### Task 3: Messung der Zusammensetzung und Entscheidungspunkt
 
 - [ ] **Step 1: Open WebUI neu starten** (Middleware und Harness sind gemountet): `docker restart open-webui`, danach `http://localhost:3004/health` = `200`
@@ -374,6 +376,35 @@ Wiederholen mit `--models vinci-2-clone-clone-clone` und `--models kahle-vinci-m
 git add docs/superpowers/plans/2026-10-13-harness-phase4b-prompt-composition-and-token-cut.md
 git commit -m "eval(harness): phase 4b prompt composition measurement"
 ```
+
+**Ergebnis (15.10., je 114 Fälle, Median in Zeichen, Prompt des letzten Aufrufs):**
+
+| Bestandteil | gpt-oss (`thinking`) | Mistral (`vinci-2`) | `max-thinking` |
+| --- | --- | --- | --- |
+| Tool-Spezifikationen | 30.478 (49 %) | 30.478 (48 %) | 30.478 (49 %) |
+| Systemprompt | 27.332 (44 %) | 29.252 (46 %) | 27.332 (44 %) |
+| Antwortvertrag | 3.129 (5 %) | 3.133 (5 %) | 3.170 (5 %) |
+| Tool-Ergebnisse, nur Fälle mit Ergebnis | 1.930 | 1.630 | 1.394 |
+| Bauplan / doppelte Spans | 0 / 0 | 0 / 0 | 0 / 0 |
+| Summe | 62.053 | 63.939 | 62.788 |
+| `prompt_tokens` Median | 12.798 | 17.450 | 16.779 |
+| Routing korrekt | 104 | 105 | 105 |
+
+Tool-Spezifikationen je Gruppe (52 Funktionen, 30.376 Zeichen; Kurzlauf nach `5bf2a84`, bei beiden Modellen identisch):
+
+| Gruppe | Funktionen | Zeichen | Überschneidung |
+| --- | --- | --- | --- |
+| Open-WebUI-Bordwerkzeuge Kalender | `create/update/search/delete_calendar_event` | 3.787 | keine |
+| Open-WebUI-Bordwerkzeuge Automationen | `create/update/list/toggle/delete_automation` | 3.416 | doppelt zu `owui_productivity` `automations_*` (1.835) |
+| Open-WebUI-Bordwerkzeuge Notizen | `write_note`, `replace_note_content`, `search_notes`, `view_note` | 1.920 | doppelt zu `notes_*` (1.240) |
+| Open-WebUI-Bordwerkzeuge Aufgaben | `create_tasks`, `update_task` | 1.267 | doppelt zu `tasks_*` (969) und `kv_task_*` |
+| Open-WebUI-Bordwerkzeuge Zeit | `get_current_timestamp`, `calculate_timestamp` | 1.071 | doppelt zu `zeit_berechnung` (1.308) |
+| `server:doc-worker` | 11 Datei-Funktionen | 7.439 | keine; bei jeder Anfrage, auch ohne Datei |
+| `kahle_tasks` | `kv_task_*` | 3.657 | siehe Aufgaben |
+| `owui_productivity` | `automations_*`, `notes_*`, `tasks_*` | 4.044 | siehe oben |
+| `zeit_berechnung`, `kahle_workflow`, `safe_websearch` | | 1.308 / 1.606 / 861 | |
+
+Folgerungen: Task 5 entfällt (keine doppelten Passagen). Die Hebel sind Tool-Spezifikationen und Systemprompt; der Tool-Posten enthält mindestens 7.674 Zeichen Doppelungen (Bordwerkzeuge zu Automationen, Notizen, Aufgaben, Zeit).
 
 - [ ] **Step 5: Entscheidungspunkt.** Task 5 wird nur umgesetzt, wenn `duplicate_span_chars` im Median bei mindestens einem Modell **≥ 1.000 Zeichen** liegt. Task 6 wird dem Nutzer mit den gemessenen Anteilen vorgelegt; ohne Freigabe entfällt er.
 
