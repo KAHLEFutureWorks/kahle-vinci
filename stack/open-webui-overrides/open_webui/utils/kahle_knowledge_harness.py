@@ -3679,7 +3679,7 @@ def _composition_text(content: Any) -> str:
     return ""
 
 
-def prompt_composition(messages: Any, tools: Any) -> dict[str, int]:
+def prompt_composition(messages: Any, tools: Any) -> dict[str, Any]:
     """Characters per prompt part of one model call; values only, no text."""
     parts = dict.fromkeys(
         ("system_chars", "contract_chars", "blueprint_chars", "duties_chars",
@@ -3727,11 +3727,16 @@ def prompt_composition(messages: Any, tools: Any) -> dict[str, int]:
             parts["contract_chars"] += len(contract)
         key = "system_chars" if message.get("role") == "system" else "conversation_chars"
         parts[key] += len(text)
+    sizes: dict[str, int] = {}
     if tools:
         parts["tool_spec_chars"] = len(json.dumps(tools, ensure_ascii=False))
+        for tool in tools if isinstance(tools, list) else ():
+            function = tool.get("function") if isinstance(tool, dict) else None
+            name = str((function or {}).get("name") or "?")
+            sizes[name] = sizes.get(name, 0) + len(json.dumps(tool, ensure_ascii=False))
     parts["total_chars"] = sum(parts.values())
     parts["duplicate_span_chars"] = sum(
         len(span) for span in spans
         if len(span.strip()) >= 20 and any(span.strip() in tool for tool in tool_texts)
     )
-    return parts
+    return {**parts, "tool_spec_chars_by_name": sizes}

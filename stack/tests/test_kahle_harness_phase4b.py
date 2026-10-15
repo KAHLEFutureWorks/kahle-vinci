@@ -61,6 +61,23 @@ def test_composition_counts_each_part_once_and_finds_duplicate_spans():
     )
 
 
+def test_composition_names_the_size_of_each_tool_spec():
+    harness = load_harness()
+    tools = [
+        {"type": "function", "function": {"name": "rag_chat", "description": "Suche", "parameters": {}}},
+        {"type": "function", "function": {"name": "search_web", "description": "Web" * 50, "parameters": {}}},
+        {"type": "function"},
+    ]
+
+    result = harness.prompt_composition([], tools)
+
+    sizes = result["tool_spec_chars_by_name"]
+    assert sizes["rag_chat"] == len(json.dumps(tools[0], ensure_ascii=False))
+    assert sizes["search_web"] == len(json.dumps(tools[1], ensure_ascii=False))
+    assert sizes["?"] == len(json.dumps(tools[2], ensure_ascii=False))
+    assert "tool_spec_chars_by_name" not in {k for k in result if k.endswith("_chars")}
+
+
 def test_context_blocks_in_system_messages_count_as_tool_results():
     harness = load_harness()
     rag_system = "Regeln.\n<context>\n[1] Garantie\n" + PASSAGE + "\n</context>\nEnde."
