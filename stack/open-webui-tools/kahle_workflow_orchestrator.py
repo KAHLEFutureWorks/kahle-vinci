@@ -17,6 +17,7 @@ import os
 import re
 import sqlite3
 import time
+from contextvars import ContextVar
 from typing import Any
 
 try:
@@ -942,6 +943,29 @@ def build_report_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(sections).strip() + "\n"
 
 
+# Chat and user of the running workflow; the file proxy lets a follow-up file
+# tool read a generated file only in the chat that created it.
+_FILE_PROXY_CHAT: ContextVar[tuple[str, str] | None] = ContextVar("file_proxy_chat", default=None)
+
+
+def bind_file_proxy_chat(chat_id: Any, user: Any):
+    user_id = str((user or {}).get("id") or "").strip() if isinstance(user, dict) else ""
+    chat = str(chat_id or "").strip()
+    return _FILE_PROXY_CHAT.set((chat, user_id) if chat and user_id else None)
+
+
+def unbind_file_proxy_chat(token) -> None:
+    _FILE_PROXY_CHAT.reset(token)
+
+
+def _file_proxy_headers(api_key: str) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    chat = _FILE_PROXY_CHAT.get()
+    if chat:
+        headers["X-Kahle-Chat-Id"], headers["X-Kahle-User-Id"] = chat
+    return headers
+
+
 def create_downloadable_file(content: str, output_format: str, filename: str, title: str = "KAHLE-Vinci Ergebnis") -> dict[str, Any]:
     import requests
 
@@ -969,7 +993,7 @@ def create_downloadable_file(content: str, output_format: str, filename: str, ti
         response = requests.post(
             f"{base_url}{endpoint}",
             json=payload,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_file_proxy_headers(api_key),
             timeout=120,
         )
         if response.status_code >= 400:
@@ -994,7 +1018,7 @@ def create_fillable_ki_permission_form(filename: str, output_format: str = "docx
         response = requests.post(
             f"{base_url}/{output_format}/ki-permission-form/create_save",
             json={"filename": filename},
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_file_proxy_headers(api_key),
             timeout=120,
         )
         if response.status_code >= 400:
@@ -1015,7 +1039,7 @@ def create_ki_policy_quiz(filename: str, output_format: str) -> dict[str, Any]:
         response = requests.post(
             f"{base_url}/{output_format}/ki-policy-quiz/create_save",
             json={"filename": filename},
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_file_proxy_headers(api_key),
             timeout=45,
         )
         if response.status_code >= 400:
@@ -1030,7 +1054,7 @@ def create_dynamic_form(filename: str, output_format: str, schema: dict[str, Any
     base_url=_env("OWUI_FILE_PROXY_URL",default="http://owui-file-proxy:8091").rstrip("/"); api_key=_env("OWUI_FILE_PROXY_API_KEY","TOOL_API_KEY")
     if not api_key: return {"ok":False,"error":"OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
     try:
-        response=requests.post(f"{base_url}/{output_format}/dynamic-form/create_save",json={"filename":filename,"schema":schema},headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},timeout=45)
+        response=requests.post(f"{base_url}/{output_format}/dynamic-form/create_save",json={"filename":filename,"schema":schema},headers=_file_proxy_headers(api_key),timeout=45)
         if response.status_code>=400: return {"ok":False,"error":f"file_proxy_http_{response.status_code}","body":response.text[:1000]}
         data=response.json(); return data if isinstance(data,dict) else {"ok":False,"error":"file_proxy_returned_non_object"}
     except Exception as exc: return {"ok":False,"error":f"file_proxy_exception: {exc}"}
@@ -1086,6 +1110,19 @@ class Tools:
         :param filename: Optionaler Ausgabedateiname. Leer = sicher aus dem Auftrag ableiten.
         :param max_web_results: Maximale Webtreffer bei externer Recherche.
         """
+        token = bind_file_proxy_chat(__chat_id__, __user__)
+        try:
+            return await self._execute_workflow(
+                auftrag, modus, ziel, output_format, filename, max_web_results,
+                __chat_id__, __message_id__, __event_emitter__, __request__, __user__,
+            )
+        finally:
+            unbind_file_proxy_chat(token)
+
+    async def _execute_workflow(
+        self, auftrag, modus, ziel, output_format, filename, max_web_results,
+        __chat_id__, __message_id__, __event_emitter__, __request__, __user__,
+    ) -> str:
         auftrag = str(auftrag or "").strip()
         if not auftrag:
             auftrag = _latest_chat_message(__chat_id__, "user")

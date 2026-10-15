@@ -9,6 +9,11 @@ def auth_headers(api_key: str = "") -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
+def chat_headers(chat_id: str = "", user_id: str = "") -> dict[str, str]:
+    # File tools resolve only files of this chat, as Open WebUI sends it per tool call.
+    return {"X-Kahle-Chat-Id": chat_id, "X-Kahle-User-Id": user_id} if chat_id and user_id else {}
+
+
 def http_json(
     method: str,
     url: str,
@@ -73,10 +78,12 @@ def main() -> int:
     parser.add_argument("--xlsx-file", default="")
     parser.add_argument("--xlsx-sheet", default="")
     parser.add_argument("--api-key", default="", help="Proxy API key. Sends Authorization: Bearer <key>.")
+    parser.add_argument("--chat-id", default="", help="Open WebUI chat that has the test files attached.")
+    parser.add_argument("--user-id", default="", help="Open WebUI user who owns that chat.")
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
-    headers = auth_headers(args.api_key)
+    headers = {**auth_headers(args.api_key), **chat_headers(args.chat_id, args.user_id)}
     failures: list[str] = []
     notes: list[str] = []
 

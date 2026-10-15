@@ -97,8 +97,8 @@ def test_resolve_path_accepts_a_download_link_before_the_filename_search():
 
     assert "download_id_from_file_path(" in resolve
     assert "generated_rel_path(" in resolve
-    # The link is checked before the bare filename search across all uploads.
-    assert resolve.index("download_id_from_file_path(") < resolve.index('_list_files(f"**/{raw}")')
+    # The link is checked before the bare filename search in this chat's files.
+    assert resolve.index("download_id_from_file_path(") < resolve.index("hits = [h for h in chat_files if h.name == raw]")
     # Type, root and existence checks still apply to the linked file.
     assert resolve.index("generated_rel_path(") < resolve.index("_ensure_within_upload_root(resolved)")
 

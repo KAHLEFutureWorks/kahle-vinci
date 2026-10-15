@@ -232,6 +232,12 @@ Dokumenten, Chats, Personio oder Academy sind keine allgemeinen Debugdaten.
 - Interne API-Keys und Provider-Credentials gelangen nicht in Frontend oder
   Logs.
 - Personio bleibt eine lesende Integration.
+- Datei-Tools des `owui-file-proxy` lesen nur Dateien des aufrufenden Chats:
+  dessen Anhänge (`chat_file` in `webui.db`) und die für diesen Chat erzeugten
+  Dateien (Download-Manifest mit `chat_id`). Chat und Benutzer kommen aus den
+  Open-WebUI-Connection-Headern `X-Kahle-Chat-Id`/`X-Kahle-User-Id`, nie aus
+  Modellargumenten. Ohne diese Header schlägt die Auflösung geschlossen fehl
+  (`chat_scope_required`); Fehlermeldungen nennen keine fremden Dateien.
 - Personio ist für aktuelle Mitarbeiterstammdaten autoritativ. RAG darf Namen,
   Rollen, Standorte, Kontaktdaten oder Supervisor-Beziehungen weder ersetzen
   noch ergänzend erfinden.
