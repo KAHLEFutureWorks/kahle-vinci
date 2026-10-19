@@ -555,11 +555,15 @@ Umgesetzt: Messung (`481b9b3`, `c4a1b9d`, `d1a3a4b`, `5bf2a84`), Dubletten der B
 | Kriterium | Mistral (`vinci-2`) | gpt-oss (`thinking`) | `max-thinking` | Ziel |
 | --- | --- | --- | --- | --- |
 | `prompt_tokens_p50` 4a → 4b | 17.496 → 13.298 (−24,0 %) | 12.798 → 10.435 (−18,5 %) | 16.865 → 12.825 (−24,0 %) | erfüllt |
-| Routing korrekt 4a → 4b | 105 → 105 | 104 → 103 | 103 → 100 von 110 messbaren | 2 von 3 sicher, max-thinking offen |
+| Routing korrekt 4a → 4b | 105 → 105 | 104 → 103 | 103 → 104 (Nachmessung 19.10.) | erfüllt |
 | blockierende Verstöße | 0 | 0 | 0 | erfüllt |
 | `retry_required` | 0 → 0 | 2 → 3 | 0 → 1 | erfüllt |
 
 `max-thinking`: Während des Laufs starteten parallele Sitzungen Open WebUI und den Datei-Proxy neu (12:10 und 12:15 UTC, Exit-Code 0); 17 Fälle endeten mit `HTTPError` (u. a. 502 von Caddy). Eine Wiederholung der betroffenen Kategorien ersetzte 13 davon; 4 Fälle blieben unbewertet. Der eingehängte Code war durchgehend dieser Stand.
+
+**Nachmessung `max-thinking` (19.10., Nutzerentscheidung):** Stand `8cd953c` (4b plus die Datei-Fixes der Folgesitzungen), Arbeitsbaum sauber, kein Container-Neustart während des Laufs. 114 Fälle: 104 korrekt (4a: 103), 0 technische Fehler, 0 blockierend, `retry_required` 2 (4a: 0), `prompt_tokens_p50` 12.562 (4a: 16.865, −25,5 %). Abweichende Fälle gegenüber 4a: zwei besser (`responsibility_vehicle_prep`, `responsibility_contact_warranty`), einer schlechter (`person_process_handover`), einer weiterhin wechselnd (`followup_scope_location_reply`).
+
+**Abgenommen (19.10.):** Alle Kriterien erfüllt, für alle drei Modelle.
 
 Prüfung „Erstelle mir aus dem Ergebnis eine PDF“ (drei Modelle, echter Folgechat): Die PDF entsteht über `kahle_workflow_execute` mit Download-Link; eine Bearbeitung der erzeugten Datei in der Folgerunde erhält die Doc-Worker-Funktionen. Ein HTTP 400 bei `file_to_md_save` auf erzeugten PDFs tritt mit und ohne Sperre gleich auf (A/B) und ist als eigene Aufgabe abgelegt.
 
