@@ -362,3 +362,49 @@ def test_workflow_tool_binds_the_chat_for_the_whole_run():
     assert "unbind_file_proxy_chat(" in run
     assert source.count('headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}') == 1
     assert source.count("headers=_file_proxy_headers(api_key)") == 4
+
+
+# --- the tool-call guard also creates files for its own chat -------------------
+
+
+GUARD = ROOT / "open-webui-functions" / "kahle_toolcall_guard.py"
+
+
+def test_guard_sends_its_chat_when_it_creates_files(monkeypatch):
+    guard = load("guard_chat_scope", GUARD)
+    monkeypatch.setenv("OWUI_FILE_PROXY_API_KEY", "test-key")
+    sent: list[dict] = []
+
+    class Created:
+        status_code = 200
+
+        def json(self):
+            return {"download_url": "/files/d/" + "0" * 32, "filename": "x.pdf"}
+
+    def fake_post(url, json=None, headers=None, **kwargs):
+        sent.append(dict(headers or {}))
+        return Created()
+
+    monkeypatch.setattr(guard.requests, "post", fake_post)
+
+    token = guard.bind_file_proxy_chat(CHAT, {"id": USER})
+    try:
+        guard._create_file("# Bericht\n\nInhalt des Berichts mit genug Text.", "pdf", "x.pdf")
+        guard._create_ki_policy_quiz("quiz.pdf", "pdf")
+    finally:
+        guard.unbind_file_proxy_chat(token)
+    guard._create_file("# Bericht\n\nInhalt des Berichts mit genug Text.", "md", "y.md")
+
+    assert [h.get("X-Kahle-Chat-Id") for h in sent] == [CHAT, CHAT, None]
+    assert [h.get("X-Kahle-User-Id") for h in sent] == [USER, USER, None]
+
+
+def test_guard_binds_the_chat_for_the_whole_outlet():
+    source = GUARD.read_text(encoding="utf-8")
+    outlet = source[source.index("    def outlet("):source.index("    def _outlet(")]
+
+    assert "bind_file_proxy_chat(" in outlet and "unbind_file_proxy_chat(" in outlet
+    assert "chat_id" in outlet
+    assert source.count('headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}') == 0
+    # file creation (4x) and the guard's own file tool calls
+    assert source.count("headers=_file_proxy_headers(api_key)") == 5

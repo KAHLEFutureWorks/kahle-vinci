@@ -16,6 +16,7 @@ import time
 import unicodedata
 import asyncio
 import ast
+from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1456,6 +1457,29 @@ def _synthesize_requested_file_content(request_text: str) -> str:
 
 
 
+# Chat and user of the running outlet; the file proxy resolves files only for
+# the chat that calls it and records that chat on the files it creates.
+_FILE_PROXY_CHAT: ContextVar[tuple[str, str] | None] = ContextVar("file_proxy_chat", default=None)
+
+
+def bind_file_proxy_chat(chat_id: Any, user: Any):
+    user_id = str((user or {}).get("id") or "").strip() if isinstance(user, dict) else ""
+    chat = str(chat_id or "").strip()
+    return _FILE_PROXY_CHAT.set((chat, user_id) if chat and user_id else None)
+
+
+def unbind_file_proxy_chat(token) -> None:
+    _FILE_PROXY_CHAT.reset(token)
+
+
+def _file_proxy_headers(api_key: str) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    chat = _FILE_PROXY_CHAT.get()
+    if chat:
+        headers["X-Kahle-Chat-Id"], headers["X-Kahle-User-Id"] = chat
+    return headers
+
+
 def _create_file(content: str, output_format: str, filename: str, title: str = "") -> dict[str, Any]:
     content = _export_content(content)
     if _blocked_export_source(content):
@@ -1485,7 +1509,7 @@ def _create_file(content: str, output_format: str, filename: str, title: str = "
         response = requests.post(
             f"{base_url}{endpoint}",
             json=payload,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_file_proxy_headers(api_key),
             timeout=120,
         )
         if response.status_code >= 400:
@@ -1506,7 +1530,7 @@ def _create_fillable_ki_permission_form(filename: str, output_format: str = "doc
         response = requests.post(
             f"{base_url}/{output_format}/ki-permission-form/create_save",
             json={"filename": filename},
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_file_proxy_headers(api_key),
             timeout=120,
         )
         if response.status_code >= 400:
@@ -1528,7 +1552,7 @@ def _create_ki_policy_quiz(filename: str, output_format: str = "pdf") -> dict[st
         response = requests.post(
             f"{base_url}/{output_format}/ki-policy-quiz/create_save",
             json={"filename": filename},
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_file_proxy_headers(api_key),
             timeout=45,
         )
         if response.status_code >= 400:
@@ -1544,7 +1568,7 @@ def _create_dynamic_form(filename: str, output_format: str, schema: dict[str, An
     base_url=_env("OWUI_FILE_PROXY_URL",default="http://owui-file-proxy:8091").rstrip("/"); api_key=_env("OWUI_FILE_PROXY_API_KEY","TOOL_API_KEY")
     if not api_key: return {"ok":False,"error":"OWUI_FILE_PROXY_API_KEY fehlt im OpenWebUI Container."}
     try:
-        response=requests.post(f"{base_url}/{output_format}/dynamic-form/create_save",json={"filename":filename,"schema":schema},headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},timeout=45)
+        response=requests.post(f"{base_url}/{output_format}/dynamic-form/create_save",json={"filename":filename,"schema":schema},headers=_file_proxy_headers(api_key),timeout=45)
         if response.status_code>=400: return {"ok":False,"error":f"file_proxy_http_{response.status_code}","body":response.text[:1000]}
         data=response.json(); return data if isinstance(data,dict) else {"ok":False,"error":"file_proxy_returned_non_object"}
     except Exception as exc: return {"ok":False,"error":f"{type(exc).__name__}: {exc}"}
@@ -1649,7 +1673,7 @@ def _call_file_proxy_tool(tool_name: str, params: dict[str, Any]) -> dict[str, A
         response = requests.post(
             f"{base_url}{endpoint}",
             json=params,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_file_proxy_headers(api_key),
             timeout=300,
         )
         if response.status_code >= 400:
@@ -1980,6 +2004,14 @@ class Filter:
         self.valves = self.Valves()
 
     def outlet(self, body: dict, __user__: dict | None = None, __metadata__: dict | None = None) -> dict:
+        chat_id = (__metadata__ or {}).get("chat_id") or (body or {}).get("chat_id")
+        token = bind_file_proxy_chat(chat_id, __user__)
+        try:
+            return self._outlet(body, __user__, __metadata__)
+        finally:
+            unbind_file_proxy_chat(token)
+
+    def _outlet(self, body: dict, __user__: dict | None = None, __metadata__: dict | None = None) -> dict:
         messages = body.get("messages")
         if not isinstance(messages, list):
             return body
