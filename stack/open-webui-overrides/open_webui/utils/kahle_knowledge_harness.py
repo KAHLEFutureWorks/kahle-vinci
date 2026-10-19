@@ -3690,6 +3690,10 @@ def document_tools_needed(
 
 
 _GENERATED_FILE_DOWNLOAD = re.compile(r"/files/d/[0-9a-f]{32}/?$")
+# The guard's download answer: "[Datei herunterladen](<link>)" then "Datei: <name>".
+_GENERATED_FILE_DOWNLOAD_ANSWER = re.compile(
+    r"\((\S*/files/d/[0-9a-f]{32})/?\)[ \t]*\n\s*Datei:[ \t]*([^\s]+\.[A-Za-z0-9]{2,5})"
+)
 _GENERATED_FILE_MARKDOWN_LINK = re.compile(
     r"\[([^\]\n]+\.[A-Za-z0-9]{2,5})\]\((\S*/files/d/[0-9a-f]{32})/?\)"
 )
@@ -3733,8 +3737,11 @@ def generated_file_links(messages: Any) -> list[tuple[str, str]]:
         walk(message.get("output"))
         # Native function calling replays tool results as role "tool" JSON content.
         walk(message.get("content"))
-        for label, link in _GENERATED_FILE_MARKDOWN_LINK.findall(_composition_text(message.get("content"))):
+        text = _composition_text(message.get("content"))
+        for label, link in _GENERATED_FILE_MARKDOWN_LINK.findall(text):
             add(label, link)
+        for link, filename in _GENERATED_FILE_DOWNLOAD_ANSWER.findall(text):
+            add(filename, link)
     return found
 
 

@@ -226,3 +226,25 @@ def test_native_tool_path_adds_the_pdf_hint_to_the_block():
     native = native[:native.index("elif direct_tool:")]
 
     assert "_with_generated_pdf_hint(" in native
+
+
+# --- files the guard generated are found in the chat ---------------------------
+
+HARNESS = ROOT / "open-webui-overrides" / "open_webui" / "utils" / "kahle_knowledge_harness.py"
+
+
+def test_generated_file_links_read_the_guard_download_format():
+    spec = importlib.util.spec_from_file_location("harness_guard_download_format", HARNESS)
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+    messages = [
+        {"role": "user", "content": "Erstelle aus deiner Antwort eine PDF zum Download."},
+        {"role": "assistant", "content": download(PDF_LINK, "aus_deiner_antwort.pdf")},
+        {"role": "assistant", "content": download(DOCX_LINK, "kennwort.docx") + "\n\nWeiterer Text."},
+    ]
+
+    assert harness.generated_file_links(messages) == [
+        ("aus_deiner_antwort.pdf", PDF_LINK),
+        ("kennwort.docx", DOCX_LINK),
+    ]
