@@ -8,6 +8,8 @@ Static Checks sind Bestandteil von Fast und Full und können bei betroffenen
 Run from repository root (`c:\kahle-vinci` / project root).
 
 Required: running stack with `open-webui`, `owui-file-proxy`, `document-worker`.
+The test files must be attached to one Open WebUI chat; pass its chat and user
+id, because file tools only resolve files of the calling chat.
 
 Run the static Compose check without a running stack:
 
@@ -23,6 +25,8 @@ $apiKey = Read-Host "OWUI_FILE_PROXY_API_KEY"
 python stack/tests/smoke_file_proxy.py `
   --base-url http://127.0.0.1:8091 `
   --api-key $apiKey `
+  --chat-id <Chat-ID mit den Testdateien> `
+  --user-id <User-ID des Chats> `
   --docx-file 75679381-38ab-4cb2-ba9e-3669eff4736d_test.docx `
   --pdf-file-a 8b172815-138b-4c81-b96c-5b5a6931c733_merged.pdf `
   --pdf-file-b 720b7f5d-8956-40e4-bca4-6123ec1d919d_merged.pdf `
@@ -36,7 +40,7 @@ python stack/tests/smoke_file_proxy.py `
 ```bash
 python stack/tests/smoke_file_proxy.py \
   --base-url http://127.0.0.1:8091 \
-  --api-key "$OWUI_FILE_PROXY_API_KEY" \
+  --api-key "$OWUI_FILE_PROXY_API_KEY"   --chat-id "<Chat-ID mit den Testdateien>"   --user-id "<User-ID des Chats>" \
   --docx-file 75679381-38ab-4cb2-ba9e-3669eff4736d_test.docx \
   --pdf-file-a 8b172815-138b-4c81-b96c-5b5a6931c733_merged.pdf \
   --pdf-file-b 720b7f5d-8956-40e4-bca4-6123ec1d919d_merged.pdf \

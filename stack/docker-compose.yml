@@ -113,7 +113,7 @@ services:
       IONOS_MODEL_FALLBACK_IDS: "mistralai/Mistral-Small-24B-Instruct,openai/gpt-oss-120b,Qwen/Qwen3.5-397B-A17B"
       ENABLE_DIRECT_CONNECTIONS: "True"
       TOOL_SERVER_CONNECTIONS: >-
-        [{"type":"openapi","url":"http://owui-file-proxy:8091","spec_type":"url","spec":"","path":"openapi.json","auth_type":"bearer","key":"${OWUI_FILE_PROXY_API_KEY}","config":{"enable":true},"info":{"id":"doc-worker","name":"Document Worker","description":"Local DOCX/XLSX/PDF file editing tools"}}]
+        [{"type":"openapi","url":"http://owui-file-proxy:8091","spec_type":"url","spec":"","path":"openapi.json","auth_type":"bearer","key":"${OWUI_FILE_PROXY_API_KEY}","headers":{"X-Kahle-Chat-Id":"{{CHAT_ID}}","X-Kahle-User-Id":"{{USER_ID}}"},"config":{"enable":true},"info":{"id":"doc-worker","name":"Document Worker","description":"Local DOCX/XLSX/PDF file editing tools"}}]
       USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: "True"
       OWUI_APPEND_ATTACHED_FILE_NAMES_TO_USER_MESSAGE: "True"
       KAHLE_TASKS_DB_PATH: /app/backend/data/kahle_vinci_tasks.db

@@ -1,5 +1,4 @@
 import os
-import glob
 import time
 import uuid
 import re
@@ -30,6 +29,15 @@ try:
     from .fillable_pdf_forms import render_ki_permission_form_pdf as _render_ki_permission_form_pdf, render_ki_policy_quiz_pdf as _render_ki_policy_quiz_pdf, render_dynamic_form_pdf as _render_dynamic_form_pdf
     from .human_document import infer_human_title, prepare_human_markdown
     from .rag_markdown import ensure_rag_frontmatter
+    from .generated_links import GeneratedLinkError, download_id_from_file_path, generated_rel_path
+    from .chat_scope import (
+        CHAT_ID_HEADER,
+        USER_ID_HEADER,
+        ChatScope,
+        allowed_rel_paths,
+        manifest_scope_fields,
+        scope_from_headers,
+    )
 except ImportError:  # pragma: no cover - direct module execution in local tests
     from kahle_document_theme import (
         render_docx as _render_kahle_docx,
@@ -39,6 +47,15 @@ except ImportError:  # pragma: no cover - direct module execution in local tests
     from fillable_pdf_forms import render_ki_permission_form_pdf as _render_ki_permission_form_pdf, render_ki_policy_quiz_pdf as _render_ki_policy_quiz_pdf, render_dynamic_form_pdf as _render_dynamic_form_pdf
     from human_document import infer_human_title, prepare_human_markdown
     from rag_markdown import ensure_rag_frontmatter
+    from generated_links import GeneratedLinkError, download_id_from_file_path, generated_rel_path
+    from chat_scope import (
+        CHAT_ID_HEADER,
+        USER_ID_HEADER,
+        ChatScope,
+        allowed_rel_paths,
+        manifest_scope_fields,
+        scope_from_headers,
+    )
 
 from fastapi import FastAPI, HTTPException, Header, Query, Request
 from fastapi.responses import Response, JSONResponse, FileResponse, RedirectResponse
@@ -154,6 +171,8 @@ NonEmptyStr = constr(strip_whitespace=True, min_length=1)
 app = FastAPI(title="OWUI File Proxy", version="1.9.0")
 
 _REQUEST_API_KEY: ContextVar[str] = ContextVar("request_api_key", default="")
+# Chat and user of the Open WebUI tool call (trusted connection headers, not model arguments).
+_REQUEST_CHAT_SCOPE: ContextVar[Optional[ChatScope]] = ContextVar("request_chat_scope", default=None)
 _DOCX_TEMPLATE_USED: ContextVar[bool] = ContextVar("docx_template_used", default=False)
 _PDF_TEMPLATE_USED: ContextVar[bool] = ContextVar("pdf_template_used", default=False)
 _PPTX_TEMPLATE_USED: ContextVar[bool] = ContextVar("pptx_template_used", default=False)
@@ -206,9 +225,13 @@ async def enforce_api_key(request: Request, call_next):
             return JSONResponse(status_code=500, content={"detail": "TOOL_API_KEY not configured"})
 
         token = _REQUEST_API_KEY.set(provided)
+        scope_token = _REQUEST_CHAT_SCOPE.set(
+            scope_from_headers(request.headers.get(CHAT_ID_HEADER), request.headers.get(USER_ID_HEADER))
+        )
         try:
             return await call_next(request)
         finally:
+            _REQUEST_CHAT_SCOPE.reset(scope_token)
             _REQUEST_API_KEY.reset(token)
 
     return await call_next(request)
@@ -290,9 +313,17 @@ def _reject_wildcards(raw: str) -> None:
 # -----------------------------
 # File selection
 # -----------------------------
-def _list_files(pattern: str) -> list[Path]:
-    files = [Path(p) for p in glob.glob(str(UPLOAD_ROOT / pattern), recursive=True)]
-    return [p for p in files if p.is_file()]
+def _chat_files() -> dict[str, Path]:
+    """Files the calling chat may read, keyed by relative path; fail-closed without a chat."""
+    scope = _REQUEST_CHAT_SCOPE.get()
+    if scope is None:
+        raise HTTPException(status_code=403, detail="chat_scope_required")
+    files: dict[str, Path] = {}
+    for rel in sorted(allowed_rel_paths(UPLOAD_ROOT, OWUI_DB_PATH, scope, OUTPUT_SUBDIR)):
+        path = (UPLOAD_ROOT / rel).resolve()
+        if path.is_relative_to(UPLOAD_ROOT) and path.is_file():
+            files[path.relative_to(UPLOAD_ROOT).as_posix()] = path
+    return files
 
 
 def _is_openwebui_upload_for_name(path: Path, visible_name: str) -> bool:
@@ -318,15 +349,13 @@ def _pick_recent_upload_duplicate(hits: list[Path], visible_name: str) -> Path |
 
 def _pick_latest_file_by_exts(allowed_exts: tuple[str, ...]) -> Path:
     # NOTE: In strict mode we generally don't want "latest". This exists for backwards compatibility.
-    candidates: list[Path] = []
-    for ext in allowed_exts:
-        ext = ext.lstrip(".")
-        candidates += _list_files(f"**/*.{ext}")
+    allowed_lower = tuple(e.lower() for e in allowed_exts)
+    candidates = [p for p in _chat_files().values() if p.suffix.lower() in allowed_lower]
 
     if not candidates:
         raise HTTPException(
             status_code=400,
-            detail=f"No matching files found in OWUI_UPLOAD_DIR={UPLOAD_ROOT} for extensions={allowed_exts}",
+            detail=f"No matching files found in this chat for extensions={allowed_exts}",
         )
 
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -362,6 +391,15 @@ def _resolve_path(
     if raw in ("null", "None", ""):
         return _pick_latest_file_by_exts(allowed_exts)
 
+    # A download link handed out for a generated file names exactly that file.
+    # Its visible filename alone may match generated files of other chats.
+    download_id = download_id_from_file_path(raw)
+    if download_id:
+        try:
+            raw = generated_rel_path(UPLOAD_ROOT, download_id, OUTPUT_SUBDIR)
+        except GeneratedLinkError as exc:
+            raise HTTPException(status_code=400, detail=exc.code)
+
     # Normalize common client-side path hints.
     raw = raw.replace("\\", "/").lstrip("/")
     if raw.startswith("./"):
@@ -371,7 +409,9 @@ def _resolve_path(
 
     # Reject obvious filename placeholders generated by model guesses.
     lowered = raw.lower()
-    if any(tok in lowered for tok in ("dateiname", "datenname", "your_file", "your_", "anhang", "<", ">")):
+    if not download_id and any(
+        tok in lowered for tok in ("dateiname", "datenname", "your_file", "your_", "anhang", "<", ">")
+    ):
         raise HTTPException(status_code=400, detail="placeholder_filename_not_allowed_use_exact_uploaded_filename")
 
     _reject_wildcards(raw)
@@ -380,12 +420,13 @@ def _resolve_path(
 
     # filename only -> search
     if ("/" not in raw) and ("\\" not in raw):
-        hits = _list_files(f"**/{raw}")
+        chat_files = list(_chat_files().values())
+        hits = [h for h in chat_files if h.name == raw]
         if not hits:
             # OWUI often stores files as "<uuid>_<original_name>".
-            hits = _list_files(f"**/*_{raw}")
+            hits = [h for h in chat_files if h.name.endswith(f"_{raw}")]
         if not hits:
-            raise HTTPException(status_code=400, detail=f"File not found in uploads: {raw}")
+            raise HTTPException(status_code=400, detail=f"File not found in this chat: {raw}")
 
         # Optional deterministic disambiguation using exact paths from the current message attachments.
         if len(hits) > 1 and preferred_exact_paths:
@@ -441,6 +482,12 @@ def _resolve_path(
             resolved = p.resolve()
         else:
             resolved = (UPLOAD_ROOT / p).resolve()
+        _ensure_within_upload_root(resolved)
+        # Only an attachment or a generated file of this chat, never another upload.
+        if resolved.relative_to(UPLOAD_ROOT).as_posix() not in _chat_files():
+            # A foreign link must not reveal the name of the file behind it.
+            detail = "generated_file_link_not_found" if download_id else f"File not found in this chat: {resolved.name}"
+            raise HTTPException(status_code=400, detail=detail)
 
     _ensure_within_upload_root(resolved)
 
@@ -1253,6 +1300,8 @@ def _build_download_url(rel: str, download_name: str | None = None) -> str:
         "rel": _safe_relpath(rel),
         "exp": exp,
         "filename": _visible_filename(download_name or Path(rel).name),
+        # A follow-up file tool may read a generated file only in the chat that created it.
+        **manifest_scope_fields(_REQUEST_CHAT_SCOPE.get()),
     }
     _write_atomic(
         UPLOAD_ROOT / ".download-links" / f"{download_id}.json",

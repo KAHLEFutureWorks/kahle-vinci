@@ -3689,6 +3689,99 @@ def document_tools_needed(
     return False
 
 
+_GENERATED_FILE_DOWNLOAD = re.compile(r"/files/d/[0-9a-f]{32}/?$")
+_GENERATED_FILE_MARKDOWN_LINK = re.compile(
+    r"\[([^\]\n]+\.[A-Za-z0-9]{2,5})\]\((\S*/files/d/[0-9a-f]{32})/?\)"
+)
+
+
+def generated_file_links(messages: Any) -> list[tuple[str, str]]:
+    """(filename, download link) of files Vinci generated, oldest first.
+
+    Read from stored tool results (download_url + filename) and from markdown
+    links in answers. Generated files are no chat attachments, so the link is
+    the only exact reference a follow-up file tool can use.
+    """
+    found: list[tuple[str, str]] = []
+
+    def add(filename: Any, link: Any) -> None:
+        if not isinstance(filename, str) or not isinstance(link, str):
+            return
+        pair = (filename.strip(), link.strip())
+        if pair[0] and _GENERATED_FILE_DOWNLOAD.search(pair[1]) and pair not in found:
+            found.append(pair)
+
+    def walk(value: Any, depth: int = 0) -> None:
+        if depth > 8:
+            return
+        if isinstance(value, dict):
+            add(value.get("filename"), value.get("download_url"))
+            for item in value.values():
+                walk(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, depth + 1)
+        elif isinstance(value, str) and value.lstrip()[:1] in ("{", "["):
+            try:
+                walk(json.loads(value), depth + 1)
+            except ValueError:
+                pass
+
+    for message in messages or ():
+        if not isinstance(message, dict):
+            continue
+        walk(message.get("output"))
+        # Native function calling replays tool results as role "tool" JSON content.
+        walk(message.get("content"))
+        for label, link in _GENERATED_FILE_MARKDOWN_LINK.findall(_composition_text(message.get("content"))):
+            add(label, link)
+    return found
+
+
+def _generated_file_key(value: Any) -> str:
+    name = unicodedata.normalize("NFKD", str(value or "").replace("\\", "/").split("/")[-1]).lower()
+    return "".join(ch for ch in name if ch.isalnum() or ch == ".")
+
+
+def generated_file_link_for(value: Any, generated_files: Any) -> str | None:
+    """Download link of the latest generated file named like a bare filename."""
+    if not isinstance(value, str) or "/" in value.replace("\\", "/"):
+        return None
+    key = _generated_file_key(value)
+    if not key:
+        return None
+    for name, link in reversed(list(generated_files or ())):
+        if _generated_file_key(name) == key:
+            return link
+    return None
+
+
+def map_generated_file_params(
+    params: dict[str, Any], generated_files: Any, attached_names: Any = (),
+) -> dict[str, Any]:
+    """Point file_path(s) naming a file generated in this chat at its download link.
+
+    Generated files are no chat attachments and their bare name may match
+    generated files of other chats. An attached upload of the same name keeps
+    the existing attachment handling.
+    """
+    if not generated_files:
+        return params
+    attached = {_generated_file_key(name) for name in attached_names or () if isinstance(name, str)}
+
+    def mapped(value: Any) -> Any:
+        if isinstance(value, str) and _generated_file_key(value) in attached:
+            return value
+        return generated_file_link_for(value, generated_files) or value
+
+    updated = dict(params)
+    if "file_path" in updated:
+        updated["file_path"] = mapped(updated["file_path"])
+    if isinstance(updated.get("file_paths"), list):
+        updated["file_paths"] = [mapped(item) for item in updated["file_paths"]]
+    return updated
+
+
 _COMPOSITION_CONTEXT = re.compile(r"<context>.*?</context>", re.S)
 _CONTRACT_MARKER = "KAHLE_KNOWLEDGE_ANSWER_CONTRACT\n"
 _BLUEPRINT_MARKER = "KAHLE_KNOWLEDGE_ANSWER_BLUEPRINT\n"
