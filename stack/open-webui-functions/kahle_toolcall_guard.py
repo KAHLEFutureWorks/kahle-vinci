@@ -425,6 +425,42 @@ def _download_format(result: dict[str, Any]) -> str:
     )
 
 
+_CONVERSION_VERB_RE = re.compile(r"\b(?:wandle|wandel|umwandel|umgewandelt|konvertier)")
+_CONVERSION_TARGET_RE = re.compile(r"\b(?:in|als|nach|zu)\s+(?:eine?[nmrs]?\s+)?(markdown|md|word|docx|pdf)\b")
+_GENERATED_DOWNLOAD_RE = re.compile(
+    r"\((\S*/files/d/[0-9a-f]{32})/?\)\s*\n\s*Datei:\s*(\S+)"
+    r"|\[([^\]\n]+\.[A-Za-z0-9]{2,5})\]\((\S*/files/d/[0-9a-f]{32})/?\)"
+)
+
+
+def _generated_file_conversion(request_text: str) -> tuple[str, str] | None:
+    """(source extension, file tool) when the user converts an existing PDF."""
+    folded = unicodedata.normalize("NFKD", request_text or "").encode("ascii", "ignore").decode().casefold()
+    target = _CONVERSION_TARGET_RE.search(folded)
+    if not target or not _CONVERSION_VERB_RE.search(folded) or not re.search(r"\bpdf", folded):
+        return None
+    if target.group(1) in {"markdown", "md"}:
+        return ".pdf", "file_to_md_save"
+    if target.group(1) in {"word", "docx"}:
+        return ".pdf", "file_to_docx_save"
+    return None
+
+
+def _latest_generated_file_link(messages: list[dict[str, Any]], before_index: int, extension: str) -> str:
+    """Download link of the newest file of that type Vinci generated earlier in this chat."""
+    for message in reversed(messages[:before_index]):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        found = ""
+        for match in _GENERATED_DOWNLOAD_RE.finditer(str(message.get("content") or "")):
+            link, filename = (match.group(1), match.group(2)) if match.group(1) else (match.group(4), match.group(3))
+            if filename.lower().endswith(extension):
+                found = link
+        if found:
+            return found
+    return ""
+
+
 def _coerce_file_saved_payload(value: Any) -> dict[str, Any]:
     candidate = value
     if isinstance(candidate, str):
@@ -2215,6 +2251,21 @@ class Filter:
 
                 _write_file_response(message, source_content, output_format, request_text, messages)
                 continue
+
+            conversion = _generated_file_conversion(request_text) if index == len(messages) - 1 else None
+            if conversion and not _has_valid_download_metadata(content):
+                # Convert the file generated earlier in this chat; a new file
+                # from the previous answer is not what the user asked for.
+                source_link = _latest_generated_file_link(messages, index, conversion[0])
+                if source_link:
+                    result = _call_file_proxy_tool(conversion[1], {"file_path": source_link})
+                    _set_message_content(
+                        message,
+                        _download_format(result)
+                        if result.get("download_url")
+                        else f"Tool-Fehler: {result.get('error') or 'Datei konnte nicht konvertiert werden'}.",
+                    )
+                    continue
 
             output_format = _infer_requested_file_format(request_text)
             if index == len(messages) - 1 and _is_powerpoint_request(request_text) and not _has_download_metadata(content):

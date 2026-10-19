@@ -791,7 +791,38 @@ def _kahle_document_comparison_block_reason(tool_function_name: str, user_text: 
 def _kahle_uploaded_conversion_block_reason(tool_function_name: str, user_text: str) -> str:
     name = str(tool_function_name or '').strip().lower()
     folded = _ascii_fold(str(user_text or ''))
-    mentions_word = bool(re.search(r'\b(?:word|docx|worddatei|word-datei|worddokument)\b', folded))
+
+    # An existing PDF (attachment or one generated earlier in this chat) is
+    # converted, never generated anew from the previous answer.
+    target = re.search(r'\b(?:in|als|nach|zu)\s+(?:eine?[nmrs]?\s+)?(markdown|md|word|docx|pdf)\b', folded)
+    target_format = target.group(1) if target else ''
+    if (
+        re.search(r'\b(?:wandle|wandel|umwandel|umgewandelt|konvertier)', folded)
+        and re.search(r'\bpdf', folded)
+        and target_format in {'markdown', 'md', 'word', 'docx'}
+    ):
+        to_markdown = target_format in {'markdown', 'md'}
+        allowed = 'file_to_md_save' if to_markdown else 'file_to_docx_save'
+        regenerating = {
+            'kahle_workflow_execute',
+            'pdf_create_save',
+            'text_create_save',
+            'docx_create_save',
+            'file_to_docx_save',
+            'file_to_md_save',
+        } - {allowed}
+        if name in regenerating:
+            return (
+                'DATEIKONVERTIERUNG_TOOLCALL_BLOCKIERT: Der Nutzer moechte eine vorhandene PDF '
+                '(Anhang oder zuvor in diesem Chat erzeugte Datei) unveraendert '
+                f'{"nach Markdown" if to_markdown else "in Word/DOCX"} konvertieren. Das ausgewaehlte Tool '
+                f'{name} wurde nicht ausgefuehrt. Rufe ausschliesslich {allowed} mit dem exakten Uploadpfad '
+                'oder dem Download-Link der PDF aus diesem Chat auf. Erzeuge keine neue Datei und '
+                'fuehre keine Recherche, Zusammenfassung, Umschreibung oder inhaltliche Anreicherung aus.'
+            )
+        return ''
+
+    mentions_word =bool(re.search(r'\b(?:word|docx|worddatei|word-datei|worddokument)\b', folded))
     conversion_intent = any(
         marker in folded
         for marker in (
