@@ -871,6 +871,16 @@ def _kahle_uploaded_conversion_block_reason(tool_function_name: str, user_text: 
 
     return ''
 
+def _with_generated_pdf_hint(reason: str, generated_files: Any) -> str:
+    """Name the newest PDF generated in this chat in a PDF conversion block."""
+    if 'vorhandene PDF' not in (reason or ''):
+        return reason
+    for name, link in reversed(list(generated_files or ())):
+        if str(name).lower().endswith('.pdf'):
+            return f'{reason} Zuletzt in diesem Chat erzeugte PDF: file_path="{link}".'
+    return reason
+
+
 def _contains_token(folded: str, token: str) -> bool:
     if token == 'intern':
         return re.search(r'\bintern(e|en|es|er)?\b', folded) is not None
@@ -8041,6 +8051,24 @@ async def streaming_chat_response_handler(response, ctx):
                                     )
                                 )
                                 if document_comparison_block_reason:
+                                    if 'vorhandene PDF' in document_comparison_block_reason:
+                                        # Tell the model which file to convert: its link is the only
+                                        # exact reference to a generated PDF.
+                                        pdf_files = generated_file_links(form_data.get('messages', []) or [])
+                                        hint_chat_id = str(metadata.get('chat_id') or '')
+                                        if (
+                                            not pdf_files
+                                            and metadata.get('user_message_id')
+                                            and hint_chat_id
+                                            and not hint_chat_id.startswith(('local:', 'channel:'))
+                                        ):
+                                            pdf_files = generated_file_links(
+                                                await load_messages_from_db(hint_chat_id, metadata['user_message_id'])
+                                                or []
+                                            )
+                                        document_comparison_block_reason = _with_generated_pdf_hint(
+                                            document_comparison_block_reason, pdf_files
+                                        )
                                     tool_result = document_comparison_block_reason
                                 elif direct_tool:
                                     tool_result = await event_caller(

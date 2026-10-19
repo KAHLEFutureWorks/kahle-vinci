@@ -251,7 +251,8 @@ def test_ambiguity_lists_only_the_chats_own_files(proxy, uploads):
     conn.execute("insert into chat_file values ('cf-x', ?, ?, 'file-x', 'm2')", (USER, CHAT))
     conn.commit()
     conn.close()
-    old = time.time() - 3600
+    # well outside the recent-upload window (RECENT_UPLOAD_DISAMBIGUATION_SECONDS)
+    old = time.time() - 2 * 86400
     import os
 
     os.utime(root / second, (old, old))

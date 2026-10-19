@@ -185,3 +185,44 @@ def test_guard_keeps_creating_new_files_from_a_previous_result(guard):
 
     assert calls == []
     assert created == ["md"]
+
+
+# --- the block names the exact file to convert --------------------------------
+
+
+def load_pdf_hint():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_with_generated_pdf_hint"]
+    from typing import Any
+
+    namespace: dict = {"Any": Any}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), str(MIDDLEWARE), "exec"), namespace)
+    return namespace["_with_generated_pdf_hint"]
+
+
+def test_pdf_conversion_block_names_the_latest_generated_pdf():
+    block = load_block_reason()
+    hint = load_pdf_hint()
+    reason = block("kahle_workflow_execute", "Wandle die eben erstellte PDF in Markdown um.")
+    generated = [("alt.pdf", DOCX_LINK.replace("3244", "1111")), ("aus_deiner_antwort.pdf", PDF_LINK), ("kennwort.docx", DOCX_LINK)]
+
+    hinted = hint(reason, generated)
+
+    assert hinted.startswith(reason)
+    assert f'file_path="{PDF_LINK}"' in hinted
+    assert DOCX_LINK not in hinted
+    # Nothing to add without a generated PDF or for other block reasons.
+    assert hint(reason, [("kennwort.docx", DOCX_LINK)]) == reason
+    assert hint("", generated) == ""
+    word_reason = block("file_to_docx_save", "Bitte gib mir die Word im Anhang als Markdown aus")
+    assert hint(word_reason, generated) == word_reason
+
+
+def test_native_tool_path_adds_the_pdf_hint_to_the_block():
+    source = MIDDLEWARE.read_text(encoding="utf-8")
+    native = source[source.index("async def streaming_chat_response_handler("):]
+    native = native[native.index("document_comparison_block_reason = ("):]
+    native = native[:native.index("elif direct_tool:")]
+
+    assert "_with_generated_pdf_hint(" in native
