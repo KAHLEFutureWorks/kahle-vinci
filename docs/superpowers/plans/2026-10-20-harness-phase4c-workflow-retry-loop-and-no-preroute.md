@@ -485,6 +485,16 @@ git commit -m "eval(harness): measure all models without pre-routing"
 
 Ob Release B folgt, entscheidet der Nutzer anhand dieser Zahlen; dafür wird ein eigener Plan geschrieben.
 
+**Ergebnis (20.10., Stand `932005a`, je 114 Fälle, kein Container-Neustart, danach zurückgestellt und `printenv` leer geprüft).** Vergleich mit der 4b-Abnahme (gleicher Code, Vorabplanung an):
+
+| Modell | Routing korrekt mit → ohne | `retry_required` | blockierend | `prompt_tokens_p50` | größte Verluste ohne Vorabplanung |
+| --- | --- | --- | --- | --- | --- |
+| Mistral (`vinci-2`) | 105 → 89 | 0 → 3 | 0 → 0 | 13.298 → 13.396 | organization_contact 9 → 4, scope_location 8 → 5, followup 5 → 2, procedure 13 → 11 |
+| gpt-oss (`thinking`) | 103 → 88 | 3 → 8 | 0 → 0 | 10.435 → 10.763 | organization_contact 9 → 0, person_process 3 → 0, followup 5 → 1, abbreviation 5 → 3 |
+| `max-thinking` | 104 → 105 | 2 → 3 | 0 → 0 | 12.562 → 13.194 | responsibility 10 → 7 (`extra_source`), followup 5 → 3; dafür procedure 13 → 18 |
+
+Fast alle Verluste sind `missing_source`: Mistral und gpt-oss rufen ohne Vorabplanung das nötige Wissenstool oft nicht auf. Die Antwortprüfung verhindert weiterhin ausgelieferte Verstöße. Für Mistral und gpt-oss ist Release B damit nicht vertretbar; `max-thinking` hält das Niveau ohne Vorabplanung.
+
 ### Task 6: Verify und Abnahme
 
 - [ ] **Step 1: Full Verify**
