@@ -520,6 +520,12 @@ git commit -m "eval(harness): phase 4c acceptance"
 git push origin feat/harness-eval-foundation
 ```
 
+### Ergebnis und Abnahme (20.10.)
+
+Full Verify `EXIT=0`. Task 4 entfiel nach Prüfregel (Nutzerentscheidung 20.10.); damit gibt es keine Laufzeitänderung, und die Kriterien zu Task 4 entfallen. Die Datei-Gespräche liefern 15/15 PDFs und 14/15 Markdown-Dateien bei höchstens einem blockierten Aufruf. Die Messung ohne Vorabplanung liegt vollständig vor (drei Modelle, 0 Neustarts). Abgenommen.
+
+Offen für spätere Entscheidungen: Release B nur für `max-thinking` (eigener Plan); bei gpt-oss in Runde 3 einmal keine Markdown-Datei; `max-thinking` versucht in 3 von 5 Gesprächen zuerst einmal das falsche Tool (4–20 s).
+
 ## Nicht Teil dieses Plans (eigene Pläne)
 
 - **Modellprofile** (gezielte Zusatzpflichten je Basismodell): Es gibt dafür noch keinen Mechanismus; Entwurf erst, wenn Task 4 oder 5 einen modellspezifischen Bedarf belegt.
