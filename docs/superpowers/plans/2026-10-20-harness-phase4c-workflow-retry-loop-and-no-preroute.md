@@ -323,6 +323,18 @@ git add docs/superpowers/plans/2026-10-20-harness-phase4c-workflow-retry-loop-an
 git commit -m "eval(harness): phase 4c file conversation baseline"
 ```
 
+**Ergebnis (20.10., `0e22e2c`, 5 Gespräche je Modell, kein Container-Neustart, 0 Fehler):**
+
+| Modell | Runde 2 PDF zugestellt | Runde 3 Markdown zugestellt | Runde 3 blockiert: Median / Maximum / Gespräche mit Blockierung | Runde 3 Dauer Median |
+| --- | --- | --- | --- | --- |
+| Mistral (`vinci-2`) | 5/5 | 5/5 | 0 / 0 / 0 | 3,1 s |
+| gpt-oss (`thinking`) | 5/5 | 4/5 | 0 / 1 / 1 | 6,1 s |
+| `max-thinking` | 5/5 | 5/5 | 1 / 1 / 3 | 12,2 s (mit Blockierung 12–30 s) |
+
+Ein erster Lauf (`9939f22`) zählte jede Datei als nicht zugestellt, weil der Guard den Namen in einer eigenen Zeile `Datei: <name>` nach `[Datei herunterladen](link)` ausgibt; behoben in `0e22e2c`, Blockierungen dort gleich (Maximum 1). gpt-oss ruft in Runde 3 meist kein Tool auf; dann wandelt der Guard die PDF selbst um (3 von 4 zugestellt).
+
+**Folgerung:** Die Schleife mit 3–13 Blockierungen vom 19.10. tritt nicht mehr auf (behoben durch `e010432`/`8cd953c`). `turn3_blocked_max` ist bei keinem Modell ≥ 2; Task 4 entfällt nach Prüfregel.
+
 - [ ] **Step 4: Entscheidungspunkt.** Task 4 wird nur umgesetzt, wenn bei mindestens einem Modell `turn3_blocked_max` ≥ 2 ist. Dem Nutzer werden dann die zwei Varianten aus Task 4 mit den gemessenen Zahlen vorgelegt; umgesetzt wird nur die gewählte.
 
 ### Task 4: Höchstens eine Blockierung je Antwort (eine Variante nach Nutzerentscheidung)
