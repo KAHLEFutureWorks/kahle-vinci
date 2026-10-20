@@ -26,6 +26,16 @@ def test_score_turn_counts_blocked_calls_and_finds_the_requested_file():
     }
 
 
+def test_score_turn_accepts_the_guard_download_answer():
+    # Live shape 20.10.: the name follows the link on its own line.
+    guard = "PDF-Datei: [Datei herunterladen](http://localhost:8091/files/d/0a1b)\nDatei: ergebnis.pdf\nSHA256: 12ab"
+    no_link = "Datei: ergebnis.pdf"
+
+    assert score_turn(_message(content=guard), expected_extension=".pdf", wall_ms=1)["file_delivered"] is True
+    assert score_turn(_message(content=guard), expected_extension=".md", wall_ms=1)["file_delivered"] is False
+    assert score_turn(_message(content=no_link), expected_extension=".pdf", wall_ms=1)["file_delivered"] is False
+
+
 def test_score_turn_without_link_or_with_wrong_type_is_not_delivered():
     no_link = score_turn(_message(content="Erledigt."), expected_extension=".md", wall_ms=1)
     wrong = score_turn(

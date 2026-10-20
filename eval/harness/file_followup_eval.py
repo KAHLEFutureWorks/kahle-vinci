@@ -32,16 +32,18 @@ BLOCK_MARKER = "DATEIKONVERTIERUNG_TOOLCALL_BLOCKIERT"
 _FILE_LINK = re.compile(
     r"\[([^\]]+)\]\((?:https?://[^)\s]+)?/files/(?:d/[A-Za-z0-9_-]+|download\?token=[^)\s]+)\)"
 )
+_FILE_NAME_LINE = re.compile(r"(?im)^\s*Datei:\s*(\S+)\s*$")
 
 
 def score_turn(message: dict[str, Any], *, expected_extension: str, wall_ms: int) -> dict[str, Any]:
     output = [item for item in message.get("output") or () if isinstance(item, dict)]
     calls = [str(item.get("name") or "") for item in output if item.get("type") == "function_call"]
     results = [str(item.get("output") or "") for item in output if item.get("type") == "function_call_output"]
-    delivered = any(
-        name.strip().lower().endswith(expected_extension)
-        for name in _FILE_LINK.findall(answer_text(message))
-    )
+    text = answer_text(message)
+    links = _FILE_LINK.findall(text)
+    # The guard writes "[Datei herunterladen](link)" and the name on a "Datei:" line.
+    names = [*links, *_FILE_NAME_LINE.findall(text)] if links else []
+    delivered = any(name.strip().lower().endswith(expected_extension) for name in names)
     return {
         "tools": sorted(set(calls)),
         "tool_calls": len(calls),
