@@ -8,10 +8,25 @@ OPENWEBUI_API_KEY (JWT session token).
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
 import re
+import sys
+import time
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from harness_eval import answer_text, nearest_rank
+from runtime_harness_eval import HarnessRuntimeClient, model_tool_ids
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rag"))
+from run_runtime_eval import ConversationState  # noqa: E402
+
+QUESTION = "Wer ist für die Garantieabwicklung zuständig?"
+TURN2 = "Erstelle mir aus dem Ergebnis eine PDF"
+TURN3 = "Wandle die eben erstellte PDF in eine Markdown-Datei um"
 
 BLOCK_MARKER = "DATEIKONVERTIERUNG_TOOLCALL_BLOCKIERT"
 _FILE_LINK = re.compile(
@@ -54,3 +69,77 @@ def summarize_runs(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "errors": len(items) - len(ok),
         }
     return summary
+
+
+def _follow_up(client, chat_id: str, parent_id: str, messages: list[dict[str, str]], tool_ids: list[str]) -> dict:
+    """Continue the stored chat; the workflow tool reads the previous result from it."""
+    user_id, assistant_id = str(uuid4()), str(uuid4())
+    body = {
+        "model": client.model, "id": assistant_id, "parent_id": parent_id, "chat_id": chat_id,
+        "session_id": str(uuid4()),
+        "user_message": {"id": user_id, "parentId": parent_id, "childrenIds": [assistant_id],
+                         "role": "user", "content": messages[-1]["content"], "timestamp": int(time.time())},
+        "messages": messages, "tool_ids": list(tool_ids), "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    message, _ = client._start_and_wait(body, assistant_id, ConversationState(chat_id, parent_id))
+    return message
+
+
+def run_conversation(client, tool_ids: list[str]) -> list[dict[str, Any]]:
+    rows = []
+    first, chat_id = client.ask_messages([{"role": "user", "content": QUESTION}], tool_ids)
+    history = [{"role": "user", "content": QUESTION}, {"role": "assistant", "content": answer_text(first)}]
+    try:
+        parent = first["id"]
+        for turn, prompt, extension in ((2, TURN2, ".pdf"), (3, TURN3, ".md")):
+            history.append({"role": "user", "content": prompt})
+            started = time.monotonic()
+            message = _follow_up(client, chat_id, parent, history, tool_ids)
+            wall_ms = round((time.monotonic() - started) * 1000)
+            rows.append({"model": client.model, "turn": turn,
+                         **score_turn(message, expected_extension=extension, wall_ms=wall_ms)})
+            history.append({"role": "assistant", "content": answer_text(message)})
+            parent = message["id"]
+    finally:
+        try:
+            client.delete_chat(chat_id)
+        except Exception:
+            pass
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", default="http://localhost:3004")
+    parser.add_argument("--models", default="kahle-vinci-thinking,vinci-2-clone-clone-clone,kahle-vinci-max-thinking")
+    parser.add_argument("--repeat", type=int, default=5)
+    parser.add_argument("--output-dir", type=Path, default=Path("eval/harness/results"))
+    parser.add_argument("--api-key-env", default="OPENWEBUI_API_KEY")
+    parser.add_argument("--timeout", type=int, default=300)
+    args = parser.parse_args(argv)
+    api_key = os.environ.get(args.api_key_env)
+    if not api_key:
+        raise SystemExit(f"{args.api_key_env} fehlt")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    rows: list[dict[str, Any]] = []
+    for model in [item.strip() for item in args.models.split(",") if item.strip()]:
+        client = HarnessRuntimeClient(args.base_url, api_key, model, args.timeout, 1.0)
+        tool_ids = model_tool_ids(client.model_info())
+        for _ in range(args.repeat):
+            try:
+                rows.extend(run_conversation(client, tool_ids))
+            except Exception as error:  # one failed conversation must not stop the matrix
+                rows.append({"model": model, "turn": 3, "error": type(error).__name__})
+    (args.output_dir / f"file-followup-{stamp}.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+    summary = summarize_runs(rows)
+    (args.output_dir / f"file-followup-{stamp}.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

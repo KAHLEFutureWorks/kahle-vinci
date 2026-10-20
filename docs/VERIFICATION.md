@@ -232,6 +232,14 @@ Die Ergebnisse enthalten keine Fragen, Antworttexte oder Personendaten.
 Zusammenfassungen (`*.json`) dürfen eingecheckt werden, Rohzeilen (`*.jsonl`)
 nicht.
 
+Das dreistufige Datei-Gespräch (Wissensantwort → PDF aus dem Ergebnis →
+erzeugte PDF in Markdown) misst je Modell blockierte Toolaufrufe, Zustellung
+und Dauer; die Ergebnisse enthalten keine Fragen oder Antworttexte:
+
+```powershell
+python eval\harness\file_followup_eval.py --repeat 5 --output-dir tmp\file-followup
+```
+
 API-Schlüssel werden über die dafür dokumentierten Umgebungsvariablen
 bereitgestellt. Der File-Proxy-Smoke liest seinen Schlüssel interaktiv ein,
 weil das bestehende Skript nur `--api-key` unterstützt. Specialized-Befehle
