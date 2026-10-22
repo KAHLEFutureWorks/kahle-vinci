@@ -65,6 +65,13 @@ def test_document_removal_notifies_every_user_who_could_read_it():
         assert notifications[0]["document_title"] == "Serviceleitfaden"
         assert notifications[0]["status"] == "removed"
         assert "nicht mehr abrufbar" in notifications[0]["message"]
+        # User decision 22.10.: removing a single document is routine; readers
+        # see it under "Mitteilungen" in the portal but get no e-mail.
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            mails = db.execute(
+                "SELECT COUNT(*) FROM notification_outbox WHERE kind='access_removed'"
+            ).fetchone()[0]
+        assert mails == 0
 
 
 def test_legal_hold_suspends_automatic_physical_deletion(tmp_path: Path):
@@ -390,3 +397,52 @@ def test_physical_deletion_removes_notifications_and_derived_rows():
             assert count("document_change_requests", "document_id", case.document_id) == 0
             assert count("canonical_documents", "document_id", case.document_id) == 0
             assert count("deletion_audit", "document_id", case.document_id) == 1
+
+
+def test_approved_removal_request_informs_readers_in_the_portal_only():
+    """User decision 22.10.: an approved removal request sends no e-mail to readers."""
+    from fastapi.testclient import TestClient
+    from test_portal_api import identity, load_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        module = load_app(Path(directory))
+        module._trigger_hybrid_document_sync = lambda _document_id: {"ok": True}
+        current = {"user": identity("portal", "admin")}
+        module.app.dependency_overrides[module.require_openwebui_user] = lambda: current["user"]
+        client = TestClient(module.app)
+        assert client.get("/portal/session").status_code == 200
+        module.PORTAL_GOVERNANCE.sync_identity(user_id="reader", email="reader@kahle.de", display_name="Leserin")
+        kb = module.PORTAL_GOVERNANCE.request_knowledgebase_change(
+            "portal", "create", payload={"slug": "service", "label": "Service"},
+        )
+        module.PORTAL_GOVERNANCE.grant_access("portal", "reader", kb.knowledgebase_id, can_read=True, can_upload=True)
+        case = module.DOCUMENT_LIFECYCLE.submit(
+            uploaded_by_user_id="reader", owner_user_id="reader",
+            target_knowledgebase_id=kb.knowledgebase_id, title="Preisliste",
+            original_filename="preise.md", original_file_id="preise",
+            original_sha256="7" * 64, valid_workdays=30, confidentiality="internal",
+        )
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            db.execute("UPDATE document_versions SET status='active' WHERE version_id=?", (case.version_id,))
+            db.execute("UPDATE canonical_documents SET active_version_id=? WHERE document_id=?",
+                       (case.version_id, case.document_id))
+            db.execute("UPDATE document_publications SET status='active' WHERE document_id=?", (case.document_id,))
+
+        current["user"] = identity("reader")
+        assert client.get("/portal/session").status_code == 200
+        requested = client.post("/portal/removal-requests", json={
+            "document_id": case.document_id, "kind": "delete", "reason": "Veraltet",
+        })
+        assert requested.status_code == 201, requested.text
+        request_id = module.MAINTENANCE.list_removals()["requests"][0]["request_id"]
+
+        current["user"] = identity("portal", "admin")
+        decided = client.post(f"/portal/admin/removal-requests/{request_id}/decision",
+                              json={"approve": True, "reason": "Entfernung bestätigt"})
+        assert decided.status_code == 200, decided.text
+
+        current["user"] = identity("reader")
+        notifications = client.get("/portal/notifications").json()["notifications"]
+        assert any(item["status"] == "removed" for item in notifications)
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            assert db.execute("SELECT COUNT(*) FROM notification_outbox WHERE kind='access_removed'").fetchone()[0] == 0

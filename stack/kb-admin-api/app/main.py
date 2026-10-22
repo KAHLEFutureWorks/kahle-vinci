@@ -2858,6 +2858,7 @@ def _knowledgebase_access_snapshot(knowledgebase_id: str) -> tuple[str, list[dic
 def _notify_access_removed(
     recipients: list[dict[str, str]], *, subject_type: str, subject_id: str,
     subject_title: str, status: str, message: str, reason: str,
+    send_email: bool = True,
 ) -> None:
     stamp = datetime.now().astimezone().isoformat()
     clean_reason = reason.strip()
@@ -2875,6 +2876,8 @@ def _notify_access_removed(
                  status, message, clean_reason, stamp),
             )
             queued_emails.append((recipient["email"], notification_id))
+    if not send_email:
+        return
     body = f"{message}\n"
     if clean_reason:
         body += f"Begründung: {clean_reason}\n"
@@ -3417,6 +3420,8 @@ def portal_request_removal(
             subject_title=title, status="removed",
             message="Das Dokument wurde aus Vinci entfernt und ist nicht mehr abrufbar.",
             reason=payload.reason,
+            # User decision 22.10.: a single removal is routine, portal only.
+            send_email=False,
         )
     return {"request_id": request_id}
 
@@ -3583,6 +3588,7 @@ def portal_admin_decide_removal(
                 subject_title=title, status="removed",
                 message="Das Dokument wurde aus Vinci entfernt und ist nicht mehr abrufbar.",
                 reason=payload.reason,
+                send_email=False,
             )
     return {"ok": True}
 

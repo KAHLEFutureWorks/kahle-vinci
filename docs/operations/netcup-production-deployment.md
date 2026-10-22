@@ -157,7 +157,10 @@ Before inviting further employees, record the following checks in `docs/WISSENSP
 - Read isolation between two Knowledgebases and protected original links.
 - Clean area upload, KAHLE-Allgemein approval, duplicate/version case and critical two-stage case.
 - Concurrent approvals and background publication queue.
-- Removal from Vinci after trashing and notification of affected readers.
+- Removal from Vinci after trashing and notification of affected readers in the
+  portal ("Mitteilungen"). Removing a single document sends no e-mail; only
+  archiving or deleting a whole knowledge base also e-mails its readers
+  (user decision 2026-10-22).
 - Full 21-question runtime evaluation including negative, follow-up, multi-source and conflict questions.
 - Desktop and mobile UX timing with employees and managers.
 - Encrypted backup, external copy and documented restore verification.

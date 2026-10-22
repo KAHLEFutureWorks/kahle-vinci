@@ -544,6 +544,12 @@ def test_deleted_knowledgebase_notifies_all_users_who_had_read_access():
         assert notifications[0]["document_title"] == "Altes Wissen"
         assert notifications[0]["status"] == "knowledgebase_delete"
         assert "nicht mehr abrufbar" in notifications[0]["message"]
+        # User decision 22.10.: a whole knowledge base still informs its readers by e-mail.
+        with module.PORTAL_GOVERNANCE.store.connect() as db:
+            recipients = {row[0] for row in db.execute(
+                "SELECT recipient FROM notification_outbox WHERE kind='access_removed'"
+            )}
+        assert "reader@kahle.de" in recipients
 
 
 def test_reviewer_can_ask_involved_people_and_question_is_sent_in_app_and_by_mail():
