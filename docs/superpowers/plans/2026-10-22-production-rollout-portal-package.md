@@ -158,6 +158,10 @@ cd deploy && tar -czf <name>.tar.gz <name> && sha256sum <name>.tar.gz
 
 Die Prüfsumme im README des Rollout-Eintrags (Task 5) notieren.
 
+**Ergebnis Task 2–3 (22.10.):** Paket `wissen-portal-oktober-20261022.tar.gz`, SHA-256 `3fb05ca3ef7f1497172080dd39b6faf57c8c46432c1c2ee94049fd2f92dcf9c9`, Stand `372fd9d`, 17 Dateien, Inhalte unter `./` wie im August-Archiv. Full Verify 13/13 (Portal-Backend 220, Stack 1.581, UI 20 Tests). Lokaler Neubau der vier Dienste mit `--no-deps` (ohne `--no-deps` zog Compose `document-worker` mit, dessen Build an einem Debian-Spiegel mit 503 scheiterte); alle 5 Code-Nachweise und die Schemaprüfung aus `install.sh` bestehen gegen die lokalen Container.
+
+Abweichung von Step 1: Die Dateien wurden mit `git show HEAD:<pfad>` aus Git geschrieben statt aus dem Arbeitsverzeichnis kopiert. Das Windows-Arbeitsverzeichnis hat `core.autocrlf=true` und damit CRLF; das ausgelieferte August-Archiv enthielt LF. `install.sh` und README haben ebenfalls LF (geprüft: 0 CR im Archiv).
+
 ### Task 4: Übergabe an den Nutzer
 
 - [ ] **Step 1:** Dem Nutzer Paketname, SHA-256, Commit-Bereich, Dienstliste, die Befehle für den Serverlauf und die manuelle Abnahme vorlegen. Serverlauf (vom Nutzer, auf `vinci-prod-01`):
