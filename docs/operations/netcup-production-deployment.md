@@ -207,6 +207,67 @@ and rolls back automatically on any failure.
 - Result: rollout succeeded, all four services came up, code and schema
   verification passed.
 
+### 2026-09-18 — Abbreviation routing (reconstructed)
+
+Recorded on 2026-10-22 from the local packages and the server state; the
+rollout itself was not documented at the time.
+
+- Packages: `wissen-rag-abkuerzungen-server-exact-20260918.tar.gz`
+  (SHA-256 `2e04b62fc6553cbb6d321057d8ae12a2120e1c04008d118b4b8f8dc8bfb51ba6`)
+  and the follow-up `wissen-rag-abkuerzungen-bundle-fix-20260918.tar.gz`
+  (SHA-256 `a35036a9fb29272900ab3f6e1090b8c5048370b7b4807c726a8d16f7e45433a0`).
+- Contents: abbreviations (`DA`, `Perso`, `WAL`, `WED`, `NEU`, `WUN`) in the
+  retrieval tools, harness and middleware; the fix re-embedded
+  `functional_contact_contract.py` into the generated tool bundles.
+- These installers note that the production files are not a Git checkout and
+  accept only previously read SHA-256 values of the server files.
+
+### 2026-09-24 — Evidence-guided responses (reconstructed)
+
+Recorded on 2026-10-22; the server files `stack/kb-admin-api/app/main.py` and
+`admin-dashboard/components/KnowledgePortal.tsx` matched this package exactly.
+
+- Package: `vinci-evidence-guided-responses-ddf1643-20260924-v3.tar.gz`
+  (SHA-256 `1451a16be8d35dcf5dcfee6d450c80915cffa158d1f80334d9923a61de949b01`),
+  release `ddf1643`.
+- Contents: model-led RAG and harness answers, registration of `rag_chat`, the
+  tool-call guard and the three Vinci models including system prompts,
+  synchronised tool bundles, and the "RAG-Markdown ansehen" view in the
+  knowledge portal.
+- Consequence: Open WebUI middleware, harness, guard, tools and system prompts
+  are live since this rollout, with the production values of
+  `KAHLE_KNOWLEDGE_ROUTING_MODE` and `KAHLE_ANSWER_ENFORCEMENT` from
+  `stack/.env.production`.
+
+### 2026-10-22 — Knowledge portal, October state (package 1 of 2)
+
+- Package: `wissen-portal-oktober-20261022.tar.gz`
+- SHA-256: `ea0a945f9f7636df2fe95b51b2f83e662c8ff49c4d0940d94260473613981eac`
+- Commits: `66db7ba..372fd9d`, limited to `stack/kb-admin-api` and
+  `admin-dashboard` (17 files).
+- Rebuilt services: `kb-admin-api`, `kb-maintenance`, `kb-upload-worker`,
+  `kb-admin-dashboard`. Open WebUI, overrides, guard, tools, prompts,
+  `owui-file-proxy`, `kb-sync`, Qdrant, n8n and the document worker were
+  untouched.
+- Contents: detection of customer data at upload with mandatory uploader
+  confirmation (categories only, never values), cleanup of case notifications
+  and derived rows on permanent deletion, retrieval metadata.
+- Schema: tables `document_retrieval_metadata`, `document_evidence_relations`
+  and their columns, created by `kb-admin-api` on startup; additive.
+- Installer: verifies every package file against `SHA256SUMS` and every target
+  file against the accepted server states in `BASELINE.sha256`; `--check` mode
+  without changes. The first `--check` found six deviations from the 2026-08-21
+  state, all explained (2026-09-24 rollout, CRLF copies from packages built in
+  a Windows working tree, one outdated test file) and accepted explicitly.
+- Result: installed on 2026-10-22, backup
+  `/opt/kahle-vinci/.rollout-backups/wissen-portal-oktober-before-20261022T143923Z`;
+  containers healthy/running, new code and schema verified, HTTPS `/healthz`
+  200 and `/wissen/` 401. Manual acceptance: customer-data upload, standard
+  upload, move to trash with retention, and a `rag_chat` knowledge question
+  passed. The purge after the retention period was not observed live yet.
+- Lesson: build packages from Git blobs (`git show`), not from the Windows
+  working tree, which converts files without an `eol=lf` rule to CRLF.
+
 ## References
 
 - Open WebUI requires `WEBUI_URL` before OAuth/SSO use and documents Microsoft OAuth variables in its environment configuration.
