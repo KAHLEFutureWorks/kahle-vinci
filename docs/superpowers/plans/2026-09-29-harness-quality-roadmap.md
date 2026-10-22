@@ -51,6 +51,8 @@ ausgearbeitet, weil die späteren Pläne auf ihrer Baseline aufbauen.
 | 3 | Keine Vorab-Ausführung in `model_led`, eine Vertragsnachricht, schärfere Tool-Beschreibungen, Geltungsbereichs-Metadaten, danach Release B | `model_led` ≥ Baseline je Modell; keine Personio-/Supervisor-Regression | Full + Runtime-Eval + UI-Abnahme |
 | 4 | Evidenz nur einmal, Vertrag als Pflichtenliste, Modellprofile, modularer Prompt, strukturierte Ausgabe prüfen; dazu R2 (eine Vertragsnachricht), Quellenvermischung (KAHLE-Vinci) und vergessene Zitate (gpt-oss) | Weniger Tokens pro interner Antwort bei gleicher oder besserer Eval-Metrik; danach Messung ohne Vorabplanung als Voraussetzung für Release B | Full + Runtime-Eval |
 
+**Stand 22.10.:** Phase 4 ist in 4a, 4b und 4c abgenommen (Pläne `2026-10-09-…-phase4a-…`, `2026-10-13-…-phase4b-…`, `2026-10-20-…-phase4c-…`). Die Messung ohne Vorabplanung ergab Mistral 105 → 89 und gpt-oss 103 → 88 korrekt, `max-thinking` 104 → 105. **Release B ruht** (Nutzerentscheidung 22.10.): Die Vorabplanung bleibt für alle Modelle aktiv. Neu bewertet wird erst bei einem Modellwechsel oder anderen Messwerten.
+
 ## Arbeitsregeln für alle Phasen
 
 - Jede Verhaltensänderung beginnt mit einem fehlschlagenden Test (Red),
