@@ -52,6 +52,8 @@ git diff --stat 66db7ba..HEAD -- stack/kb-sync
   - Ändert der neue Portal-Code das Format von `rag.md` oder liest der neue kb-sync-Stand Daten, die erst der neue Portal-Code schreibt (oder umgekehrt) → **kb-sync kommt in Paket 1**: alle seit `66db7ba` geänderten Dateien unter `stack/kb-sync/` aufnehmen, `kb-sync` in `SERVICES` ergänzen; zusätzlich prüfen, dass der neue kb-sync keine Open-WebUI- oder Harness-Dateien voraussetzt (`grep -rn "open_webui\|kahle_knowledge_harness" stack/kb-sync/app`), sonst Abbruch und Rücksprache.
   - Sonst bleibt kb-sync in Paket 2.
 
+**Ergebnis (22.10.): kb-sync bleibt in Paket 2.** Der Portal-Code ändert `rag.md` nicht (`rag_metadata.py` seit `66db7ba` unverändert; die neue Metadaten-Auffrischung schreibt nur in die Datenbank, Docstring „without changing rag.md“). Der alte kb-sync liest `document_retrieval_metadata` nicht; der neue kb-sync prüft die Tabelle per `sqlite_master` und fällt ohne sie auf Standardwerte zurück. Keine Richtung setzt die andere voraus.
+
 - [ ] **Step 4: Commit**
 
 ```bash
