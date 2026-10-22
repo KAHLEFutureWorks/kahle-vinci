@@ -162,6 +162,8 @@ Die Prüfsumme im README des Rollout-Eintrags (Task 5) notieren.
 
 Abweichung von Step 1: Die Dateien wurden mit `git show HEAD:<pfad>` aus Git geschrieben statt aus dem Arbeitsverzeichnis kopiert. Das Windows-Arbeitsverzeichnis hat `core.autocrlf=true` und damit CRLF; das ausgelieferte August-Archiv enthielt LF. `install.sh` und README haben ebenfalls LF (geprüft: 0 CR im Archiv).
 
+**Nachbesserung nach dem vereinbarten Release-Ablauf (22.10.):** Installer neu geschrieben: prüft jede Paketdatei gegen `SHA256SUMS`, jede Zieldatei gegen `BASELINE.sha256` (Stand `66db7ba`, neue Dateien müssen fehlen) und bricht bei Abweichung vor jeder Änderung ab; Modus `--check` nur prüfend; nach dem Umschalten HTTPS (`/healthz` = 200, `/wissen/` = 401). Läuft als root (Aufruf mit `sudo`). Lokal mit Docker-, curl- und python3-Stubs gegen simulierte Serverbäume geprüft: Ausgangsstand → `--check` ok; abweichende Datei → Abbruch ohne Änderung; Build-Fehler → Dateien zurück, neue Dateien entfernt; manipulierte Paketdatei → Abbruch; vollständiger Lauf → „ROLLOUT ERFOLGREICH“; erneutes `--check` auf neuem Stand → ok. Simulierte Serverbäume aus `git show` (unter Windows hängt `git archive` an Dateien ohne `eol=lf`-Regel CRLF an). Endgültiges Archiv entpackt und geprüft: `bash -n` ok, `SHA256SUMS` ok, 0 CR. **SHA-256 `232fb0eb6a3f234d56049c5156d66069cd50e31ffef5243aca7c68678486ab7b`** (ersetzt den früheren Wert).
+
 ### Task 4: Übergabe an den Nutzer
 
 - [ ] **Step 1:** Dem Nutzer Paketname, SHA-256, Commit-Bereich, Dienstliste, die Befehle für den Serverlauf und die manuelle Abnahme vorlegen. Serverlauf (vom Nutzer, auf `vinci-prod-01`):
