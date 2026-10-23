@@ -94,6 +94,29 @@ _MODEL_FALLBACK_IDS = tuple(
 )
 
 
+def _kahle_auth_diagnostic(headers, key, payload_text, metadata, url_idx) -> dict:
+    """Temporary (2026-10-23): shape of a rejected upstream call, never the key itself."""
+    authorization = str((headers or {}).get('Authorization') or '')
+    try:
+        body = json.loads(payload_text)
+    except (TypeError, ValueError):
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    return {
+        'auth_header': bool(authorization),
+        'auth_is_configured_key': bool(key) and authorization == f'Bearer {key}',
+        'key_is_env_key': bool(key) and key == os.getenv('OPENAI_API_KEY'),
+        'key_len': len(key or ''),
+        'header_names': sorted(str(name) for name in (headers or {})),
+        'task': (metadata or {}).get('task'),
+        'messages': len(body['messages']) if isinstance(body.get('messages'), list) else None,
+        'tools': len(body['tools']) if isinstance(body.get('tools'), list) else None,
+        'stream': body.get('stream'),
+        'payload_chars': len(payload_text or ''),
+        'url_idx': url_idx,
+    }
+
+
 def _clean_proxy_headers(raw_headers) -> dict:
     """Return a copy of *raw_headers* with stale encoding headers removed."""
     return {k: v for k, v in raw_headers.items() if k not in _STRIP_PROXY_HEADERS}
@@ -1413,6 +1436,15 @@ async def generate_chat_completion(
             ssl=AIOHTTP_CLIENT_SESSION_SSL,
             timeout=get_client_timeout(stream=is_streaming_request),
         )
+
+        if r.status in (401, 403):
+            # Temporary diagnostic for sporadic IONOS 401 in production (2026-10-23).
+            log.warning(
+                'KAHLE_AUTH_DIAG status=%s model=%s request_id=%s %s',
+                r.status, requested_model,
+                r.headers.get('x-request-id') or r.headers.get('X-Request-Id') or '-',
+                json.dumps(_kahle_auth_diagnostic(headers, key, payload, metadata, idx)),
+            )
 
         # Check if response is SSE
         if 'text/event-stream' in r.headers.get('Content-Type', ''):
