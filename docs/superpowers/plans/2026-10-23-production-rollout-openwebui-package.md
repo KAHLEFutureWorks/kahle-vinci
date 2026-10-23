@@ -38,6 +38,16 @@
 - [ ] **Step 3:** Vergleich mit der 4b-Abnahme (`enforce`). Abnahme: Routing je Modell höchstens 2 Fälle unter 4b; ausgelieferte Verstöße werden bei `observe` nicht verhindert, deshalb werden `attempt_blocking_violations` je Modell berichtet und dem Nutzer vorgelegt.
 - [ ] **Step 4:** Lokal zurück auf `enforce` (Variable entfernen, Open WebUI neu erstellen, `printenv` prüfen).
 
+**Ergebnis (23.10., Stand `1280d0a`, je 114 Fälle, kein Neustart; danach lokal zurück auf `enforce`, geprüft):**
+
+| Modell | Routing korrekt `enforce` (4b) → `observe` | technische Fehler | ausgelieferte blockierende Verstöße `enforce` → `observe` | Codes bei `observe` |
+| --- | --- | --- | --- | --- |
+| Mistral (`vinci-2`) | 105 → 103 | 0 → 2 | 0 → 13 | `citation_missing` 12, `unbound_contact_literal` 1 |
+| gpt-oss (`thinking`) | 103 → 101 | 0 → 3 | 0 → 6 | `citation_missing` 5, `required_scope_missing` 1 |
+| `max-thinking` | 104 → 104 | 0 → 0 | 0 → 6 | `unknown_source_id` 4, `required_scope_missing` 1, `unconfirmed_person_name` 1 |
+
+Routing hält das Kriterium (höchstens 2 unter 4b). Mit `observe` werden die erkannten Verstöße aber ausgeliefert, vor allem fehlende Quellenangaben; mit `enforce` waren es 0. Dem Nutzer zur Entscheidung vorgelegt.
+
 ### Task 2: Paket bauen
 
 - [ ] **Step 1:** Build-Skript nach dem Muster von Paket 1: Dateien per `git show HEAD:<pfad>` (LF), `SHA256SUMS`, `BASELINE.sha256` aus der Inventur (exakte Serverprüfsumme je Datei, `ABSENT` für neue Dateien).
