@@ -22,7 +22,9 @@ services:
       # Lokal wird der produktiv aktive Antwortpfad ausdrücklich festgehalten.
       KAHLE_KNOWLEDGE_HARNESS_MODE: "active"
       KAHLE_KNOWLEDGE_ROUTING_MODE: "model_led"
-      KAHLE_ANSWER_ENFORCEMENT: "enforce"
+      # Default enforce; KAHLE_LOCAL_ANSWER_ENFORCEMENT=observe measures the
+      # production setting (decision 2026-10-23: production stays on observe).
+      KAHLE_ANSWER_ENFORCEMENT: ${KAHLE_LOCAL_ANSWER_ENFORCEMENT:-enforce}
       KAHLE_MODEL_LED_PREROUTE_OFF_MODELS: ${KAHLE_MODEL_LED_PREROUTE_OFF_MODELS:-}
     # Code may come from an isolated worktree while KAHLE_ROOT keeps the data.
     volumes:

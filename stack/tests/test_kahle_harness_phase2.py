@@ -331,4 +331,5 @@ def test_compose_defaults_to_observe_and_local_edge_enforces():
     local = (ROOT / "docker-compose.local-edge.yml").read_text(encoding="utf-8")
 
     assert "KAHLE_ANSWER_ENFORCEMENT: ${KAHLE_ANSWER_ENFORCEMENT:-observe}" in base
-    assert 'KAHLE_ANSWER_ENFORCEMENT: "enforce"' in local
+    # Local stays enforce by default; observe only for an explicit measurement run.
+    assert "KAHLE_ANSWER_ENFORCEMENT: ${KAHLE_LOCAL_ANSWER_ENFORCEMENT:-enforce}" in local
