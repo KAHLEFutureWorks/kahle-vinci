@@ -48,6 +48,10 @@
 
 Routing hält das Kriterium (höchstens 2 unter 4b). Mit `observe` werden die erkannten Verstöße aber ausgeliefert, vor allem fehlende Quellenangaben; mit `enforce` waren es 0. Dem Nutzer zur Entscheidung vorgelegt.
 
+**Nutzerentscheidung 23.10. (revidiert nach Messung): Produktion wird `enforce`.** Der Nutzer trägt `KAHLE_ANSWER_ENFORCEMENT=enforce` vor der Installation in `stack/.env.production` ein; das Paket verändert die Datei nicht, `--check` bricht ohne die Zeile ab, Schritt 10 prüft den wirksamen Wert im Container.
+
+**Paket gebaut (23.10.):** `vinci-openwebui-oktober-20261023.tar.gz`, SHA-256 `4a57f1803e3f53db634d4f95fbb46819cfc2fda0b2a18a1764cf915078807d88`, 23 Dateien (4 neu), Stand `1280d0a`, Full Verify 13/13. Alle 19 vorhandenen Zieldateien aus der Inventur exakt nachgebaut (= BASELINE). Simulation: `--check` ok; abweichende Datei und fehlende `enforce`-Zeile brechen ohne Änderung ab; Registrierungsfehler setzt Dateien, Tabellen und Dienste zurück; vollständiger Lauf erfolgreich; erneutes `--check` ok. Tabellen-Sicherung und -Wiederherstellung an einer Kopie der lokalen `webui.db` byte-genau. Archiv entpackt: `bash -n` ok, `SHA256SUMS` ok, 0 von 27 Dateien mit CR.
+
 ### Task 2: Paket bauen
 
 - [ ] **Step 1:** Build-Skript nach dem Muster von Paket 1: Dateien per `git show HEAD:<pfad>` (LF), `SHA256SUMS`, `BASELINE.sha256` aus der Inventur (exakte Serverprüfsumme je Datei, `ABSENT` für neue Dateien).
